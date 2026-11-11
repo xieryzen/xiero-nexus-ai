@@ -6,7 +6,7 @@ import { useState } from "react";
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input } from "@/components/ui";
 
-export function LoginForm() {
+export function LoginForm({ blocked = false }: { blocked?: boolean }) {
   const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -60,7 +60,7 @@ export function LoginForm() {
             required
           />
         </Field>
-        <Button type="submit" loading={loading} className="w-full">
+        <Button type="submit" loading={loading} disabled={blocked} className="w-full">
           Sign in
         </Button>
       </form>

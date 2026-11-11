@@ -6,7 +6,7 @@ import { useState } from "react";
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input } from "@/components/ui";
 
-export function RegisterForm() {
+export function RegisterForm({ blocked = false }: { blocked?: boolean }) {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
@@ -69,7 +69,7 @@ export function RegisterForm() {
             required
           />
         </Field>
-        <Button type="submit" loading={loading} className="w-full">
+        <Button type="submit" loading={loading} disabled={blocked} className="w-full">
           Create account
         </Button>
       </form>

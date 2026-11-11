@@ -8,12 +8,13 @@ import { verifyPassword } from "@/lib/crypto";
 import { Errors } from "@/lib/errors";
 import { rateLimit, rateLimitReset } from "@/lib/ratelimit";
 import { getClientMeta } from "@/lib/request";
-import { createSession, setSessionCookie } from "@/lib/session";
+import { assertSecureTransport, createSession, setSessionCookie } from "@/lib/session";
 import { loginSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 export const POST = handle(async (req) => {
+  assertSecureTransport(req);
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, loginSchema);
 

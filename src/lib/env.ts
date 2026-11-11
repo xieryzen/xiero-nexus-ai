@@ -33,21 +33,12 @@ function readKey(): Buffer {
 }
 
 let cachedKey: Buffer | null = null;
+let warnedInsecureCookies = false;
 
 export const env = {
   get encryptionKey(): Buffer {
     cachedKey ??= readKey();
     return cachedKey;
-  },
-  get sessionSecret(): string {
-    return (
-      process.env.SESSION_SECRET ??
-      (process.env.NODE_ENV === "production"
-        ? (() => {
-            throw new Error("SESSION_SECRET is required in production.");
-          })()
-        : "dev-insecure-session-secret")
-    );
   },
   get databasePath(): string {
     return process.env.DATABASE_PATH ?? "./data/nexus.db";
@@ -56,6 +47,27 @@ export const env = {
     return process.env.APP_URL ?? "http://localhost:3000";
   },
   get isProd(): boolean {
+    return process.env.NODE_ENV === "production";
+  },
+  /**
+   * Whether session cookies carry the Secure flag (sent over HTTPS only).
+   * On by default in production; COOKIE_SECURE=false allows plain-HTTP
+   * deployments, where the browser would otherwise drop the cookie.
+   */
+  get cookieSecure(): boolean {
+    const raw = process.env.COOKIE_SECURE?.trim().toLowerCase();
+    if (raw === "true" || raw === "1") return true;
+    if (raw === "false" || raw === "0") {
+      if (process.env.NODE_ENV === "production" && !warnedInsecureCookies) {
+        warnedInsecureCookies = true;
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[xiero-nexus] COOKIE_SECURE=false — session cookies are also sent over plain HTTP. " +
+            "Passwords and sessions can be intercepted on the network; put the app behind HTTPS when you can.",
+        );
+      }
+      return false;
+    }
     return process.env.NODE_ENV === "production";
   },
   bootstrapAdmin() {

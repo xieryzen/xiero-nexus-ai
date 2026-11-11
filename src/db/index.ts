@@ -17,6 +17,10 @@ declare global {
 }
 
 function create(): DB {
+  // Fail on the first request, with a clear log line, instead of much later
+  // when a provider key or 2FA secret has to be encrypted.
+  if (env.isProd) void env.encryptionKey;
+
   const path = env.databasePath;
   const dir = dirname(path);
   if (dir && dir !== "." && !existsSync(dir)) {

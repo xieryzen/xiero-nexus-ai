@@ -8,12 +8,13 @@ import { hashPassword } from "@/lib/crypto";
 import { Errors } from "@/lib/errors";
 import { rateLimit } from "@/lib/ratelimit";
 import { getClientMeta } from "@/lib/request";
-import { createSession, setSessionCookie } from "@/lib/session";
+import { assertSecureTransport, createSession, setSessionCookie } from "@/lib/session";
 import { registerSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 export const POST = handle(async (req) => {
+  assertSecureTransport(req);
   const { ip, userAgent } = getClientMeta(req);
   if (!rateLimit(`register:${ip}`, 10, 10 * 60_000).ok) {
     throw Errors.rateLimited();

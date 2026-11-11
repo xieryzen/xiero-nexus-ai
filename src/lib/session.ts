@@ -1,10 +1,12 @@
 import "server-only";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { sessions, users, type User } from "@/db/schema";
 import { randomToken, sha256 } from "./crypto";
 import { env } from "./env";
+import { AppError } from "./errors";
+import { INSECURE_TRANSPORT_MESSAGE, isInsecureTransport } from "./transport";
 
 const COOKIE = "nexus_session";
 const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -39,10 +41,31 @@ export function createSession(
   return token;
 }
 
+/**
+ * The explanation to show when this request arrived over plain HTTP while
+ * session cookies are HTTPS-only (the browser would drop the cookie and
+ * sign-in would silently do nothing), or null when sign-in can work.
+ */
+export function insecureTransportNotice(h: Headers = headers()): string | null {
+  const blocked = isInsecureTransport({
+    cookieSecure: env.cookieSecure,
+    appUrl: env.appUrl,
+    forwardedProto: h.get("x-forwarded-proto"),
+    host: h.get("host"),
+  });
+  return blocked ? INSECURE_TRANSPORT_MESSAGE : null;
+}
+
+/** Refuse to take credentials on a connection where the session cannot stick. */
+export function assertSecureTransport(req: Request): void {
+  const notice = insecureTransportNotice(req.headers);
+  if (notice) throw new AppError(400, "insecure_transport", notice);
+}
+
 export function setSessionCookie(token: string): void {
   cookies().set(COOKIE, token, {
     httpOnly: true,
-    secure: env.isProd,
+    secure: env.cookieSecure,
     sameSite: "lax",
     path: "/",
     maxAge: Math.floor(TTL_MS / 1000),
@@ -52,7 +75,7 @@ export function setSessionCookie(token: string): void {
 export function clearSessionCookie(): void {
   cookies().set(COOKIE, "", {
     httpOnly: true,
-    secure: env.isProd,
+    secure: env.cookieSecure,
     sameSite: "lax",
     path: "/",
     maxAge: 0,
