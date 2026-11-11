@@ -1,0 +1,26 @@
+# dependencies
+/node_modules
+
+# next
+/.next
+/out
+next-env.d.ts
+
+# runtime data (SQLite database + generated files)
+/data
+*.db
+*.db-shm
+*.db-wal
+
+# secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# misc
+*.log
+.DS_Store
+/coverage
+
+# typescript
+*.tsbuildinfo

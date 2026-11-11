@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Control-room palette (RGB triplets for Tailwind <alpha-value>) */
+  --canvas: 9 11 14;
+  --surface: 17 20 26;
+  --surface-2: 23 27 34;
+  --line: 38 43 52;
+  --line-strong: 56 63 75;
+  --ink: 233 237 243;
+  --ink-2: 159 167 180;
+  --ink-3: 109 117 130;
+  --signal: 245 181 68; /* amber */
+  --signal-ink: 26 18 4;
+  --ok: 61 196 134;
+  --warn: 232 170 60;
+  --danger: 240 94 94;
+  --info: 96 165 250;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code",
+    Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    border-color: rgb(var(--line));
+  }
+  html {
+    color-scheme: dark;
+  }
+  body {
+    background-color: rgb(var(--canvas));
+    color: rgb(var(--ink));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection {
+    background: rgb(var(--signal) / 0.3);
+  }
+  :focus-visible {
+    outline: 2px solid rgb(var(--signal) / 0.7);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  /* Thin, dark scrollbars that match the console */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--line-strong)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--line-strong));
+    border-radius: 999px;
+    border: 2px solid rgb(var(--canvas));
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-line bg-surface shadow-panel;
+  }
+  .label {
+    @apply block text-xs font-medium uppercase tracking-wider text-ink-3;
+  }
+  .input {
+    @apply w-full rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink
+      placeholder:text-ink-3 focus:border-signal focus:outline-none focus:ring-1
+      focus:ring-signal/40 disabled:opacity-50;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2
+      text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-signal text-signal-ink hover:brightness-110 active:brightness-95;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-transparent text-ink hover:bg-surface-2;
+  }
+  .btn-danger {
+    @apply btn border border-danger/40 bg-transparent text-danger hover:bg-danger/10;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium;
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
+}
