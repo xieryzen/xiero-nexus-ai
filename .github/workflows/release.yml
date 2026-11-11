@@ -1,0 +1,90 @@
+name: Build and release
+
+# Every push to main is checked, built into ready-to-run bundles, and published:
+#   - v<version> from package.json, once, on the channel its suffix names
+#     (1.4.0 stable; 1.4.0-rc.1, -beta.1, -alpha.1 pre-releases)
+#   - dev-build, replaced each time with the newest commit
+# Pull requests get the same checks and bundles, without publishing.
+# How to cut a release: RELEASING.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  check:
+    name: Typecheck, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  bundle:
+    name: Bundle for Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - name: Build
+        run: BUILD_SHA="${GITHUB_SHA::7}" npm run build:standalone
+      - name: Package
+        run: BUILD_SHA="${GITHUB_SHA::7}" npm run package
+      - name: Smoke-test the bundle
+        run: bash scripts/smoke-test-bundle.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bundle-node${{ matrix.node }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish releases
+    needs: [check, bundle]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bundle-node*
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        run: bash scripts/publish-release.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
