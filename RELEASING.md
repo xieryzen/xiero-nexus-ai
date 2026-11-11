@@ -107,6 +107,11 @@ and stable releases, so it never hands you something older than stable. Every
 bundle also contains `get-release.mjs`, so an installed copy can fetch its own
 update.
 
+Stable, `dev` and exact versions are fetched through GitHub's plain download
+links. Only `rc`, `beta`, `alpha` and `--list` ask the GitHub API, which allows
+few anonymous requests per hour per network address. If it refuses, wait, or
+name the exact version instead.
+
 If the repository is private, the links above need a signed-in browser, and
 `get-release.mjs` needs a token that can read the repository:
 `GH_TOKEN=<token> node get-release.mjs`.

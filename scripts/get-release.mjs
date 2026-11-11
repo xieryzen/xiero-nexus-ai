@@ -14,6 +14,11 @@
 //   --repo <owner/name>  another repository (default: xieryzen/xiero-nexus-ai)
 //
 // A private repository needs a token that can read it, in GH_TOKEN.
+//
+// Without a token, files come from GitHub's plain download links. The GitHub
+// API is only asked when a pre-release channel (rc, beta, alpha) or --list has
+// to be resolved, because its anonymous allowance is small and shared by
+// everyone behind the same network address.
 
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -115,9 +120,9 @@ export function parseChecksums(text) {
   return sums;
 }
 
-function labelOf(release) {
-  if (release.tag_name === DEV_TAG) return "dev";
-  const version = versionOfTag(release.tag_name);
+function labelOfTag(tag) {
+  if (tag === DEV_TAG) return "dev";
+  const version = versionOfTag(tag);
   return version ? channelOf(version) : "other";
 }
 
@@ -164,21 +169,40 @@ function parseArgs(argv) {
 
 class UsageError extends Error {}
 
-async function request(url, headers) {
-  let res;
+const UA = { "user-agent": "xiero-nexus-get-release" };
+
+async function send(url, init = {}) {
   try {
-    res = await fetch(url, { headers, signal: AbortSignal.timeout(120_000) });
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(120_000) });
   } catch (err) {
     throw new Error(`could not reach ${new URL(url).host}: ${err.cause?.message ?? err.message}`);
   }
+}
+
+/** Fetch that turns a failed response into an explanation. */
+async function request(url, headers) {
+  const res = await send(url, { headers });
   if (res.ok) return res;
   let hint = "";
   if (res.status === 404) hint = " If the repository is private, set GH_TOKEN to a token that can read it.";
   else if (res.status === 401) hint = " The token in GH_TOKEN was rejected.";
   else if (res.headers.get("x-ratelimit-remaining") === "0") {
-    hint = " GitHub's request limit for this address is used up; wait an hour or set GH_TOKEN.";
+    hint =
+      " GitHub's API allowance for this network address is used up. Wait an hour, set GH_TOKEN, " +
+      "or ask for an exact version (for example 1.4.0-beta.1), which does not use the API.";
   }
   throw new Error(`${new URL(url).host} answered ${res.status} ${res.statusText}.${hint}`);
+}
+
+/** The tag GitHub marks "Latest", read from where its /releases/latest link redirects. */
+async function latestStableTag(web, repo) {
+  const res = await send(`${web}/${repo}/releases/latest`, { headers: UA, redirect: "manual" });
+  const m = /\/releases\/tag\/([^/?#]+)$/.exec(res.headers.get("location") ?? "");
+  if (m) return decodeURIComponent(m[1]);
+  if (res.status === 404) {
+    throw new Error(`${repo} was not found. If the repository is private, set GH_TOKEN to a token that can read it.`);
+  }
+  throw new Error(`${repo} has no stable release yet. See what exists with: node get-release.mjs --list`);
 }
 
 async function main(argv) {
@@ -190,24 +214,24 @@ async function main(argv) {
 
   const repo = opts.repo ?? process.env.XIERO_NEXUS_REPO ?? DEFAULT_REPO;
   const api = (process.env.GITHUB_API_URL ?? "https://api.github.com").replace(/\/+$/, "");
+  const web = (process.env.GITHUB_SERVER_URL ?? "https://github.com").replace(/\/+$/, "");
   const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
-  const headers = {
-    "user-agent": "xiero-nexus-get-release",
-    ...(token ? { authorization: `Bearer ${token}` } : {}),
-  };
-
-  // Newest 100 releases; plenty for choosing the newest of a channel.
-  const releases = await (
-    await request(`${api}/repos/${repo}/releases?per_page=100`, {
-      ...headers,
-      accept: "application/vnd.github+json",
-      "x-github-api-version": "2022-11-28",
-    })
-  ).json();
+  const auth = token ? { authorization: `Bearer ${token}` } : {};
   const platform = `${process.platform}-${process.arch}`;
 
+  // Newest 100 releases; plenty for choosing the newest of a channel.
+  const listReleases = async () =>
+    (
+      await request(`${api}/repos/${repo}/releases?per_page=100`, {
+        ...UA,
+        ...auth,
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+      })
+    ).json();
+
   if (opts.list) {
-    const rows = releases.filter((r) => !r.draft);
+    const rows = (await listReleases()).filter((r) => !r.draft);
     if (rows.length === 0) {
       console.log(`${repo} has no releases yet.`);
       return;
@@ -220,59 +244,100 @@ async function main(argv) {
         .sort((a, b) => a - b)
         .map((n) => `node${n}`);
       console.log(
-        `  ${r.tag_name.padEnd(22)} ${labelOf(r).padEnd(11)} ${(r.published_at ?? "").slice(0, 10).padEnd(12)} ${nodes.join(", ") || "(no bundle for this platform)"}`,
+        `  ${r.tag_name.padEnd(22)} ${labelOfTag(r.tag_name).padEnd(11)} ${(r.published_at ?? "").slice(0, 10).padEnd(12)} ${nodes.join(", ") || "(no bundle for this platform)"}`,
       );
     }
     return;
   }
 
-  const release = pickRelease(releases, opts.want);
-  if (!release) {
-    const tags = releases.filter((r) => !r.draft).map((r) => r.tag_name);
-    throw new Error(
-      `no release matches "${opts.want}" in ${repo}. ` +
-        (tags.length ? `Available: ${tags.join(", ")}.` : "It has no releases yet."),
-    );
+  const wanted = String(opts.want).toLowerCase();
+  const isChannel = Object.hasOwn(STABILITY, wanted);
+  const isDev = wanted === "dev" || wanted === DEV_TAG;
+  const exactVersion = String(opts.want).replace(/^v/i, "");
+  if (!isChannel && !isDev && !SEMVER.test(exactVersion)) {
+    throw new UsageError(`"${opts.want}" is not a channel (stable, rc, beta, alpha, dev) or a version such as 1.4.0-beta.1`);
   }
 
+  // 1. Which release? With a token everything goes through the API (the only
+  //    way into a private repository). Without one, only a pre-release channel
+  //    needs the API; the other answers are already known or one redirect away.
+  let tag;
+  let apiAssets = null; // file name → API URL, in token mode
+  if (token || (isChannel && wanted !== "stable")) {
+    const releases = await listReleases();
+    const release = pickRelease(releases, opts.want);
+    if (!release) {
+      const tags = releases.filter((r) => !r.draft).map((r) => r.tag_name);
+      throw new Error(
+        `no release matches "${opts.want}" in ${repo}. ` +
+          (tags.length ? `Available: ${tags.join(", ")}.` : "It has no releases yet."),
+      );
+    }
+    tag = release.tag_name;
+    if (token) apiAssets = new Map(release.assets.map((a) => [a.name, a.url]));
+  } else if (isDev) {
+    tag = DEV_TAG;
+  } else if (isChannel) {
+    tag = await latestStableTag(web, repo);
+  } else {
+    tag = `v${exactVersion}`;
+  }
+
+  // 2. The checksum file, which is also the list of bundles in the release.
+  const downloads = `${web}/${repo}/releases/download/${encodeURIComponent(tag)}`;
+  const binary = { ...UA, ...auth, accept: "application/octet-stream" };
+  let sumsText;
+  if (apiAssets) {
+    if (!apiAssets.has("SHA256SUMS.txt")) {
+      throw new Error(`${tag} has no SHA256SUMS.txt, so the download cannot be checked.`);
+    }
+    sumsText = await (await request(apiAssets.get("SHA256SUMS.txt"), binary)).text();
+  } else {
+    const res = await send(`${downloads}/SHA256SUMS.txt`, { headers: UA });
+    if (res.status === 404) {
+      throw new Error(
+        `there is no release ${tag} in ${repo}. See ${web}/${repo}/releases, or run: node get-release.mjs --list\n` +
+          "  If the repository is private, set GH_TOKEN to a token that can read it.",
+      );
+    }
+    if (!res.ok) throw new Error(`${new URL(downloads).host} answered ${res.status} ${res.statusText}.`);
+    sumsText = await res.text();
+  }
+
+  const sums = parseChecksums(sumsText);
   const wantedAsset = assetName(platform, opts.node);
-  const asset = release.assets.find((a) => a.name === wantedAsset);
-  if (!asset) {
-    const have = release.assets.map((a) => a.name).filter((n) => n.endsWith(".zip"));
+  const expected = sums.get(wantedAsset);
+  if (!expected || (apiAssets && !apiAssets.has(wantedAsset))) {
+    const have = [...sums.keys()].filter((n) => n.endsWith(".zip"));
     throw new Error(
-      `${release.tag_name} has no bundle for ${platform} with Node.js ${opts.node} (${wantedAsset}).\n` +
+      `${tag} has no bundle for ${platform} with Node.js ${opts.node} (${wantedAsset}).\n` +
         `  Bundles in that release: ${have.join(", ") || "none"}.\n` +
         "  Use --node <major> to pick one of those and run it with that Node.js version, or build from source (see RELEASING.md).",
     );
   }
-  const sumsAsset = release.assets.find((a) => a.name === "SHA256SUMS.txt");
-  if (!sumsAsset) throw new Error(`${release.tag_name} has no SHA256SUMS.txt, so the download cannot be checked.`);
 
-  console.log(`Xiero Nexus AI ${release.tag_name} (${labelOf(release)}) for ${platform}, Node.js ${opts.node}`);
-  console.log(`Downloading ${asset.name} (${(asset.size / 1024 / 1024).toFixed(1)} MB)…`);
+  // 3. The bundle itself.
+  console.log(`Xiero Nexus AI ${tag} (${labelOfTag(tag)}) for ${platform}, Node.js ${opts.node}`);
+  console.log(`Downloading ${wantedAsset}…`);
+  const zipResponse = apiAssets
+    ? await request(apiAssets.get(wantedAsset), binary)
+    : await request(`${downloads}/${wantedAsset}`, UA);
+  const zip = Buffer.from(await zipResponse.arrayBuffer());
 
-  const binary = { ...headers, accept: "application/octet-stream" };
-  const [zip, sums] = await Promise.all([
-    request(asset.url, binary).then(async (r) => Buffer.from(await r.arrayBuffer())),
-    request(sumsAsset.url, binary).then((r) => r.text()),
-  ]);
-
-  const expected = parseChecksums(sums).get(asset.name);
   const actual = createHash("sha256").update(zip).digest("hex");
-  if (!expected) throw new Error(`SHA256SUMS.txt of ${release.tag_name} does not list ${asset.name}.`);
   if (expected !== actual) {
     throw new Error(
-      `checksum mismatch for ${asset.name}: expected ${expected}, got ${actual}. Nothing was saved; try again.`,
+      `checksum mismatch for ${wantedAsset}: expected ${expected}, got ${actual}. Nothing was saved; try again.`,
     );
   }
 
   const outDir = resolve(opts.out);
   mkdirSync(outDir, { recursive: true });
-  const fileName = `xiero-nexus-ai-${release.tag_name}-${platform}-node${opts.node}.zip`;
+  const fileName = `xiero-nexus-ai-${tag}-${platform}-node${opts.node}.zip`;
   const target = resolve(outDir, fileName);
   writeFileSync(target, zip);
 
-  console.log(`Checksum verified (sha256 ${actual.slice(0, 12)}…)`);
+  console.log(`Checksum verified (sha256 ${actual.slice(0, 12)}…, ${(zip.length / 1024 / 1024).toFixed(1)} MB)`);
   console.log(`Saved ${target}`);
   console.log(
     [
