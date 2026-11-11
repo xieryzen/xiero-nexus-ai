@@ -6,24 +6,45 @@ A configurable, multi-provider AI control plane. Connect AI providers, manage
 their credentials and models from a dashboard, and talk to any model through a
 single internal gateway — with security, usage tracking, and auditing built in.
 
-> **Status: v1.0.0 through v1.3.0 implemented; v1.4.0 (creative/media) not built.**
-> Two honest caveats: the **remote Git** push (GitHub API) is wired and
-> error-handled but was **not tested against a live repo** in this environment
-> (no token/network), and the **workflow builder** is step-based (a reusable
-> ordered plan), not a drag-and-drop canvas. Everything else below is verified.
-> Implemented: the multi-provider foundation, the AI workforce, and — new in
-> v1.2.0 — **workspaces, file management, sandboxed code execution** through an
-> external isolated runner, **version snapshots**, and an **advisory QA/Security
-> review** step. Still pending in v1.2.0: remote Git (push/pull) and blocking QA
-> gates (review is advisory, not a hard gate). The creative/media phase (v1.4.0)
-> is not built.
-> See [Roadmap](#roadmap). Code is **never executed on the app host**; execution
-> requires a separately-deployed sandbox runner and is disabled otherwise.
+[![Build and release](https://github.com/xieryzen/xiero-nexus-ai/actions/workflows/release.yml/badge.svg)](https://github.com/xieryzen/xiero-nexus-ai/actions/workflows/release.yml)
+
+> **Status: v1.0.0 through v1.3.0 are implemented; v1.4.0 (creative/media) is not built.**
+> Three honest caveats: the **remote Git** push (GitHub API) is wired and
+> error-handled but has **not been tested against a live repository**; the
+> **workflow builder** is step-based (a reusable ordered plan), not a
+> drag-and-drop canvas; and only the `openai-compatible` provider adapter works
+> (the others are stubs). See [Roadmap](#roadmap).
+> Code is **never executed on the app host**: execution needs a separately
+> deployed sandbox runner and is off otherwise.
 > Nothing in this README describes a feature as working unless it actually is.
 
 Designed by Xiero.
 
 ---
+
+## Download and run
+
+Every version is published on the
+[Releases](https://github.com/xieryzen/xiero-nexus-ai/releases) page as a
+ready-to-run bundle: stable releases, `rc` / `beta` / `alpha` pre-releases, and
+a `dev-build` of the newest commit. A bundle needs only Node.js 20 or 22 on
+Linux x64. There is no `npm install` and no build step:
+
+```bash
+curl -fLO https://github.com/xieryzen/xiero-nexus-ai/releases/latest/download/xiero-nexus-ai-linux-x64-node22.zip
+unzip -q xiero-nexus-ai-linux-x64-node22.zip
+cd xiero-nexus-ai
+cp .env.example .env
+sed -i "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64'))")|" .env
+node start.js
+```
+
+Open the site and create the first account; it becomes the administrator. If
+you will open it over plain `http://` rather than HTTPS, add
+`COOKIE_SECURE=false` to `.env` first (see [Security model](#security-model)).
+
+[RELEASING.md](RELEASING.md) covers the channels, downloading a specific
+version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 
 ## What's implemented (v1.0.0)
 
@@ -69,9 +90,8 @@ Designed by Xiero.
   (`queued`/`running`/`succeeded`/`failed`/`blocked`/`cancelled`), its artifact,
   attempts, and tokens; each attempt is logged as an `agent_run`. Progress
   **streams live** to the project view over SSE.
-- **Honest scope** — agents produce written artifacts only. There is no code or
-  tool execution yet (v1.2), so completion reflects produced output + the
-  Manager's review, not automated tests.
+- **Scope** — agents produce written artifacts. Running code against them is a
+  separate, sandboxed step (see Development Execution below).
 
 ## Development Execution (v1.2.0)
 
@@ -151,20 +171,19 @@ Single process, SQLite, zero external services — so it deploys cleanly on a
 Pterodactyl server. The data layer is behind Drizzle, so moving to PostgreSQL
 later is largely a driver/connection change.
 
-## Quick start
+## Develop from source
 
 ```bash
 npm install
 cp .env.example .env
-# generate the two required secrets:
-node -e "console.log('SECRET_ENCRYPTION_KEY='+require('crypto').randomBytes(32).toString('base64'))"
-node -e "console.log('SESSION_SECRET='+require('crypto').randomBytes(48).toString('base64url'))"
-# paste both into .env, then set a BOOTSTRAP_ADMIN_PASSWORD
+# generate the encryption key and paste it into .env as SECRET_ENCRYPTION_KEY:
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 
 npm run dev            # http://localhost:3000
 ```
 
-Production:
+Production from source (the [release bundles](#download-and-run) are the easier
+way to deploy):
 
 ```bash
 npm run build
@@ -185,34 +204,44 @@ register through the UI becomes the admin.
 
 | Variable | Required | Description |
 |---|---|---|
-| `SECRET_ENCRYPTION_KEY` | **yes (prod)** | base64 of 32 bytes; encrypts provider keys & TOTP secrets at rest. Keep it out of the DB and out of git. |
-| `SESSION_SECRET` | **yes (prod)** | long random string for session identifiers |
+| `SECRET_ENCRYPTION_KEY` | **yes (prod)** | base64 of 32 bytes; encrypts provider keys & TOTP secrets at rest. Keep it out of the DB and out of git, and keep it across upgrades. |
+| `COOKIE_SECURE` | no | Session cookies are HTTPS-only in production. Set `false` to allow sign-in over plain HTTP. |
+| `APP_URL` | no | Public address. Set it to your `https://` address when an HTTPS proxy in front does not pass `X-Forwarded-Proto`. |
+| `PORT` | no | Listen port (default 3000). Release bundles also accept a panel's `SERVER_PORT`. |
+| `BIND_HOST` | no | Release bundles only: address to bind (default `0.0.0.0`). |
 | `DATABASE_PATH` | no | SQLite file path (default `./data/nexus.db`) |
-| `PORT` | no | listen port (default 3000) |
-| `APP_URL` | no | public base URL |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
 | `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
 | `SANDBOX_TOKEN` | no | bearer token the app sends to the sandbox runner |
 | `SANDBOX_ALLOWED_COMMANDS` | no | comma list overriding the default command allowlist |
 
-In development, missing secrets fall back to insecure placeholders with a
-warning so the app boots; **production refuses to start without real secrets.**
+In development a missing key falls back to an insecure placeholder, with a
+warning, so the app boots. In production the app is unusable without a valid
+`SECRET_ENCRYPTION_KEY`: a release bundle stops at start-up with instructions,
+and a source install fails every request that needs the database (sign-in
+included), with the reason in the server log.
 
 ## Deploying on Pterodactyl
 
-Use a Node.js 20/22 egg. Build with `npm install && npm run build`, start with
-`npm run start`. Map the panel's allocation into `PORT` (e.g. set
-`PORT=${SERVER_PORT}` in the startup, or add `PORT` to the environment). The
-SQLite file lives under `DATABASE_PATH` inside the server's volume.
+Use a release bundle with a Node.js 20 or 22 egg: upload the zip that matches
+the egg's Node.js version, unarchive it, create `xiero-nexus-ai/.env`, and set
+the startup file to `xiero-nexus-ai/start.js`. The port the panel assigns is
+used automatically. The steps are in
+[RELEASING.md](RELEASING.md#on-pterodactyl).
 
 ## Security model
 
 - Passwords: scrypt (salted, memory-hard), constant-time comparison.
 - Secrets at rest: AES-256-GCM with a key kept **outside** the database.
 - API keys are never serialized to the client — only `configured` + last 4.
-- Sessions: `HttpOnly`, `SameSite=Lax`, `Secure` in production; rotated after
-  login and 2FA, destroyed on logout / 2FA change / account disable.
+- Sessions: `HttpOnly`, `SameSite=Lax`, and `Secure` (HTTPS-only) in
+  production; rotated after login and 2FA, destroyed on logout / 2FA change /
+  account disable.
+- Plain HTTP: a browser drops HTTPS-only cookies on an `http://` address, so
+  sign-in there is turned off with an explanation rather than failing silently.
+  `COOKIE_SECURE=false` is the explicit opt-out for deployments without HTTPS;
+  passwords and sessions then cross the network unencrypted.
 - 2FA enforced server-side; a password-verified session stays *pending* until
   the second factor is satisfied.
 - SSRF: scheme + private/metadata-range checks on provider Base URLs; redirects
@@ -240,7 +269,11 @@ SQLite file lives under `DATABASE_PATH` inside the server's volume.
 | `npm run db:migrate` | apply migrations explicitly |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
-| `npm test` | unit tests (crypto, SSRF, TOTP) |
+| `npm test` | unit tests |
+| `npm run build:standalone` + `npm run package` | build a release bundle into `dist/` |
+| `npm run package:test` | start that bundle and sign in to it |
+| `npm run release:info` | version, tag and channel that a push would publish |
+| `npm run version:patch` / `minor` / `major` / `alpha` / `beta` / `rc` | raise the version (see [RELEASING.md](RELEASING.md)) |
 
 ## Project structure
 
@@ -252,6 +285,8 @@ src/
   lib/                     # crypto, secrets, auth, session, ssrf, adapters, gateway, usage, stats…
 drizzle/                   # generated SQL migrations
 sandbox-runner/            # reference external code-execution runner (Docker)
+scripts/                   # release tooling: package, smoke-test, publish, download
+.github/workflows/         # CI: check, bundle, publish releases
 tests/                     # node:test unit tests
 ```
 
@@ -259,15 +294,21 @@ tests/                     # node:test unit tests
 
 `npm test` runs unit tests for the security-critical pure functions
 (AES-GCM round-trip & tamper rejection, password hashing, recovery codes,
-SSRF range detection + allowlist, TOTP verification), the orchestrator plan
-parser (JSON extraction, validation, dependency remap, topological order), and
-the execution guardrails (workspace path validation, command allowlist,
-shell-metacharacter rejection), and the router + QA verdict parser (cheapest/
-capability selection, `VERDICT:` parsing).
-Typecheck, lint, and a production build all pass. The provider/model/gateway/
-streaming paths **and** the full plan → delegate → execute → synthesize
-orchestration loop have been verified end-to-end against a local
-OpenAI-compatible mock.
+SSRF range detection + allowlist, TOTP verification, the plain-HTTP sign-in
+check), the orchestrator plan parser (JSON extraction, validation, dependency
+remap, topological order), the execution guardrails (workspace path
+validation, command allowlist, shell-metacharacter rejection), the router + QA
+verdict parser (cheapest/capability selection, `VERDICT:` parsing), and the
+release tooling (channels, version ordering, release selection, checksums).
+
+On every push, CI runs typecheck, lint and these tests, then builds each
+release bundle and starts it: the bundle must refuse to run without its key,
+serve pages on a panel-assigned port, sign in (SQLite + migrations), and keep
+the session.
+
+The provider/model/gateway/streaming paths **and** the full plan → delegate →
+execute → synthesize orchestration loop have been verified end-to-end against a
+local OpenAI-compatible mock.
 
 ---
 

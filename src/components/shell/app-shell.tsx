@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Wordmark, DesignedByXiero } from "@/components/brand";
 import { Icon, type IconName } from "@/components/icons";
 import { apiFetch } from "@/lib/client";
+import { APP_VERSION, BUILD_SHA, releaseChannel } from "@/lib/version";
 import { cn } from "@/components/ui";
 
 interface NavItem {
@@ -125,6 +126,11 @@ export function AppShell({
       {nav}
       <div className="border-t border-line px-5 py-4">
         <DesignedByXiero />
+        <p className="mono mt-1 text-[10px] text-ink-3" title="Version and build">
+          v{APP_VERSION}
+          {releaseChannel() !== "stable" && <span className="text-warn"> · {releaseChannel()}</span>}
+          {BUILD_SHA && <span> · {BUILD_SHA}</span>}
+        </p>
       </div>
     </>
   );
