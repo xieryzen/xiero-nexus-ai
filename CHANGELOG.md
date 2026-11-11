@@ -7,6 +7,21 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-11
+
+### Fixed
+
+- `get-release.mjs` no longer depends on the GitHub API for the newest stable
+  release, an exact version or `dev`. It uses GitHub's plain download links
+  there, so it keeps working when the API's small anonymous allowance for a
+  network address is used up. The `rc`, `beta` and `alpha` channels and
+  `--list` still ask the API.
+
+### Changed
+
+- `get-release.mjs` rejects a word that is neither a channel nor a version,
+  instead of searching for it.
+
 ## [1.3.0] - 2026-11-11
 
 First published release. It includes everything from the 1.0.0–1.2.0
