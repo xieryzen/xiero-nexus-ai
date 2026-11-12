@@ -1,16 +1,34 @@
 "use client";
 
 import { useState } from "react";
+import { ANTHROPIC_DEFAULT_API_VERSION } from "@/lib/adapters/anthropic-protocol";
 import type { ProviderDTO } from "@/lib/providers";
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input, Select } from "@/components/ui";
 
+// `implemented` mirrors the server-side registry in src/lib/adapters/index.ts.
 const ADAPTERS = [
   { value: "openai-compatible", label: "OpenAI-compatible", implemented: true },
-  { value: "anthropic", label: "Anthropic (planned)", implemented: false },
+  { value: "anthropic", label: "Anthropic", implemented: true },
   { value: "gemini", label: "Google Gemini (planned)", implemented: false },
   { value: "custom-http", label: "Custom HTTP (planned)", implemented: false },
 ] as const;
+
+const DEFAULT_HINTS = {
+  baseUrl: "OpenAI-compatible root, often ending in /v1.",
+  baseUrlPlaceholder: "https://api.example.com/v1",
+  keyPlaceholder: "sk-…",
+  apiVersion: "Optional",
+  apiVersionPlaceholder: "optional",
+};
+
+const ANTHROPIC_HINTS: typeof DEFAULT_HINTS = {
+  baseUrl: "Anthropic API root, ending in /v1.",
+  baseUrlPlaceholder: "https://api.anthropic.com/v1",
+  keyPlaceholder: "sk-ant-…",
+  apiVersion: `anthropic-version header. Blank = ${ANTHROPIC_DEFAULT_API_VERSION}.`,
+  apiVersionPlaceholder: ANTHROPIC_DEFAULT_API_VERSION,
+};
 
 export function ProviderForm({
   initial,
@@ -36,6 +54,7 @@ export function ProviderForm({
   const [loading, setLoading] = useState(false);
 
   const adapterInfo = ADAPTERS.find((a) => a.value === adapter);
+  const hints = adapter === "anthropic" ? ANTHROPIC_HINTS : DEFAULT_HINTS;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,7 +66,8 @@ export function ProviderForm({
       baseUrl,
       authType,
       authHeaderName: authType === "header" ? authHeaderName : undefined,
-      apiVersion: apiVersion || undefined,
+      // When editing, a cleared field has to be sent to clear the stored value.
+      apiVersion: editing ? apiVersion.trim() : apiVersion.trim() || undefined,
       timeoutMs: Number(timeoutMs),
       priority: Number(priority),
       notes: notes || undefined,
@@ -96,8 +116,8 @@ export function ProviderForm({
         </Alert>
       )}
 
-      <Field label="Base URL" htmlFor="p-baseurl" hint="OpenAI-compatible root, often ending in /v1. Private/loopback hosts are blocked.">
-        <Input id="p-baseurl" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required placeholder="https://api.example.com/v1" className="mono" />
+      <Field label="Base URL" htmlFor="p-baseurl" hint={`${hints.baseUrl} Private/loopback hosts are blocked.`}>
+        <Input id="p-baseurl" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} required placeholder={hints.baseUrlPlaceholder} className="mono" />
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -126,7 +146,7 @@ export function ProviderForm({
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={initial?.credential.configured ? `•••••• ${initial.credential.last4 ?? ""}` : "sk-…"}
+            placeholder={initial?.credential.configured ? `•••••• ${initial.credential.last4 ?? ""}` : hints.keyPlaceholder}
             className="mono"
             autoComplete="off"
           />
@@ -134,8 +154,8 @@ export function ProviderForm({
       )}
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <Field label="API version" htmlFor="p-ver" hint="Optional">
-          <Input id="p-ver" value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder="optional" />
+        <Field label="API version" htmlFor="p-ver" hint={hints.apiVersion}>
+          <Input id="p-ver" value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} placeholder={hints.apiVersionPlaceholder} />
         </Field>
         <Field label="Timeout (ms)" htmlFor="p-timeout">
           <Input id="p-timeout" type="number" min={1000} max={300000} value={timeoutMs} onChange={(e) => setTimeoutMs(e.target.value)} />

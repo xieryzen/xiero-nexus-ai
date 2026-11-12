@@ -7,6 +7,16 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+### Added
+
+- Anthropic provider adapter. A provider on the `anthropic` adapter can be
+  tested, have its models discovered, and be used for chat (streaming
+  included), agents and project runs, through Anthropic's Messages API with
+  API version `2026-10-21` by default. Text chat only; temperature is not
+  sent, because that API version rejects it. Tested against a local mock of
+  the API, not against the live service. Setup and limits are in the README
+  under "Provider adapters".
+
 ## [1.3.1] - 2026-11-11
 
 ### Fixed
