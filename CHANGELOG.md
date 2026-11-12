@@ -5,7 +5,7 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.4.0] - 2026-11-12
 
 Creative Workflows: image and video generation. It was tested against a local
 mock of the providers' APIs, written from their public documentation, and
