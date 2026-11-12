@@ -1,6 +1,18 @@
 import "server-only";
-import { AppError, sanitizeUpstreamError } from "../errors";
+import { AppError } from "../errors";
 import { safeFetch } from "../http-client";
+import {
+  ANTHROPIC_MODELS_PAGE_SIZE,
+  anthropicHeaders,
+  buildMessagesPayload,
+  createMessageStream,
+  createSseParser,
+  modelsPath,
+  parseMessageResponse,
+  parseModelsPage,
+  upstreamErrorMessage,
+  type SseEvent,
+} from "./anthropic-protocol";
 import type {
   ChatRequest,
   ChatResult,
@@ -9,67 +21,48 @@ import type {
   ProviderContext,
 } from "./types";
 
+/** Stops model discovery if a server never ends its list. */
+const MAX_MODEL_PAGES = 20;
+
 function base(ctx: ProviderContext): string {
   return ctx.baseUrl.replace(/\/+$/, "");
 }
 
-function headers(ctx: ProviderContext): Record<string, string> {
-  const h: Record<string, string> = {
-    "content-type": "application/json",
-    "anthropic-version": ctx.apiVersion ?? "2023-06-01",
-  };
-
-  if (ctx.apiKey) {
-    h.authorization = `Bearer ${ctx.apiKey}`;
-  }
-
-  for (const [k, v] of Object.entries(ctx.extraHeaders ?? {})) {
-    h[k.toLowerCase()] = v;
-  }
-
-  return h;
+function fetchOptions(ctx: ProviderContext): { timeoutMs: number; allowHosts?: string[] } {
+  return { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts };
 }
 
 async function readError(res: Response): Promise<never> {
-  let detail = "";
+  let body = "";
   try {
-    detail = await res.text();
+    body = await res.text();
   } catch {
     /* ignore */
   }
-
-  let message = detail || res.statusText || "Unknown upstream error";
-  try {
-    const parsed = JSON.parse(detail) as { error?: { message?: string } };
-    if (parsed?.error?.message) message = parsed.error.message;
-  } catch {
-    /* ignore */
-  }
-
   throw new AppError(
     502,
     "upstream_error",
-    `Provider responded ${res.status}: ${sanitizeUpstreamError(message)}`,
+    upstreamErrorMessage(res.status, body, res.statusText),
   );
 }
 
-function anthropicMessages(req: ChatRequest): { system?: string; messages: { role: "user" | "assistant"; content: string }[] } {
-  const system = req.messages
-    .filter((m) => m.role === "system")
-    .map((m) => m.content)
-    .join("\n\n")
-    .trim();
-
-  const messages = req.messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content,
-    }));
-
-  return { system: system || undefined, messages };
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    throw new AppError(
+      502,
+      "upstream_error",
+      "Provider returned a response that is not JSON",
+    );
+  }
 }
 
+/**
+ * Anthropic Messages API adapter. The base URL is the API root including its
+ * version segment, e.g. https://api.anthropic.com/v1. The wire format is in
+ * ./anthropic-protocol.ts.
+ */
 export const anthropicAdapter: ProviderAdapter = {
   id: "anthropic",
   label: "Anthropic",
@@ -77,88 +70,56 @@ export const anthropicAdapter: ProviderAdapter = {
   canDiscoverModels: true,
 
   async listModels(ctx): Promise<ListedModel[]> {
-    const res = await safeFetch(`${base(ctx)}/models`, {
-      method: "GET",
-      headers: headers(ctx),
-    }, { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts });
-    if (!res.ok) await readError(res);
-
-    const json = (await res.json()) as {
-      data?: { id?: string }[];
-      models?: { id?: string }[];
-    };
-    const data = Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : [];
-
-    return data
-      .filter((m): m is { id: string } => typeof m.id === "string")
-      .map((m) => ({ id: m.id }));
+    const ids = new Set<string>();
+    let afterId: string | undefined;
+    for (let page = 0; page < MAX_MODEL_PAGES; page++) {
+      const res = await safeFetch(
+        base(ctx) + modelsPath({ limit: ANTHROPIC_MODELS_PAGE_SIZE, afterId }),
+        { method: "GET", headers: anthropicHeaders(ctx) },
+        fetchOptions(ctx),
+      );
+      if (!res.ok) await readError(res);
+      const { ids: pageIds, nextAfterId } = parseModelsPage(await readJson(res));
+      for (const id of pageIds) ids.add(id);
+      if (!nextAfterId || nextAfterId === afterId) break;
+      afterId = nextAfterId;
+    }
+    return [...ids].map((id) => ({ id }));
   },
 
   async testConnection(ctx): Promise<void> {
-    const res = await safeFetch(`${base(ctx)}/models`, {
-      method: "GET",
-      headers: headers(ctx),
-    }, { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts });
+    const res = await safeFetch(
+      base(ctx) + modelsPath({ limit: 1 }),
+      { method: "GET", headers: anthropicHeaders(ctx) },
+      fetchOptions(ctx),
+    );
     if (!res.ok) await readError(res);
   },
 
-  async chat(ctx, req): Promise<ChatResult> {
-    const { system, messages } = anthropicMessages(req);
-    const payload = {
-      model: req.model,
-      max_tokens: 1024,
-      ...(system ? { system } : {}),
-      messages,
-    };
-
-    const res = await safeFetch(`${base(ctx)}/messages`, {
-      method: "POST",
-      headers: headers(ctx),
-      body: JSON.stringify(payload),
-    }, { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts });
-
+  async chat(ctx, req: ChatRequest): Promise<ChatResult> {
+    const res = await safeFetch(
+      `${base(ctx)}/messages`,
+      {
+        method: "POST",
+        headers: anthropicHeaders(ctx),
+        body: JSON.stringify(buildMessagesPayload(req, { stream: false })),
+      },
+      fetchOptions(ctx),
+    );
     if (!res.ok) await readError(res);
-
-    const json = (await res.json()) as {
-      content?: Array<{ type?: string; text?: string }>;
-      stop_reason?: string | null;
-      usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
-    };
-
-    const content = (json.content ?? [])
-      .filter((item) => item.type === "text" && typeof item.text === "string")
-      .map((item) => item.text)
-      .join("");
-
-    return {
-      content,
-      finishReason: json.stop_reason ?? undefined,
-      usage: json.usage
-        ? {
-            promptTokens: json.usage.input_tokens,
-            completionTokens: json.usage.output_tokens,
-            totalTokens: json.usage.total_tokens,
-          }
-        : undefined,
-    };
+    return parseMessageResponse(await readJson(res));
   },
 
   async chatStream(ctx, req, onDelta): Promise<ChatResult> {
-    const { system, messages } = anthropicMessages(req);
-    const payload = {
-      model: req.model,
-      max_tokens: 1024,
-      stream: true,
-      ...(system ? { system } : {}),
-      messages,
-    };
-
-    const res = await safeFetch(`${base(ctx)}/messages`, {
-      method: "POST",
-      headers: headers(ctx),
-      body: JSON.stringify(payload),
-    }, { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts });
-
+    const res = await safeFetch(
+      `${base(ctx)}/messages`,
+      {
+        method: "POST",
+        headers: anthropicHeaders(ctx),
+        body: JSON.stringify(buildMessagesPayload(req, { stream: true })),
+      },
+      fetchOptions(ctx),
+    );
     if (!res.ok || !res.body) {
       if (!res.ok) await readError(res);
       throw new AppError(502, "upstream_error", "Provider returned no stream");
@@ -166,86 +127,32 @@ export const anthropicAdapter: ProviderAdapter = {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
-    let content = "";
-    let usage: ChatResult["usage"];
-    let finishReason: string | undefined;
-
-    const handleEventBlock = (block: string) => {
-      const lines = block
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-
-      const payloads = lines
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trim())
-        .filter(Boolean);
-
-      for (const payload of payloads) {
-        if (payload === "[DONE]") return;
-        try {
-          const chunk = JSON.parse(payload) as {
-            type?: string;
-            delta?: { type?: string; text?: string; stop_reason?: string | null };
-            message?: { usage?: { input_tokens?: number; output_tokens?: number } };
-            usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
-            stop_reason?: string | null;
-          };
-
-          if (chunk.type === "message_start" && chunk.message?.usage) {
-            usage = {
-              promptTokens: chunk.message.usage.input_tokens,
-              completionTokens: chunk.message.usage.output_tokens,
-            };
-          }
-
-          if (chunk.type === "content_block_delta") {
-            const deltaText = chunk.delta?.text;
-            if (deltaText) {
-              content += deltaText;
-              onDelta(deltaText);
-            }
-          }
-
-          if (chunk.type === "message_delta") {
-            const nextUsage = chunk.usage ?? chunk.message?.usage;
-            if (nextUsage) {
-              usage = {
-                promptTokens: nextUsage.input_tokens,
-                completionTokens: nextUsage.output_tokens,
-                totalTokens: nextUsage.total_tokens,
-              };
-            }
-            if (chunk.delta?.stop_reason || chunk.stop_reason) {
-              finishReason = chunk.delta?.stop_reason ?? chunk.stop_reason ?? undefined;
-            }
-          }
-
-          if (chunk.type === "message_stop" && !finishReason) {
-            finishReason = "stop";
-          }
-        } catch {
-          /* ignore malformed keep-alive lines */
-        }
+    const parser = createSseParser();
+    const message = createMessageStream(onDelta);
+    const feed = (events: SseEvent[]) => {
+      for (const event of events) message.handle(event);
+    };
+    const read = async () => {
+      try {
+        return await reader.read();
+      } catch {
+        throw new AppError(502, "network_error", "Provider stream was interrupted");
       }
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split("\n\n");
-      buffer = blocks.pop() ?? "";
-      for (const block of blocks) {
-        if (block.trim()) handleEventBlock(block);
+    try {
+      for (;;) {
+        const { done, value } = await read();
+        if (done) break;
+        feed(parser.push(decoder.decode(value, { stream: true })));
       }
+      feed(parser.push(decoder.decode()));
+      feed(parser.flush());
+    } catch (err) {
+      // An error event or a dropped connection ends the reply: stop reading.
+      void reader.cancel().catch(() => undefined);
+      throw err;
     }
-
-    if (buffer.trim()) handleEventBlock(buffer);
-
-    return { content, usage, finishReason };
+    return message.result();
   },
 };
-
-export default anthropicAdapter;

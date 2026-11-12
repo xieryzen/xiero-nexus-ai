@@ -1,16 +1,18 @@
 import "server-only";
 import { AppError } from "../errors";
+import { anthropicAdapter } from "./anthropic";
 import { openAiCompatibleAdapter } from "./openai";
 import type { ProviderAdapter } from "./types";
 
 /**
- * Adapter registry. v1.0.0 ships the OpenAI-compatible adapter. Additional
- * protocols (Anthropic, Gemini, custom HTTP) are planned — register them here
- * once implemented. A provider whose adapter is not registered is rejected
- * rather than silently treated as OpenAI-compatible.
+ * Adapter registry: the OpenAI-compatible and Anthropic protocols. Gemini and
+ * custom HTTP are planned — register them here once implemented. A provider
+ * whose adapter is not registered is rejected rather than silently treated as
+ * OpenAI-compatible.
  */
 const registry: Record<string, ProviderAdapter | undefined> = {
   "openai-compatible": openAiCompatibleAdapter,
+  anthropic: anthropicAdapter,
 };
 
 export function getAdapter(adapterId: string): ProviderAdapter {

@@ -12,8 +12,10 @@ single internal gateway — with security, usage tracking, and auditing built in
 > Three honest caveats: the **remote Git** push (GitHub API) is wired and
 > error-handled but has **not been tested against a live repository**; the
 > **workflow builder** is step-based (a reusable ordered plan), not a
-> drag-and-drop canvas; and only the `openai-compatible` provider adapter works
-> (the others are stubs). See [Roadmap](#roadmap).
+> drag-and-drop canvas; and of the provider adapters only `openai-compatible`
+> and `anthropic` work (the others are stubs), with the **Anthropic** adapter
+> tested against a local mock of the API, **not against the live service**.
+> See [Roadmap](#roadmap) and [Provider adapters](#provider-adapters).
 > Code is **never executed on the app host**: execution needs a separately
 > deployed sandbox runner and is off otherwise.
 > Nothing in this README describes a feature as working unless it actually is.
@@ -144,6 +146,46 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
   canvas.)
 - **RBAC & audit** — present since v1.0.0.
 
+## Provider adapters
+
+A provider's adapter is the protocol the gateway speaks to it.
+
+| Adapter | Status |
+|---|---|
+| `openai-compatible` | works |
+| `anthropic` | works against a local mock of Anthropic's API; **not yet run against the live API** |
+| `gemini`, `custom-http` | not implemented — the provider can be saved but not tested or used |
+
+### Anthropic
+
+Add a provider with the **Anthropic** adapter, Base URL
+`https://api.anthropic.com/v1` and an Anthropic API key. **Test** it,
+**Discover** its models, import the ones you want, and they can be used in
+chat, by agents and in projects.
+
+- **Auth type** — *Bearer token* (the default) sends the key as
+  `Authorization: Bearer`. If the API, or a proxy in front of it, does not
+  accept that, choose *Custom header* with the header name `x-api-key`.
+- **API version** — sent as the `anthropic-version` header. Blank means
+  `2026-10-21`.
+- **Text chat only.** Tools, images and the model's thinking output are not
+  passed through. Thinking itself is left at each model's default.
+- **Temperature is not sent**, because API version `2026-10-21` rejects it.
+  The chat and agent temperature settings have no effect on Anthropic models.
+- **Reply length** — every request allows up to 16,000 output tokens
+  (`max_tokens`), thinking included. The cap is fixed in the code
+  (`ANTHROPIC_MAX_TOKENS`). A reply that reaches it is cut off, and the chat
+  view does not say so.
+- **Refusals** — when a model declines a request, the reason Anthropic gives
+  is shown as an error instead of an empty reply, and a project task moves on
+  to the agent's next model.
+- **Discovery** imports model ids. Context window and prices are entered by
+  hand, as for any provider.
+- **Timeout** — as with any provider, Test Model and project runs wait for
+  the complete reply, which must arrive within the provider's Timeout (60 s by
+  default). Raise it, up to 300,000 ms, if long replies time out. A streamed
+  chat reply only has to start within it.
+
 ## Roadmap
 
 | Version | Milestone | Status |
@@ -154,9 +196,9 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 | 1.3.0 | Advanced Orchestration (parallel, budgets, approval, observability, auto-routing, workflows) | ✅ implemented (step-based workflow builder) |
 | 1.4.0 | Creative Workflows (image/video/Reels) | ⏳ planned |
 
-Additional provider adapters (Anthropic, Gemini, custom HTTP) are stubbed in the
-UI but not implemented; only `openai-compatible` works today. A provider on an
-unimplemented adapter can be saved but not tested or used.
+The Gemini and custom HTTP provider adapters are stubbed in the UI but not
+implemented. A provider on an unimplemented adapter can be saved but not tested
+or used. See [Provider adapters](#provider-adapters).
 
 ---
 
@@ -257,7 +299,8 @@ used automatically. The steps are in
 - The rate limiter is in-memory (fine for a single process; use a shared store
   if you run multiple instances).
 - Costs are **estimates** from your own price metadata, not provider billing.
-- Only the `openai-compatible` adapter is implemented.
+- Only the `openai-compatible` and `anthropic` adapters are implemented, and
+  the Anthropic adapter has not been run against the live API.
 
 ## Scripts
 
@@ -298,7 +341,9 @@ SSRF range detection + allowlist, TOTP verification, the plain-HTTP sign-in
 check), the orchestrator plan parser (JSON extraction, validation, dependency
 remap, topological order), the execution guardrails (workspace path
 validation, command allowlist, shell-metacharacter rejection), the router + QA
-verdict parser (cheapest/capability selection, `VERDICT:` parsing), and the
+verdict parser (cheapest/capability selection, `VERDICT:` parsing), the
+Anthropic wire format (headers, request body, response and usage parsing,
+model-list paging, the event-stream parser, refusals, stream errors), and the
 release tooling (channels, version ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, then builds each
@@ -308,7 +353,9 @@ the session.
 
 The provider/model/gateway/streaming paths **and** the full plan → delegate →
 execute → synthesize orchestration loop have been verified end-to-end against a
-local OpenAI-compatible mock.
+local OpenAI-compatible mock. The Anthropic adapter was run through the same
+paths against a local mock written from Anthropic's API reference (the mock is
+not part of this repository); it has not been run against the live API.
 
 ---
 
