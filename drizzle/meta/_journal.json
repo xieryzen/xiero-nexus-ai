@@ -43,6 +43,13 @@
       "when": 1793752866301,
       "tag": "0005_violet_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794494722799,
+      "tag": "0006_smooth_namorita",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,8 @@ export const PATCH = handle(async (req, { params }) => {
     "contextWindow",
     "inputPricePerMTok",
     "outputPricePerMTok",
+    "pricePerImage",
+    "pricePerSecond",
     "notes",
   ] as const) {
     if (body[f] !== undefined) patch[f] = body[f];

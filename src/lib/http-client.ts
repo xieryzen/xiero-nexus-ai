@@ -5,8 +5,10 @@ import { assertSafeProviderUrl } from "./ssrf";
 /**
  * SSRF-aware fetch for outbound provider calls.
  * - Re-validates the destination host against private ranges on every call.
- * - Refuses redirects (a redirect could point at an internal address).
- * - Enforces a timeout.
+ * - Refuses redirects (a redirect could point at an internal address). With
+ *   `redirect: "manual"` the 3xx response is returned instead, so the caller
+ *   can validate the next address itself (see src/lib/media/service.ts).
+ * - Enforces a timeout until the response headers arrive.
  *
  * Note: DNS is checked before the request; a determined attacker controlling
  * DNS could still rebind between check and connect (TOCTOU). Defense in depth
@@ -15,7 +17,7 @@ import { assertSafeProviderUrl } from "./ssrf";
 export async function safeFetch(
   targetUrl: string,
   init: RequestInit,
-  opts: { timeoutMs: number; allowHosts?: string[] },
+  opts: { timeoutMs: number; allowHosts?: string[]; redirect?: "error" | "manual" },
 ): Promise<Response> {
   await assertSafeProviderUrl(targetUrl, { allowHosts: opts.allowHosts });
 
@@ -24,7 +26,7 @@ export async function safeFetch(
   try {
     return await fetch(targetUrl, {
       ...init,
-      redirect: "error",
+      redirect: opts.redirect ?? "error",
       signal: controller.signal,
     });
   } catch (err) {

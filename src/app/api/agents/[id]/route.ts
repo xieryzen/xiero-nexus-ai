@@ -5,6 +5,7 @@ import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
+import { modelIsMediaOnly } from "@/lib/gateway";
 import { getClientMeta } from "@/lib/request";
 import { serializeAgent } from "@/lib/workforce";
 import { agentUpdateSchema } from "@/lib/validation";
@@ -15,6 +16,10 @@ function assertModelExists(id: string | null | undefined) {
   if (!id) return;
   const m = db.select({ id: models.id }).from(models).where(eq(models.id, id)).get();
   if (!m) throw Errors.badRequest("Selected model does not exist");
+  // An agent thinks in text, also when its task is to write an image prompt.
+  if (modelIsMediaOnly(id)) {
+    throw Errors.badRequest("An image or video model cannot be an agent's model. Choose a chat model.");
+  }
 }
 
 export const PATCH = handle(async (req, { params }) => {

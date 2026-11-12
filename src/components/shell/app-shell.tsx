@@ -25,6 +25,7 @@ const groups: { heading: string; items: NavItem[] }[] = [
       { href: "/dashboard/agents", label: "Agents", icon: "agents" },
       { href: "/dashboard/workflows", label: "Workflows", icon: "workflow" },
       { href: "/dashboard/chat", label: "Chat", icon: "chat" },
+      { href: "/dashboard/studio", label: "Creative Studio", icon: "studio" },
     ],
   },
   {

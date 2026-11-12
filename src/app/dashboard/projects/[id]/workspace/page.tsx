@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projects } from "@/db/schema";
-import { getCurrentUser } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { ensureWorkspace, listFiles } from "@/lib/workspace";
 import { getExecutor } from "@/lib/workspace/executor";
 import { getRemote, serializeRemote } from "@/lib/git";
@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Workspace" };
 
 export default function WorkspacePage({ params }: { params: { id: string } }) {
-  const user = getCurrentUser()!;
+  const user = requirePageUser();
   const project = db.select().from(projects).where(eq(projects.id, params.id)).get();
   if (!project) notFound();
   if (project.createdBy !== user.id && user.role !== "admin") redirect("/dashboard/projects");

@@ -146,7 +146,8 @@ Before you open it, decide how people reach it:
 
 Good to know:
 
-- `.env` and `data/` (the SQLite database) live inside `xiero-nexus-ai/`.
+- `.env` and `data/` (the SQLite database, and generated images and videos
+  in `data/media/`) live inside `xiero-nexus-ai/`.
   **Keep `SECRET_ENCRYPTION_KEY` safe**: stored provider keys and 2FA secrets
   cannot be read without it.
 - The port is `PORT` from the environment, else the port a hosting panel
@@ -188,6 +189,10 @@ unzip -oq xiero-nexus-ai-linux-x64-node22.zip
 
 Removing `.next` and `node_modules` first matters: unzipping over them would
 leave files of the old version behind.
+
+The backup copies generated images and videos too (`data/media/`), which can
+be large. If `MEDIA_PATH` points somewhere else, that folder is untouched by
+an upgrade and only the database needs the copy.
 
 On Pterodactyl: stop the server, back up or archive `xiero-nexus-ai/data`,
 delete `xiero-nexus-ai/.next` and `xiero-nexus-ai/node_modules`, upload the new

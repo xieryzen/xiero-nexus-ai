@@ -1,4 +1,5 @@
 import "server-only";
+import { dirname, join } from "node:path";
 
 /**
  * Lazily-read, validated environment access. Values are read on first use
@@ -42,6 +43,14 @@ export const env = {
   },
   get databasePath(): string {
     return process.env.DATABASE_PATH ?? "./data/nexus.db";
+  },
+  /**
+   * Folder for generated images and videos. By default a `media` folder next
+   * to the database file, so both are backed up and kept together.
+   */
+  get mediaPath(): string {
+    const raw = process.env.MEDIA_PATH?.trim();
+    return raw ? raw : join(dirname(this.databasePath), "media");
   },
   get appUrl(): string {
     return process.env.APP_URL ?? "http://localhost:3000";

@@ -1,10 +1,25 @@
 import "server-only";
 import { AppError, sanitizeUpstreamError } from "../errors";
 import { safeFetch } from "../http-client";
+import { MAX_IMAGE_BYTES } from "../media/files";
+import { readBodyCapped } from "../media/http";
+import {
+  buildImageRequest,
+  buildVideoRequest,
+  isValidJobId,
+  linkDownloadPlan,
+  parseImageResponse,
+  parseVideoJob,
+  resolveMediaApi,
+  videoDownloadPlan,
+  videoStatusPath,
+  type ParsedVideoJob,
+} from "./media-protocol";
 import type {
   ChatRequest,
   ChatResult,
   ListedModel,
+  MediaDownload,
   ProviderAdapter,
   ProviderContext,
 } from "./types";
@@ -40,10 +55,60 @@ async function readError(res: Response): Promise<never> {
   );
 }
 
+/** Largest JSON answer accepted from a job endpoint (create / status). */
+const JOB_JSON_MAX_BYTES = 1024 * 1024;
+/** How long an answer body may take to arrive once its headers are in. */
+const BODY_TIMEOUT_MS = 120_000;
+
+/** A provider error that also says the job is gone (404 / 410). */
+async function readJobError(res: Response): Promise<never> {
+  if (res.status !== 404 && res.status !== 410) return readError(res);
+  let detail = "";
+  try {
+    detail = await res.text();
+  } catch {
+    /* ignore */
+  }
+  throw new AppError(
+    502,
+    "upstream_not_found",
+    `Provider responded ${res.status}: ${sanitizeUpstreamError(detail || res.statusText)}`,
+  );
+}
+
+async function readJson(res: Response, maxBytes: number): Promise<unknown> {
+  const raw = await readBodyCapped(res, { maxBytes, timeoutMs: BODY_TIMEOUT_MS });
+  try {
+    return JSON.parse(raw.toString("utf8")) as unknown;
+  } catch {
+    throw new AppError(502, "upstream_error", "Provider returned a response that is not JSON");
+  }
+}
+
+/** Credentials and extra headers, for a request without a JSON body. */
+function authHeaders(ctx: ProviderContext): Record<string, string> {
+  const h = headers(ctx);
+  delete h["content-type"];
+  return h;
+}
+
+function toDownload(ctx: ProviderContext, plan: { url: string; withAuth: boolean }): MediaDownload {
+  return { ...plan, authHeaders: plan.withAuth ? authHeaders(ctx) : {} };
+}
+
 export const openAiCompatibleAdapter: ProviderAdapter = {
   id: "openai-compatible",
   label: "OpenAI-compatible API",
-  supports: ["text", "reasoning", "tool_calling", "structured_output", "vision", "streaming"],
+  supports: [
+    "text",
+    "reasoning",
+    "tool_calling",
+    "structured_output",
+    "vision",
+    "streaming",
+    "image_generation",
+    "video_generation",
+  ],
   canDiscoverModels: true,
 
   async listModels(ctx): Promise<ListedModel[]> {
@@ -187,5 +252,54 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     }
 
     return { content, usage, finishReason };
+  },
+
+  // ── Media. The request style depends on the provider: see media-protocol.ts.
+
+  async generateImages(ctx, req, opts) {
+    const wire = buildImageRequest(resolveMediaApi(ctx.mediaApi, ctx.baseUrl), req);
+    const res = await safeFetch(
+      `${base(ctx)}${wire.path}`,
+      { method: "POST", headers: headers(ctx), body: JSON.stringify(wire.body) },
+      { timeoutMs: opts.timeoutMs, allowHosts: ctx.allowHosts },
+    );
+    if (!res.ok) await readError(res);
+    // Images usually arrive as base64 inside the JSON, a third larger than the file.
+    const count = Math.max(1, req.n ?? 1);
+    const maxBytes = count * Math.ceil(MAX_IMAGE_BYTES * 1.4) + JOB_JSON_MAX_BYTES;
+    return parseImageResponse(await readJson(res, maxBytes));
+  },
+
+  async startVideo(ctx, req): Promise<ParsedVideoJob> {
+    const wire = buildVideoRequest(resolveMediaApi(ctx.mediaApi, ctx.baseUrl), req);
+    const res = await safeFetch(
+      `${base(ctx)}${wire.path}`,
+      { method: "POST", headers: headers(ctx), body: JSON.stringify(wire.body) },
+      { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
+    );
+    if (!res.ok) await readError(res);
+    return parseVideoJob(await readJson(res, JOB_JSON_MAX_BYTES));
+  },
+
+  async getVideo(ctx, jobId): Promise<ParsedVideoJob> {
+    if (!isValidJobId(jobId)) {
+      throw new AppError(502, "upstream_not_found", "The stored video job id is not valid");
+    }
+    const res = await safeFetch(
+      `${base(ctx)}${videoStatusPath(jobId)}`,
+      { method: "GET", headers: authHeaders(ctx) },
+      { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
+    );
+    if (!res.ok) await readJobError(res);
+    return parseVideoJob(await readJson(res, JOB_JSON_MAX_BYTES));
+  },
+
+  mediaDownload(ctx, link): MediaDownload | null {
+    const plan = linkDownloadPlan(ctx.baseUrl, link);
+    return plan ? toDownload(ctx, plan) : null;
+  },
+
+  videoDownload(ctx, jobId, job): MediaDownload {
+    return toDownload(ctx, videoDownloadPlan(ctx.baseUrl, jobId, job));
   },
 };

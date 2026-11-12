@@ -10,6 +10,7 @@ export const CAPABILITIES = [
   "vision",
   "audio",
   "image_generation",
+  "video_generation",
   "embeddings",
   "streaming",
 ] as const;
@@ -24,6 +25,27 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   vision: "Vision",
   audio: "Audio",
   image_generation: "Image generation",
+  video_generation: "Video generation",
   embeddings: "Embeddings",
   streaming: "Streaming",
 };
+
+/** The capability a model needs to generate each kind of media. */
+export const MEDIA_CAPABILITY = {
+  image: "image_generation",
+  video: "video_generation",
+} as const satisfies Record<string, Capability>;
+
+/**
+ * True for a model that only generates media: it is marked for image or video
+ * generation and not for text. Such a model cannot answer a chat request, so
+ * it is left out of chat, agents, the AI Manager and automatic routing.
+ *
+ * A model with no capabilities at all (as imported by discovery) is treated as
+ * a chat model, as before.
+ */
+export function isMediaOnly(capabilities: readonly string[]): boolean {
+  const generatesMedia =
+    capabilities.includes("image_generation") || capabilities.includes("video_generation");
+  return generatesMedia && !capabilities.includes("text");
+}

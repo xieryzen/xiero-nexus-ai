@@ -55,6 +55,8 @@ export const POST = handle(async (req) => {
         contextWindow: body.contextWindow,
         inputPricePerMTok: body.inputPricePerMTok,
         outputPricePerMTok: body.outputPricePerMTok,
+        pricePerImage: body.pricePerImage,
+        pricePerSecond: body.pricePerSecond,
         notes: body.notes,
         source: "manual",
       })

@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { SerializedModel } from "@/lib/models";
-import { CAPABILITY_LABELS } from "@/lib/capabilities";
+import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatRelative } from "@/lib/format";
 import { Badge, Button, Card, EmptyState, PageHeader, StatusDot, Toggle } from "@/components/ui";
@@ -13,6 +14,8 @@ interface ProviderLite {
   id: string;
   name: string;
   adapterImplemented: boolean;
+  /** Whether its adapter can generate images or videos. */
+  supportsMedia: boolean;
   status: "enabled" | "disabled";
 }
 
@@ -35,6 +38,10 @@ export function ModelsManager({
     for (const p of providers) m.set(p.id, p.name);
     return m;
   }, [providers]);
+  const mediaProviders = useMemo(
+    () => new Set(providers.filter((p) => p.supportsMedia).map((p) => p.id)),
+    [providers],
+  );
 
   const grouped = useMemo(() => {
     const map = new Map<string, SerializedModel[]>();
@@ -137,7 +144,7 @@ export function ModelsManager({
         <div className="mb-6">
           <Card title={form.mode === "new" ? "Add model manually" : `Edit ${form.model?.modelId}`}>
             <ModelForm
-              providers={providers.map((p) => ({ id: p.id, name: p.name }))}
+              providers={providers.map((p) => ({ id: p.id, name: p.name, supportsMedia: p.supportsMedia }))}
               initial={form.model}
               onSaved={(m) => {
                 patch(m);
@@ -196,6 +203,8 @@ export function ModelsManager({
                             {m.contextWindow != null && <span>ctx {m.contextWindow.toLocaleString()}</span>}
                             {m.inputPricePerMTok != null && <span>in ${m.inputPricePerMTok}/1M</span>}
                             {m.outputPricePerMTok != null && <span>out ${m.outputPricePerMTok}/1M</span>}
+                            {m.pricePerImage != null && <span>${m.pricePerImage}/image</span>}
+                            {m.pricePerSecond != null && <span>${m.pricePerSecond}/second</span>}
                             {m.lastTestedAt && <span>tested {formatRelative(m.lastTestedAt)}</span>}
                           </div>
                           {testNote[m.id] && (
@@ -223,9 +232,19 @@ export function ModelsManager({
                                 label="Enabled"
                               />
                             </div>
-                            <Button variant="ghost" loading={busy[m.id] === "test"} disabled={!!busy[m.id]} onClick={() => test(m)}>
-                              <Icon name="test" /> Test
-                            </Button>
+                            {isMediaOnly(m.capabilities.map((c) => c.capability)) ? (
+                              // The test is a chat request, which an image / video model cannot answer.
+                              // Creative Studio offers it only on a provider that can generate media.
+                              mediaProviders.has(m.providerId) && (
+                                <Link href="/dashboard/studio" className="btn-ghost" title="Try this model in Creative Studio">
+                                  <Icon name="studio" /> Try
+                                </Link>
+                              )
+                            ) : (
+                              <Button variant="ghost" loading={busy[m.id] === "test"} disabled={!!busy[m.id]} onClick={() => test(m)}>
+                                <Icon name="test" /> Test
+                              </Button>
+                            )}
                             <Button variant="ghost" disabled={!!busy[m.id]} onClick={() => setForm({ mode: "edit", model: m })}>
                               Edit
                             </Button>

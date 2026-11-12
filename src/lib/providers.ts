@@ -65,6 +65,7 @@ export function serializeProvider(p: Provider) {
     authType: p.authType,
     authHeaderName: p.authHeaderName,
     apiVersion: p.apiVersion,
+    mediaApi: p.mediaApi,
     timeoutMs: p.timeoutMs,
     extraHeaders,
     status: p.status,

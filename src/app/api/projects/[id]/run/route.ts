@@ -4,6 +4,9 @@ import { loadOwnedProject } from "@/lib/project-access";
 import { runProject, type RunEvent } from "@/lib/orchestrator";
 
 export const dynamic = "force-dynamic";
+// A hint for serverless hosts only. The self-hosted server (`next start`, the
+// release bundle) does not enforce it, and a run that generates videos can
+// take much longer: it waits up to 15 minutes for each video.
 export const maxDuration = 300;
 
 export const POST = handle(async (_req, { params }) => {

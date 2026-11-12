@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { redirect } from "next/navigation";
 import type { User } from "@/db/schema";
 import { Errors } from "./errors";
 import { readSession } from "./session";
@@ -21,6 +22,18 @@ export const getSessionState = cache((): SessionState => {
 export function getCurrentUser(): User | null {
   const state = getSessionState();
   return state.status === "active" ? state.user : null;
+}
+
+/**
+ * The signed-in user of a dashboard page. The dashboard layout sends everyone
+ * else to the sign-in page, but a page is rendered alongside its layout, so
+ * it makes the same decision here instead of assuming there is a user.
+ */
+export function requirePageUser(): User {
+  const state = getSessionState();
+  if (state.status === "none") redirect("/login");
+  if (state.status === "pending") redirect("/login/2fa");
+  return state.user;
 }
 
 /** Require a fully-authenticated user (for API routes). Throws AppError. */

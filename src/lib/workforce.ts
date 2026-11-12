@@ -11,6 +11,7 @@ import {
   type Team,
   type Workflow,
 } from "@/db/schema";
+import { parseMediaOptions, type MediaOptions, type TaskKind } from "./creative/prompt";
 
 function modelLabels(ids: string[]): Map<string, string> {
   const map = new Map<string, string>();
@@ -75,6 +76,8 @@ export function serializeTask(t: ProjectTask) {
     acceptanceCriteria: t.acceptanceCriteria,
     agentId: t.agentId,
     status: t.status,
+    kind: t.kind,
+    media: t.kind === "text" ? null : parseMediaOptions(t.mediaOptions),
     dependsOn: t.dependsOn ? (JSON.parse(t.dependsOn) as number[]) : [],
     artifact: t.artifact,
     error: t.error,
@@ -103,6 +106,9 @@ export function serializeProject(p: Project, opts: { withTasks?: boolean } = {})
     approved: p.approved,
     hardQaGate: p.hardQaGate,
     workflowId: p.workflowId,
+    imageModelRowId: p.imageModelRowId,
+    videoModelRowId: p.videoModelRowId,
+    maxMedia: p.maxMedia,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     startedAt: p.startedAt,
@@ -126,6 +132,9 @@ export interface WorkflowStep {
   role: string;
   dependsOn?: number[];
   outputFile?: string;
+  /** What the step delivers. Missing means text. */
+  kind?: TaskKind;
+  media?: MediaOptions;
 }
 
 export function serializeWorkflow(w: Workflow) {

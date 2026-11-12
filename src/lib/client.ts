@@ -35,3 +35,39 @@ export async function apiFetch<T = unknown>(
   }
   return data as T;
 }
+
+/**
+ * Copy text to the clipboard. Resolves to whether it worked.
+ *
+ * `navigator.clipboard` exists only on HTTPS and on localhost, and this app
+ * is also run over plain HTTP on a private network (`COOKIE_SECURE=false`),
+ * so the older selection-based copy is the fallback.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Not allowed here: try the fallback.
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "0";
+  area.style.left = "0";
+  area.style.opacity = "0";
+  const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  document.body.appendChild(area);
+  try {
+    area.select();
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    area.remove();
+    focused?.focus();
+  }
+}

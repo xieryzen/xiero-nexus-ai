@@ -1,8 +1,16 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { models, providerCredentials, providers, type Model, type Provider } from "@/db/schema";
+import {
+  modelCapabilities,
+  models,
+  providerCredentials,
+  providers,
+  type Model,
+  type Provider,
+} from "@/db/schema";
 import { getAdapter } from "./adapters";
+import { isMediaOnly } from "./capabilities";
 import type { ChatMessage, ChatRequest, ChatResult, ProviderContext } from "./adapters/types";
 import { AppError, Errors } from "./errors";
 import { decryptSecret } from "./secrets";
@@ -48,6 +56,7 @@ export function buildContext(
     authType: provider.authType,
     authHeaderName: provider.authHeaderName,
     apiVersion: provider.apiVersion,
+    mediaApi: provider.mediaApi,
     extraHeaders,
     timeoutMs: provider.timeoutMs,
     allowHosts: allowedPrivateHosts(),
@@ -74,6 +83,31 @@ export function resolveEnabledModel(modelRowId: string): ResolvedModel {
     throw Errors.badRequest("Provider is disabled");
   }
   return { model, provider };
+}
+
+/** True when the model is marked for image / video generation and not for text. */
+export function modelIsMediaOnly(modelRowId: string): boolean {
+  const capabilities = db
+    .select({ capability: modelCapabilities.capability })
+    .from(modelCapabilities)
+    .where(eq(modelCapabilities.modelRowId, modelRowId))
+    .all()
+    .map((c) => c.capability);
+  return isMediaOnly(capabilities);
+}
+
+/**
+ * Resolve a model for a chat request: as resolveEnabledModel, and an image /
+ * video model is refused here rather than by a confusing upstream error.
+ */
+export function resolveChatModel(modelRowId: string): ResolvedModel {
+  const resolved = resolveEnabledModel(modelRowId);
+  if (modelIsMediaOnly(modelRowId)) {
+    throw Errors.badRequest(
+      `${resolved.model.displayName || resolved.model.modelId} only generates images or videos and cannot answer a chat request`,
+    );
+  }
+  return resolved;
 }
 
 /** Test a provider connection using a supplied or stored credential. */
@@ -108,7 +142,8 @@ export async function discoverProviderModels(
   return listed.map((m) => m.id);
 }
 
-function contextFor(provider: Provider): ProviderContext {
+/** The context for calling a provider with its stored credential. */
+export function contextFor(provider: Provider): ProviderContext {
   const key =
     provider.authType === "none" ? null : activeCredentialPlaintext(provider.id);
   if (provider.authType !== "none" && !key) {

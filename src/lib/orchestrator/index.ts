@@ -18,12 +18,27 @@ import {
 } from "@/db/schema";
 import type { ChatMessage } from "@/lib/adapters/types";
 import { adapterIsImplemented } from "@/lib/adapters";
+import { isMediaOnly } from "@/lib/capabilities";
+import {
+  cleanMediaPrompt,
+  mediaArtifact,
+  type MediaOptions,
+  type TaskKind,
+} from "@/lib/creative/prompt";
 import { AppError, sanitizeUpstreamError } from "@/lib/errors";
-import { gatewayChat, resolveEnabledModel, type ResolvedModel } from "@/lib/gateway";
+import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
+import { serializeAsset, type MediaAssetDTO } from "@/lib/media/dto";
+import { generateImages, resolveMediaModel, startVideo, waitForVideo } from "@/lib/media/service";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 import { ensureWorkspace, latestExecSummary, upsertFile } from "@/lib/workspace";
 import { pickCheapestModel, type RoutableModel } from "@/lib/router";
-import { parsePlan, parseVerdict } from "./plan";
+import {
+  countMediaTasks,
+  dependencyContext,
+  downgradeUnavailableMedia,
+  parsePlan,
+  parseVerdict,
+} from "./plan";
 
 type ProjectState = (typeof PROJECT_STATES)[number];
 type TaskState = (typeof TASK_STATES)[number];
@@ -31,11 +46,18 @@ type TaskState = (typeof TASK_STATES)[number];
 // Hard ceilings regardless of per-project settings.
 const MAX_TASKS_CEIL = 20;
 
+/**
+ * How long a run waits for one video. Providers take from half a minute to
+ * several minutes. When the time is over the task fails, but the video is not
+ * lost: it stays in progress and can still finish in Creative Studio.
+ */
+const VIDEO_WAIT_MS = 15 * 60_000;
+
 export type RunEvent =
   | { type: "status"; status: ProjectState }
   | {
       type: "plan";
-      tasks: { seq: number; title: string; agent: string; dependsOn: number[] }[];
+      tasks: { seq: number; title: string; agent: string; dependsOn: number[]; kind: TaskKind }[];
     }
   | {
       type: "task";
@@ -46,7 +68,11 @@ export type RunEvent =
       artifact?: string | null;
       error?: string | null;
       tokens?: number;
+      /** The image or video an image / video task generated. */
+      assets?: MediaAssetDTO[];
     }
+  // A running task's progress note. Also keeps the stream alive during a long wait.
+  | { type: "progress"; seq: number; message: string }
   | { type: "final"; deliverable: string }
   | { type: "review"; notes: string }
   | { type: "budget"; used: number; limit: number }
@@ -76,6 +102,11 @@ function agentsForProject(project: Project): Agent[] {
       .filter((a) => a.status === "active");
   }
   return db.select().from(agentsTable).where(eq(agentsTable.status, "active")).all();
+}
+
+function elapsedLabel(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function describeAgents(list: Agent[]): string {
@@ -116,12 +147,15 @@ function loadRoutableModels(): RoutableModel[] {
     list.push(c.capability);
     caps.set(c.modelRowId, list);
   }
-  return rows.map((m) => ({
-    id: m.id,
-    inputPricePerMTok: m.inputPricePerMTok,
-    outputPricePerMTok: m.outputPricePerMTok,
-    capabilities: caps.get(m.id) ?? [],
-  }));
+  return rows
+    .map((m) => ({
+      id: m.id,
+      inputPricePerMTok: m.inputPricePerMTok,
+      outputPricePerMTok: m.outputPricePerMTok,
+      capabilities: caps.get(m.id) ?? [],
+    }))
+    // An image / video model cannot answer a chat request, however cheap it is.
+    .filter((m) => !isMediaOnly(m.capabilities));
 }
 
 /** Ordered model candidates for an agent: auto-routed pick first (if enabled),
@@ -142,7 +176,9 @@ function buildCandidates(
 /**
  * Plan and execute a project. Emits events for the API to stream.
  * Agents reason and produce written artifacts via the gateway; this phase does
- * NOT execute code or tools (that is the v1.2 sandbox).
+ * NOT execute code or tools (that is the v1.2 sandbox). An image / video task
+ * (v1.4) has its agent write a prompt, which the project's image or video
+ * model then generates from.
  */
 export async function runProject(
   projectId: string,
@@ -174,7 +210,7 @@ export async function runProject(
     let manager: ResolvedModel;
     try {
       if (!project.managerModelRowId) throw new AppError(400, "no_model", "No manager model set");
-      manager = resolveEnabledModel(project.managerModelRowId);
+      manager = resolveChatModel(project.managerModelRowId);
     } catch (e) {
       return fail(e instanceof AppError ? e.message : "Manager model unavailable");
     }
@@ -186,6 +222,20 @@ export async function runProject(
     if (workforce.length === 0) {
       return fail("No usable agents (each agent needs a model, auto-routing, or a project manager model).");
     }
+
+    // The models image / video tasks generate with, when the project has them.
+    const mediaModels: Record<"image" | "video", ResolvedModel | null> = { image: null, video: null };
+    const mediaProblems: Partial<Record<"image" | "video", string>> = {};
+    for (const kind of ["image", "video"] as const) {
+      const id = kind === "image" ? project.imageModelRowId : project.videoModelRowId;
+      if (!id) continue;
+      try {
+        mediaModels[kind] = resolveMediaModel(id, kind);
+      } catch (e) {
+        mediaProblems[kind] = e instanceof AppError ? e.message : "Model unavailable";
+      }
+    }
+    const mediaLimit = Math.max(0, project.maxMedia);
 
     // ── Approval gate (v1.3) ────────────────────────────────────────────────
     if (project.requiresApproval && !project.approved) {
@@ -233,13 +283,49 @@ export async function runProject(
           agent: String(step.role || step.agent || ""),
           dependsOn: Array.isArray(step.dependsOn) ? step.dependsOn.map(Number) : [],
           outputFile: step.outputFile ? String(step.outputFile) : undefined,
+          kind: step.kind,
+          media: step.media,
         };
       });
       plan = parsePlan(JSON.stringify({ tasks }), taskCap);
       if (!plan.ok || plan.tasks.length === 0) {
         return fail(`Workflow is invalid: ${plan.error ?? "no steps"}`);
       }
+      // A workflow's steps are fixed, so stop before anything is spent when it
+      // cannot be completed.
+      const need = countMediaTasks(plan.tasks);
+      for (const kind of ["image", "video"] as const) {
+        if (need[kind] > 0 && !mediaModels[kind]) {
+          return fail(
+            `The workflow has ${kind} steps, but the project has no usable ${kind} model` +
+              (mediaProblems[kind] ? `: ${mediaProblems[kind]}` : "."),
+          );
+        }
+      }
+      if (need.image + need.video > mediaLimit) {
+        return fail(
+          `The workflow generates ${need.image + need.video} images and videos, more than this project's media limit of ${mediaLimit}.`,
+        );
+      }
     } else {
+      const kinds = (["image", "video"] as const).filter((k) => mediaModels[k]);
+      const creative =
+        kinds.length > 0 && mediaLimit > 0
+          ? "\n\nCreative tasks: a task can deliver a generated " +
+            kinds.join(" or ") +
+            ' instead of text. Give such a task "kind":' +
+            kinds.map((k) => `"${k}"`).join(" or ") +
+            ' and, if useful, "media":{"aspectRatio":"9:16"' +
+            (mediaModels.video ? ',"durationSeconds":8' : "") +
+            "}" +
+            (mediaModels.video ? " (durationSeconds applies to video)" : "") +
+            ". The assigned agent writes the prompt for the generator from the task objective, and each " +
+            "such task generates exactly one " +
+            kinds.join(" or one ") +
+            ". Nobody on the team can see the generated media, only its prompt, so put everything a later " +
+            "task needs to know into text tasks. " +
+            `Use at most ${mediaLimit} such tasks, and only where the goal asks for visuals.`
+          : "";
       const planMessages: ChatMessage[] = [
         {
           role: "system",
@@ -250,8 +336,9 @@ export async function runProject(
             '{"tasks":[{"seq":1,"title":"...","objective":"...","acceptanceCriteria":"...","agent":"<agent name>","dependsOn":[],"outputFile":"src/file.ts"}]}. ' +
             "dependsOn lists seq numbers of earlier tasks this one needs. For a task whose deliverable is a file " +
             '(code/config), add an "outputFile" relative path and the agent should return ONLY that file\'s contents; ' +
-            "its artifact is saved to the project workspace. Keep it minimal and ordered.\n\n" +
-            `Available agents:\n${describeAgents(workforce)}`,
+            "its artifact is saved to the project workspace. Keep it minimal and ordered." +
+            creative +
+            `\n\nAvailable agents:\n${describeAgents(workforce)}`,
         },
         { role: "user", content: `Goal:\n${project.goal}` },
       ];
@@ -268,6 +355,16 @@ export async function runProject(
       if (!plan.ok || plan.tasks.length === 0) {
         return fail(`Planning failed: ${plan.error ?? "no tasks produced"}`);
       }
+      // The manager may still ask for media the project has no model for, or
+      // for more than its limit: those tasks are delivered as text instead.
+      plan = {
+        ...plan,
+        tasks: downgradeUnavailableMedia(
+          plan.tasks,
+          { image: Boolean(mediaModels.image), video: Boolean(mediaModels.video) },
+          mediaLimit,
+        ).tasks,
+      };
     }
 
     // Map plan agent names → agents (case-insensitive; fall back to first).
@@ -290,6 +387,8 @@ export async function runProject(
           acceptanceCriteria: t.acceptanceCriteria || null,
           agentId: agent.id,
           dependsOn: JSON.stringify(t.dependsOn),
+          kind: t.kind,
+          mediaOptions: t.kind !== "text" && t.media ? JSON.stringify(t.media) : null,
           status: "queued",
         })
         .returning()
@@ -303,6 +402,7 @@ export async function runProject(
         title: t.title,
         agent: resolvedAgentFor(t.agent).name,
         dependsOn: t.dependsOn,
+        kind: t.kind,
       })),
     });
 
@@ -318,21 +418,59 @@ export async function runProject(
     const budget = project.maxTokens;
     const maxParallel = Math.max(1, project.maxParallel);
 
+    // Finished outputs by task, for the tasks that depend on them.
+    const artifactBySeq = new Map<number, string>();
+    // Images + videos started in this run, against the project's media limit.
+    let mediaStarted = 0;
+
     const runTask = async (seq: number): Promise<{ succeeded: boolean; tokens: number }> => {
       const task = bySeq.get(seq)!;
       const planned = planBySeq.get(seq)!;
       const agent = task.agentId ? agentById.get(task.agentId) : undefined;
+      const agentName = agent?.name ?? null;
+      const kind: TaskKind = planned.kind;
+      const mediaModel = kind === "text" ? null : mediaModels[kind];
+      const options: MediaOptions = (kind !== "text" && planned.media) || {};
 
       db.update(projectTasks).set({ status: "running", updatedAt: new Date() }).where(eq(projectTasks.id, task.id)).run();
-      emit({ type: "task", seq, title: task.title, status: "running", agent: agent?.name ?? null });
+      emit({ type: "task", seq, title: task.title, status: "running", agent: agentName });
 
-      const depContext = planned.dependsOn
-        .map((d) => {
-          const dt = bySeq.get(d);
-          return dt?.artifact ? `### Output of task ${d} (${dt.title})\n${dt.artifact}` : "";
-        })
-        .filter(Boolean)
-        .join("\n\n");
+      const failTask = (error: string, attempts: number, tokens: number, assets?: MediaAssetDTO[]) => {
+        db.update(projectTasks).set({ status: "failed", error, attempts, updatedAt: new Date() }).where(eq(projectTasks.id, task.id)).run();
+        emit({ type: "task", seq, title: task.title, status: "failed", agent: agentName, error, assets });
+        return { succeeded: false, tokens };
+      };
+
+      if (kind !== "text") {
+        // Checked before the agent writes anything, so no tokens are spent on
+        // a prompt that cannot be used.
+        if (!mediaModel) {
+          return failTask(mediaProblems[kind] ?? `The project has no ${kind} model`, 0, 0);
+        }
+        if (mediaStarted >= mediaLimit) {
+          return failTask(`Media limit reached: this project allows ${mediaLimit} images and videos per run`, 0, 0);
+        }
+        mediaStarted++;
+      }
+
+      const depContext = dependencyContext(planned.dependsOn, (d) => {
+        const dt = bySeq.get(d);
+        return dt ? { title: dt.title, artifact: artifactBySeq.get(d) } : undefined;
+      });
+
+      const shape = [
+        options.aspectRatio ? `aspect ratio ${options.aspectRatio}` : "",
+        kind === "video" && options.durationSeconds ? `about ${options.durationSeconds} seconds long` : "",
+      ].filter(Boolean);
+      const instruction =
+        kind === "text"
+          ? `Complete your assigned task and return only the deliverable for it.`
+          : `Your deliverable for this task is the prompt for an AI ${kind} generator, which will produce ` +
+            `one ${kind}${shape.length ? ` (${shape.join(", ")})` : ""} from it. Return ONLY the prompt: one ` +
+            `self-contained paragraph that says exactly what is seen` +
+            (kind === "video" ? ", how it moves and how the camera moves" : "") +
+            `, in what style and light. The generator knows nothing about this project, so do not refer ` +
+            `to other tasks or scenes. No preamble, no quotes, no markdown, no alternatives.`;
 
       const messages: ChatMessage[] = [
         {
@@ -341,7 +479,7 @@ export async function runProject(
             `You are ${agent?.name ?? "an agent"}, acting as ${agent?.role ?? "a specialist"}.\n` +
             `${agent?.instructions ?? ""}\n\n` +
             `Overall project goal: ${project.goal}\n` +
-            `Complete your assigned task and return only the deliverable for it.` +
+            instruction +
             (task.acceptanceCriteria ? `\nAcceptance criteria: ${task.acceptanceCriteria}` : ""),
         },
         {
@@ -352,8 +490,9 @@ export async function runProject(
         },
       ];
 
+      // ── The agent's answer: the deliverable, or the prompt for the generator.
       const candidates = buildCandidates(agent, project, routable);
-      let succeeded = false;
+      let answer: { content: string; prompt: number; completion: number } | null = null;
       let lastError = "No model available";
       let attempt = 0;
       let taskTokens = 0;
@@ -362,7 +501,7 @@ export async function runProject(
         attempt++;
         let resolved: ResolvedModel;
         try {
-          resolved = resolveEnabledModel(mid);
+          resolved = resolveChatModel(mid);
         } catch (e) {
           lastError = e instanceof AppError ? e.message : "Model unavailable";
           db.insert(agentRuns).values({ projectId, taskId: task.id, agentId: agent?.id ?? null, modelRowId: mid, status: "error", attempt, error: lastError }).run();
@@ -372,18 +511,7 @@ export async function runProject(
         try {
           const r = await invoke(resolved, messages, agent?.temperature ?? 0.7);
           const latencyMs = Date.now() - started;
-          taskTokens = r.prompt + r.completion;
-          db.insert(agentRuns).values({
-            projectId,
-            taskId: task.id,
-            agentId: agent?.id ?? null,
-            modelRowId: resolved.model.id,
-            status: "ok",
-            attempt,
-            promptTokens: r.prompt,
-            completionTokens: r.completion,
-            latencyMs,
-          }).run();
+          taskTokens += r.prompt + r.completion;
           recordUsage({
             userId: project.createdBy,
             providerId: resolved.provider.id,
@@ -395,23 +523,22 @@ export async function runProject(
             status: "ok",
             latencyMs,
           });
-          db.update(projectTasks).set({
-            status: "succeeded",
-            artifact: r.content,
-            attempts: attempt,
+          const content = kind === "text" ? r.content : cleanMediaPrompt(r.content);
+          if (kind !== "text" && !content) {
+            throw new AppError(502, "empty_prompt", "The agent returned an empty prompt");
+          }
+          db.insert(agentRuns).values({
+            projectId,
+            taskId: task.id,
+            agentId: agent?.id ?? null,
+            modelRowId: resolved.model.id,
+            status: "ok",
+            attempt,
             promptTokens: r.prompt,
             completionTokens: r.completion,
-            updatedAt: new Date(),
-          }).where(eq(projectTasks.id, task.id)).run();
-          if (planned.outputFile) {
-            try {
-              upsertFile(workspace.id, planned.outputFile, r.content);
-            } catch {
-              /* invalid path from the model — skip the file write, keep the artifact */
-            }
-          }
-          emit({ type: "task", seq, title: task.title, status: "succeeded", agent: agent?.name ?? null, artifact: r.content, tokens: taskTokens });
-          succeeded = true;
+            latencyMs,
+          }).run();
+          answer = { content, prompt: r.prompt, completion: r.completion };
           break;
         } catch (e) {
           lastError = e instanceof AppError ? e.message : sanitizeUpstreamError(e);
@@ -419,11 +546,110 @@ export async function runProject(
         }
       }
 
-      if (!succeeded) {
-        db.update(projectTasks).set({ status: "failed", error: lastError, attempts: attempt, updatedAt: new Date() }).where(eq(projectTasks.id, task.id)).run();
-        emit({ type: "task", seq, title: task.title, status: "failed", agent: agent?.name ?? null, error: lastError });
+      if (!answer) return failTask(lastError, attempt, taskTokens);
+
+      const succeed = (artifact: string, assets?: MediaAssetDTO[]) => {
+        db.update(projectTasks).set({
+          status: "succeeded",
+          artifact,
+          attempts: attempt,
+          promptTokens: answer.prompt,
+          completionTokens: answer.completion,
+          updatedAt: new Date(),
+        }).where(eq(projectTasks.id, task.id)).run();
+        artifactBySeq.set(seq, artifact);
+        emit({ type: "task", seq, title: task.title, status: "succeeded", agent: agentName, artifact, tokens: taskTokens, assets });
+        return { succeeded: true, tokens: taskTokens };
+      };
+
+      if (kind === "text" || !mediaModel) {
+        if (planned.outputFile) {
+          try {
+            upsertFile(workspace.id, planned.outputFile, answer.content);
+          } catch {
+            /* invalid path from the model — skip the file write, keep the artifact */
+          }
+        }
+        return succeed(answer.content);
       }
-      return { succeeded, tokens: taskTokens };
+
+      // ── Generate the image / video from the agent's prompt.
+      // The prompt is kept on the task even if generation fails.
+      const prompt = answer.content;
+      db.update(projectTasks).set({ promptTokens: answer.prompt, completionTokens: answer.completion, updatedAt: new Date() }).where(eq(projectTasks.id, task.id)).run();
+      const label = mediaModel.model.displayName || mediaModel.model.modelId;
+      const generationStarted = Date.now();
+      const logGeneration = (status: "ok" | "error", error?: string) => {
+        db.insert(agentRuns).values({
+          projectId,
+          taskId: task.id,
+          agentId: agent?.id ?? null,
+          modelRowId: mediaModel.model.id,
+          status,
+          attempt: attempt + 1,
+          latencyMs: Date.now() - generationStarted,
+          error,
+        }).run();
+      };
+      const request = {
+        userId: project.createdBy,
+        modelRowId: mediaModel.model.id,
+        prompt,
+        aspectRatio: options.aspectRatio,
+        resolution: options.resolution,
+        size: options.size,
+        projectId,
+        taskId: task.id,
+      };
+      const giveUp = (error: string, assets?: MediaAssetDTO[]) => {
+        logGeneration("error", error);
+        return failTask(`${error}\n\nPrompt: ${prompt}`, attempt + 1, taskTokens, assets);
+      };
+
+      try {
+        emit({ type: "progress", seq, message: `Generating the ${kind} with ${label}` });
+        if (kind === "image") {
+          const [asset] = await generateImages({ ...request, n: 1 });
+          if (!asset) return giveUp("The provider answered without an image");
+          logGeneration("ok");
+          attempt++;
+          return succeed(
+            mediaArtifact({ kind, assetId: asset.id, modelLabel: label, prompt, options }),
+            [serializeAsset(asset)],
+          );
+        }
+
+        const pending = await startVideo({ ...request, durationSeconds: options.durationSeconds });
+        const waited = await waitForVideo(pending.id, {
+          timeoutMs: VIDEO_WAIT_MS,
+          isCancelled: () => cancelled.has(projectId),
+          onTick: (elapsed) =>
+            emit({ type: "progress", seq, message: `Generating the video with ${label} (${elapsedLabel(elapsed)})` }),
+        });
+        const dto = serializeAsset(waited.asset);
+        if (waited.asset.status === "ready") {
+          logGeneration("ok");
+          attempt++;
+          return succeed(
+            mediaArtifact({ kind, assetId: waited.asset.id, modelLabel: label, prompt, options }),
+            [dto],
+          );
+        }
+        if (waited.asset.status === "failed") {
+          return giveUp(waited.asset.error ?? "The provider could not generate the video", [dto]);
+        }
+        // Still in progress at the provider: it can finish later in Creative Studio.
+        const later = "It is still in progress and will be in Creative Studio if the provider finishes it.";
+        if (waited.gaveUp === "cancelled") {
+          return giveUp(`Cancelled while the video was being generated. ${later}`, [dto]);
+        }
+        if (waited.gaveUp === "errors") {
+          return giveUp(`Could not check on the video: ${waited.checkError ?? "the provider did not answer"}. ${later}`, [dto]);
+        }
+        return giveUp(`The video was not finished after ${Math.round(VIDEO_WAIT_MS / 60_000)} minutes. ${later}`, [dto]);
+      } catch (e) {
+        return giveUp(e instanceof AppError ? e.message : sanitizeUpstreamError(e));
+      }
     };
 
     // Execute independent tasks in dependency-ordered waves (parallel within a wave).
@@ -484,6 +710,7 @@ export async function runProject(
       .orderBy(asc(projectTasks.seq))
       .all();
     const succeededTasks = completed.filter((t) => t.status === "succeeded");
+    const mediaTasks = succeededTasks.filter((t) => t.kind !== "text");
 
     let deliverable = "";
     if (succeededTasks.length > 0) {
@@ -494,7 +721,12 @@ export async function runProject(
             "You are the AI Manager. Consolidate the team's task outputs into a single, " +
             "well-structured final deliverable for the user. At the end, briefly note whether each " +
             "task's acceptance criteria appear met — state clearly that this is your assessment, not " +
-            "automated verification.",
+            "automated verification." +
+            (mediaTasks.length > 0
+              ? " Some tasks generated an image or a video. You cannot see those: list each one by its " +
+                "task title, say what it should show according to its prompt, and say plainly that the " +
+                "media itself was not checked."
+              : ""),
         },
         {
           role: "user",
@@ -519,7 +751,7 @@ export async function runProject(
       const reviewModelId = reviewer ? buildCandidates(reviewer, project, routable)[0]! : project.managerModelRowId;
       if (reviewModelId) {
         try {
-          const reviewModel = resolveEnabledModel(reviewModelId);
+          const reviewModel = resolveChatModel(reviewModelId);
           const execSummary = latestExecSummary(workspace.id);
           const reviewMessages: ChatMessage[] = [
             {
@@ -528,6 +760,11 @@ export async function runProject(
                 "You are a QA/Security reviewer. For each task, assess whether its deliverable meets the " +
                 "acceptance criteria, and flag correctness, security, and missing-requirement concerns. Be " +
                 "concise and specific. Where sandbox execution output is provided, ground your judgment in it. " +
+                (mediaTasks.length > 0
+                  ? "A deliverable that starts with 'Generated image' or 'Generated video' is media you cannot " +
+                    "see: review its prompt against the criteria, say that the media itself was not reviewed, " +
+                    "and do not count that against the task. "
+                  : "") +
                 "End with a line exactly 'VERDICT: pass', 'VERDICT: concerns', or 'VERDICT: fail'.",
             },
             {

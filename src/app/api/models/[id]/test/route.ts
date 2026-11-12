@@ -6,7 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { AppError, Errors, sanitizeUpstreamError } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
-import { gatewayChat } from "@/lib/gateway";
+import { gatewayChat, modelIsMediaOnly } from "@/lib/gateway";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +24,13 @@ export const POST = handle(async (req, { params }) => {
     .where(eq(providers.id, model.providerId))
     .get();
   if (!provider) throw Errors.notFound("Provider not found");
+
+  // The test is a chat request, which an image / video model cannot answer.
+  if (modelIsMediaOnly(model.id)) {
+    throw Errors.badRequest(
+      "This model only generates images or videos, so the chat test does not apply. Try it in Creative Studio.",
+    );
+  }
 
   const started = Date.now();
   try {

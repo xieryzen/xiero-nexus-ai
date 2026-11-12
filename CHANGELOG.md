@@ -7,15 +7,76 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+Creative Workflows: image and video generation. It was tested against a local
+mock of the providers' APIs, written from their public documentation, and
+**not against a live provider**; the same goes for the Anthropic adapter. Setup
+and limits are in the README under "Creative Workflows" and "Provider
+adapters".
+
 ### Added
 
+- Image and video generation through the gateway, for providers on the
+  OpenAI-compatible adapter. A provider has a new **Image / video API** setting
+  (Auto, OpenAI-style, OpenRouter, xAI) that says how its media requests are
+  written.
+- **Creative Studio**: write a prompt, choose a model, an aspect ratio, and
+  the number of images or the length of a video, see a cost estimate, and
+  generate. A video shows as in progress until the provider has finished it.
+- **Media library**: generated files are stored on the server and can be
+  previewed, played, downloaded, reused and deleted. Users see their own media;
+  administrators can see everyone's. `MEDIA_PATH` sets the folder; the default
+  is `media` next to the database file (`./data/media`).
+- Models have a **Model type** (chat, image generation, video generation) and
+  a price per image and per second of video, used for cost estimates. The new
+  capability is *Video generation*.
+- Projects can have an **image model**, a **video model** and a **media
+  limit**. A task can then deliver an image or a video: its agent writes the
+  prompt and the project's model generates the file, which is shown in the
+  project. A running task says what it is doing.
+- Workflow steps can deliver an image or a video, with an aspect ratio, a
+  length and a resolution, and have a field for acceptance criteria.
+- **Reel template** in the workflow builder: concept and script, storyboard,
+  one vertical clip per scene, a cover image, and a caption with hashtags. The
+  clips are separate files; they are not joined into one video.
+- Usage & Costs lists image and video requests, with an estimated cost when
+  the model has a price.
+- `npm run test:e2e`: end-to-end checks of image and video generation against
+  a mock provider that is part of the repository (`scripts/e2e/`).
 - Anthropic provider adapter. A provider on the `anthropic` adapter can be
   tested, have its models discovered, and be used for chat (streaming
   included), agents and project runs, through Anthropic's Messages API with
   API version `2026-10-21` by default. Text chat only; temperature is not
-  sent, because that API version rejects it. Tested against a local mock of
-  the API, not against the live service. Setup and limits are in the README
-  under "Provider adapters".
+  sent, because that API version rejects it.
+
+### Changed
+
+- A model marked *Image generation* (or *Video generation*) and not *Text* is
+  now an image or video model: it is offered in Creative Studio and for media
+  tasks, and no longer for chat, agents, the AI Manager or automatic routing.
+  Earlier versions did not act on the mark, apart from automatic routing by
+  capability. **After upgrading**, if a chat model carries that mark without
+  *Text*, open Models, choose Edit and tick *Text*. Until then, an agent that
+  uses such a model is answered by the project's manager model in project
+  runs.
+- Creating a project with a workflow that does not exist is refused. Before,
+  the project was created and every run of it failed.
+- The workflow builder renumbers "depends on" when a step is moved or removed.
+  It no longer drops an unfinished step without saying so, and refuses a step
+  that depends on a later one.
+
+### Fixed
+
+- Project runs: a task now receives the output of the tasks it depends on.
+  That context was always empty before, so a task saw only its own objective.
+- Opening some dashboard pages while signed out logged an error on the
+  server, although the browser was correctly sent to the sign-in page.
+
+### Upgrading
+
+- The database is updated on the first start, as always. Generated files are
+  kept in `data/media/`, so include that folder in backups.
+- Existing projects have no image or video model, and a project's models are
+  chosen when it is created: make a new project for media tasks.
 
 ## [1.3.1] - 2026-11-11
 

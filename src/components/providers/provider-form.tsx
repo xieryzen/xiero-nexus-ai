@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 import { ANTHROPIC_DEFAULT_API_VERSION } from "@/lib/adapters/anthropic-protocol";
+import {
+  MEDIA_API_LABELS,
+  MEDIA_API_SETTINGS,
+  detectMediaApi,
+  type MediaApiSetting,
+} from "@/lib/adapters/media-protocol";
 import type { ProviderDTO } from "@/lib/providers";
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input, Select } from "@/components/ui";
@@ -47,6 +53,7 @@ export function ProviderForm({
   const [authHeaderName, setAuthHeaderName] = useState(initial?.authHeaderName ?? "");
   const [apiKey, setApiKey] = useState("");
   const [apiVersion, setApiVersion] = useState(initial?.apiVersion ?? "");
+  const [mediaApi, setMediaApi] = useState<MediaApiSetting>(initial?.mediaApi ?? "auto");
   const [timeoutMs, setTimeoutMs] = useState(String(initial?.timeoutMs ?? 60000));
   const [priority, setPriority] = useState(String(initial?.priority ?? 100));
   const [notes, setNotes] = useState(initial?.notes ?? "");
@@ -55,6 +62,9 @@ export function ProviderForm({
 
   const adapterInfo = ADAPTERS.find((a) => a.value === adapter);
   const hints = adapter === "anthropic" ? ANTHROPIC_HINTS : DEFAULT_HINTS;
+  // Images and videos go through the OpenAI-compatible adapter only.
+  const supportsMedia = adapter === "openai-compatible";
+  const detectedMediaApi = baseUrl.trim() ? MEDIA_API_LABELS[detectMediaApi(baseUrl.trim())] : null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -68,6 +78,7 @@ export function ProviderForm({
       authHeaderName: authType === "header" ? authHeaderName : undefined,
       // When editing, a cleared field has to be sent to clear the stored value.
       apiVersion: editing ? apiVersion.trim() : apiVersion.trim() || undefined,
+      mediaApi: supportsMedia ? mediaApi : undefined,
       timeoutMs: Number(timeoutMs),
       priority: Number(priority),
       notes: notes || undefined,
@@ -164,6 +175,26 @@ export function ProviderForm({
           <Input id="p-priority" type="number" min={1} max={1000} value={priority} onChange={(e) => setPriority(e.target.value)} />
         </Field>
       </div>
+
+      {supportsMedia && (
+        <Field
+          label="Image / video API"
+          htmlFor="p-media-api"
+          hint={
+            mediaApi === "auto"
+              ? `How image and video requests are written. Only matters for image / video models.${detectedMediaApi ? ` For this Base URL: ${detectedMediaApi}.` : ""}`
+              : "How image and video requests are written. Only matters for image / video models."
+          }
+        >
+          <Select id="p-media-api" value={mediaApi} onChange={(e) => setMediaApi(e.target.value as MediaApiSetting)}>
+            {MEDIA_API_SETTINGS.map((value) => (
+              <option key={value} value={value}>
+                {MEDIA_API_LABELS[value]}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      )}
 
       <Field label="Notes" htmlFor="p-notes">
         <Input id="p-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" />

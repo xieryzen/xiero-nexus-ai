@@ -1,7 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
-import { db } from "@/db";
-import { models, providers } from "@/db/schema";
-import { adapterIsImplemented } from "@/lib/adapters";
+import { chatModels } from "@/lib/model-options";
 import { PageHeader } from "@/components/ui";
 import { ChatClient, type ChatModelOption } from "@/components/chat/chat-client";
 
@@ -9,28 +6,12 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Chat" };
 
 export default function ChatPage() {
-  const rows = db
-    .select({
-      id: models.id,
-      modelId: models.modelId,
-      displayName: models.displayName,
-      providerName: providers.name,
-      providerStatus: providers.status,
-      adapter: providers.adapter,
-    })
-    .from(models)
-    .innerJoin(providers, eq(models.providerId, providers.id))
-    .where(and(eq(models.enabled, true), eq(providers.status, "enabled")))
-    .orderBy(asc(models.modelId))
-    .all();
-
-  const options: ChatModelOption[] = rows
-    .filter((r) => adapterIsImplemented(r.adapter))
-    .map((r) => ({
-      id: r.id,
-      label: r.displayName || r.modelId,
-      providerName: r.providerName,
-    }));
+  // Image / video models cannot answer a chat request, so they are not offered.
+  const options: ChatModelOption[] = chatModels().map((m) => ({
+    id: m.id,
+    label: m.name,
+    providerName: m.providerName,
+  }));
 
   return (
     <div>

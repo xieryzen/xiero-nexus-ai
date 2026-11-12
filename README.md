@@ -4,18 +4,23 @@
 
 A configurable, multi-provider AI control plane. Connect AI providers, manage
 their credentials and models from a dashboard, and talk to any model through a
-single internal gateway — with security, usage tracking, and auditing built in.
+single internal gateway — chat, agents, and image and video generation — with
+security, usage tracking, and auditing built in.
 
 [![Build and release](https://github.com/xieryzen/xiero-nexus-ai/actions/workflows/release.yml/badge.svg)](https://github.com/xieryzen/xiero-nexus-ai/actions/workflows/release.yml)
 
-> **Status: v1.0.0 through v1.3.0 are implemented; v1.4.0 (creative/media) is not built.**
-> Three honest caveats: the **remote Git** push (GitHub API) is wired and
+> **Status: v1.0.0 through v1.4.0 are implemented.**
+> Four honest caveats: the **remote Git** push (GitHub API) is wired and
 > error-handled but has **not been tested against a live repository**; the
 > **workflow builder** is step-based (a reusable ordered plan), not a
-> drag-and-drop canvas; and of the provider adapters only `openai-compatible`
+> drag-and-drop canvas; of the provider adapters only `openai-compatible`
 > and `anthropic` work (the others are stubs), with the **Anthropic** adapter
-> tested against a local mock of the API, **not against the live service**.
-> See [Roadmap](#roadmap) and [Provider adapters](#provider-adapters).
+> tested against a local mock of the API, **not against the live service**; and
+> **image and video generation** (v1.4.0) was likewise tested against a local
+> mock written from the providers' public documentation, **not against a live
+> provider**. A Reel is delivered as separate clips, not as one edited video.
+> See [Roadmap](#roadmap), [Provider adapters](#provider-adapters) and
+> [Creative Workflows](#creative-workflows-v140).
 > Code is **never executed on the app host**: execution needs a separately
 > deployed sandbox runner and is off otherwise.
 > Nothing in this README describes a feature as working unless it actually is.
@@ -146,13 +151,66 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
   canvas.)
 - **RBAC & audit** — present since v1.0.0.
 
+## Creative Workflows (v1.4.0)
+
+- **Image and video generation through the gateway** — a model marked *Image
+  generation* or *Video generation* generates media through the same provider
+  connections, encrypted keys and SSRF checks as chat. Setup is under
+  [Image and video generation](#image-and-video-generation).
+- **Creative Studio** — a page to write a prompt, pick a model, an aspect
+  ratio, the number of images or the length of a video, and generate. A cost
+  estimate is shown before you send, from the price you set on the model.
+- **Media library** — everything generated is kept: preview, play, download,
+  copy the prompt, reuse the settings, delete. Each user sees their own media;
+  an administrator can also see everyone's. Files are stored on the server (see
+  `MEDIA_PATH`), so they stay available after the provider's link expires.
+- **Videos are jobs** — a video request returns at once and shows as *in
+  progress*; the library asks the provider every few seconds and the player
+  appears when the file is ready. There is no background worker: a video in
+  progress is only checked while a page that shows it is open, or while a
+  project run is waiting for it. It can still be picked up up to an hour after
+  it was started.
+- **Image and video tasks in projects** — a project can have an image model
+  and a video model. A task then delivers text, one image or one video: for a
+  media task the assigned agent writes the prompt, and the project's model
+  generates the file. The AI Manager plans media tasks only when the project
+  has the model for them, and a per-project **media limit** (10 by default,
+  at most 24) caps how many files one run may generate. A run waits up to 15
+  minutes for each video. Cancelling a run stops the waiting, not the
+  provider: a video already started stays in the library and finishes there.
+  The models and the limit are chosen when a project is created.
+- **Media steps in workflows** — a workflow step can deliver an image or a
+  video, with its aspect ratio, length and resolution. A project that runs such
+  a workflow must have the models it needs; that is checked when the project is
+  created and again before a run spends anything.
+- **Reel template** — the workflow builder can fill in a short-video plan:
+  concept and script → storyboard → one clip per scene (9:16) → cover image →
+  caption and hashtags. Choose the number of scenes (up to 8) and the seconds
+  per clip (up to 20); every step can be edited afterwards.
+- **Usage and cost** — each generation is logged under Usage & Costs as an
+  `image` or `video` request. The estimate is images × price per image, or
+  seconds × price per second, using the length the provider reports.
+
+**What it does not do:**
+
+- It does not edit video. A Reel run delivers its clips, cover and caption as
+  separate files; joining the clips and adding the voice-over, music and
+  on-screen text is done in a video editor.
+- Text prompts only: no image-to-image, image-to-video, or audio generation.
+- Only the `openai-compatible` adapter generates media. A model on an
+  `anthropic` provider cannot.
+- An agent cannot look at a generated file. Later tasks and the reviewer see
+  the prompt it was generated from, not the picture.
+- Generated media is not part of a project's workspace files, snapshots or
+  Git push.
+
 ## Provider adapters
 
 A provider's adapter is the protocol the gateway speaks to it.
 
 | Adapter | Status |
 |---|---|
-| `openai-compatible` | works |
+| `openai-compatible` | works for chat; image and video generation work against a local mock of three providers' APIs, **not yet run against a live provider** |
 | `anthropic` | works against a local mock of Anthropic's API; **not yet run against the live API** |
 | `gemini`, `custom-http` | not implemented — the provider can be saved but not tested or used |
 
@@ -186,6 +244,64 @@ chat, by agents and in projects.
   default). Raise it, up to 300,000 ms, if long replies time out. A streamed
   chat reply only has to start within it.
 
+### Image and video generation
+
+Media uses a provider on the **OpenAI-compatible** adapter. There is no single
+standard for image and video requests the way there is for chat, so each
+provider has an **Image / video API** setting that says how its requests are
+written:
+
+| Setting | Images | Videos | The finished video |
+|---|---|---|---|
+| **OpenAI-style** | `POST /images/generations` with `size` | `POST /videos` with `seconds` and `size` | `GET /videos/{id}/content`, with the key |
+| **OpenRouter** | `POST /images` with `aspect_ratio` and `resolution`, or `size` | `POST /videos` with `duration`, and the same sizing | the link in `unsigned_urls` |
+| **xAI** | `POST /images/generations` with `aspect_ratio` and `resolution` | `POST /videos/generations` with `duration`, `aspect_ratio`, `resolution` | the link in `video.url` |
+
+**Auto**, the default, chooses xAI for a Base URL on `x.ai`, OpenRouter for
+one on `openrouter.ai`, and OpenAI-style for everything else. All three check
+on a video with `GET /videos/{id}`.
+
+To set it up:
+
+1. **Providers** — add or edit a provider with the OpenAI-compatible adapter,
+   and set *Image / video API* if Auto would guess wrong (for example a proxy
+   in front of xAI).
+2. **Models → Add model** — enter the provider's model id, choose the *Model
+   type* (image or video generation), and optionally a price per image or per
+   second of video for the cost estimates. Discovery imports model ids without
+   a type, so an image or video model found that way needs its type set once
+   with **Edit**.
+3. **Creative Studio** — generate something. The first success marks the
+   model's capability as verified.
+
+Good to know:
+
+- **Which models work is up to the provider.** The settings above describe
+  what this app sends; check the provider's documentation for the model ids it
+  offers and the sizes, lengths and resolutions each one accepts. A value the
+  provider rejects comes back as its error message.
+- **Aspect ratio with OpenAI-style providers** — the ratio is sent as one of
+  three sizes (`1024x1024`, `1024x1536`, `1536x1024`) for images, and as exact
+  pixels for videos (9:16 at 720p is `720x1280`). Use *Exact size* under the
+  advanced options for anything else.
+- **Extra parameters** — the advanced options take a JSON object that is added
+  to the request as it is, for provider-specific settings such as a seed or a
+  quality tier. `model`, `prompt` and `stream` cannot be set this way.
+- **An image or video model is not a chat model.** A model marked for image or
+  video generation and not for *Text* is left out of chat, agents, the AI
+  Manager and automatic routing, and has **Try** (a link to Creative Studio)
+  instead of **Test**. Tick *Text* as well for a model that does both.
+- **Limits** — a prompt of up to 4,000 characters, up to 4 images per request,
+  up to 60 seconds of video per request, files of up to 25 MB (image) and
+  200 MB (video). Per user: 20 image requests and 10 video requests a minute,
+  and 12 videos in progress at once.
+- **Timeout** — an image request waits up to three minutes for the answer, or
+  for the provider's Timeout when that is longer. A video request returns as
+  soon as the provider accepts the job, which is then checked on until it
+  finishes or one hour has passed.
+- **File types** — PNG, JPEG, GIF and WebP images, and MP4, MOV and WebM
+  videos are kept. Anything else a provider returns is refused.
+
 ## Roadmap
 
 | Version | Milestone | Status |
@@ -194,7 +310,7 @@ chat, by agents and in projects.
 | 1.1.0 | AI Workforce (AI Manager, agents, teams, tasks, delegation) | ✅ implemented |
 | 1.2.0 | Development Execution (sandbox, snapshots, QA review, hard QA gate, remote Git) | ✅ implemented (remote Git untested-live) |
 | 1.3.0 | Advanced Orchestration (parallel, budgets, approval, observability, auto-routing, workflows) | ✅ implemented (step-based workflow builder) |
-| 1.4.0 | Creative Workflows (image/video/Reels) | ⏳ planned |
+| 1.4.0 | Creative Workflows (image and video generation, Creative Studio, media tasks, Reel template) | ✅ implemented (tested against a mock provider, not a live one; clips are not joined) |
 
 The Gemini and custom HTTP provider adapters are stubbed in the UI but not
 implemented. A provider on an unimplemented adapter can be saved but not tested
@@ -209,8 +325,8 @@ or used. See [Provider adapters](#provider-adapters).
 - **otplib** (TOTP) + **qrcode**, **zod** (validation)
 - Node's built-in `crypto` for AES-256-GCM and scrypt (no native crypto addons)
 
-Single process, SQLite, zero external services — so it deploys cleanly on a
-Pterodactyl server. The data layer is behind Drizzle, so moving to PostgreSQL
+Single process, SQLite and a folder of generated media files, zero external
+services — so it deploys cleanly on a Pterodactyl server. The data layer is behind Drizzle, so moving to PostgreSQL
 later is largely a driver/connection change.
 
 ## Develop from source
@@ -252,6 +368,7 @@ register through the UI becomes the admin.
 | `PORT` | no | Listen port (default 3000). Release bundles also accept a panel's `SERVER_PORT`. |
 | `BIND_HOST` | no | Release bundles only: address to bind (default `0.0.0.0`). |
 | `DATABASE_PATH` | no | SQLite file path (default `./data/nexus.db`) |
+| `MEDIA_PATH` | no | Folder for generated images and videos (default: a `media` folder next to the database file, so `./data/media`). Back it up together with the database. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
 | `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
@@ -288,7 +405,15 @@ used automatically. The steps are in
   the second factor is satisfied.
 - SSRF: scheme + private/metadata-range checks on provider Base URLs; redirects
   refused on outbound calls.
-- Rate limiting on login, 2FA, and sensitive account actions.
+- Rate limiting on login, 2FA, sensitive account actions, and image and video
+  requests.
+- Generated media: a file a provider links to is downloaded by the server with
+  the same SSRF checks as any provider call, applied again to every redirect
+  (at most three). The API key is sent only to the provider's own address,
+  never to another host a link points at. A file is kept only if its own bytes
+  say it is one of a few image or video types, so an HTML or SVG answer is
+  never stored or served, and downloads are capped in size and time. Files are
+  served only to their owner or an administrator.
 - Security headers set globally; audit log excludes secrets.
 
 **Known limitations (be honest about these):**
@@ -297,10 +422,15 @@ used automatically. The steps are in
   attacker could still bypass it (TOCTOU). Add network-egress policy at the
   infrastructure layer for defense in depth.
 - The rate limiter is in-memory (fine for a single process; use a shared store
-  if you run multiple instances).
+  if you run multiple instances). The same goes for run cancellation and the
+  count of videos in progress.
+- Generated files are stored unencrypted in the media folder, and are not
+  removed when their owner's account is deleted; an administrator can delete
+  them from Creative Studio.
 - Costs are **estimates** from your own price metadata, not provider billing.
-- Only the `openai-compatible` and `anthropic` adapters are implemented, and
-  the Anthropic adapter has not been run against the live API.
+- Only the `openai-compatible` and `anthropic` adapters are implemented.
+  Neither the Anthropic adapter nor image and video generation has been run
+  against a live provider.
 
 ## Scripts
 
@@ -313,6 +443,7 @@ used automatically. The steps are in
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint |
 | `npm test` | unit tests |
+| `npm run test:e2e` | end-to-end checks of image and video generation against a mock provider (needs `npm run build` first) |
 | `npm run build:standalone` + `npm run package` | build a release bundle into `dist/` |
 | `npm run package:test` | start that bundle and sign in to it |
 | `npm run release:info` | version, tag and channel that a push would publish |
@@ -323,12 +454,13 @@ used automatically. The steps are in
 ```
 src/
   app/                     # routes (pages + /api route handlers)
-  components/              # UI: shell, auth, providers, models, chat, account, users
+  components/              # UI: shell, auth, providers, models, chat, studio, media, projects, workflows, account, users
   db/                      # Drizzle schema, client (auto-migrate), migrate script
-  lib/                     # crypto, secrets, auth, session, ssrf, adapters, gateway, usage, stats…
+  lib/                     # crypto, secrets, auth, session, ssrf, adapters, gateway, media, creative, orchestrator, usage, stats…
 drizzle/                   # generated SQL migrations
 sandbox-runner/            # reference external code-execution runner (Docker)
 scripts/                   # release tooling: package, smoke-test, publish, download
+scripts/e2e/               # mock provider and end-to-end checks for image and video generation
 .github/workflows/         # CI: check, bundle, publish releases
 tests/                     # node:test unit tests
 ```
@@ -343,7 +475,10 @@ remap, topological order), the execution guardrails (workspace path
 validation, command allowlist, shell-metacharacter rejection), the router + QA
 verdict parser (cheapest/capability selection, `VERDICT:` parsing), the
 Anthropic wire format (headers, request body, response and usage parsing,
-model-list paging, the event-stream parser, refusals, stream errors), and the
+model-list paging, the event-stream parser, refusals, stream errors), image
+and video generation (the three request styles, response and job-status
+parsing, file-type detection from a file's bytes, byte ranges, cost, download
+size and time limits, media tasks in a plan, the Reel template), and the
 release tooling (channels, version ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, then builds each
@@ -356,6 +491,26 @@ execute → synthesize orchestration loop have been verified end-to-end against 
 local OpenAI-compatible mock. The Anthropic adapter was run through the same
 paths against a local mock written from Anthropic's API reference (the mock is
 not part of this repository); it has not been run against the live API.
+
+Image and video generation has its own end-to-end run, which is part of this
+repository:
+
+```bash
+npm run build
+npm run test:e2e
+```
+
+It starts a mock provider ([`scripts/e2e/mock-provider.mjs`](scripts/e2e/mock-provider.mjs))
+and the built app on a throwaway database in the system's temporary folder,
+and makes about 270 checks through the app's HTTP API: the three request
+styles for images and videos, files returned inline, as links and behind
+redirects, the API key never leaving the provider's address, refused file
+types and oversized downloads, the life of a video job, access to other
+users' media, rate limits, and project runs with media tasks, including a Reel
+workflow. No real provider is called and nothing is billed. It is not part of
+CI. The mock is written from the providers' public documentation, so passing
+it shows that the app is consistent with that reading of the documentation,
+**not** that a live provider accepts the requests.
 
 ---
 
