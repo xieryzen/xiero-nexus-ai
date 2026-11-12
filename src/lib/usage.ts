@@ -29,7 +29,7 @@ export interface RecordUsageInput {
   userId?: string | null;
   providerId?: string | null;
   modelRowId?: string | null;
-  kind?: "chat" | "test" | "embedding" | "other";
+  kind?: "chat" | "test" | "embedding" | "image" | "video" | "other";
   promptTokens?: number;
   completionTokens?: number;
   estimatedCost?: number | null;

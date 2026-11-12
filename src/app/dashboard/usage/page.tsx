@@ -65,7 +65,10 @@ export default function UsagePage() {
                         {r.providerName && <span className="ml-2 text-xs text-ink-3">{r.providerName}</span>}
                       </td>
                       <td className="px-5 py-2.5 text-ink-2">{r.kind}</td>
-                      <td className="px-5 py-2.5 text-right text-ink-2">{formatNumber(r.totalTokens)}</td>
+                      <td className="px-5 py-2.5 text-right text-ink-2">
+                        {/* An image or a video is not measured in tokens. */}
+                        {(r.kind === "image" || r.kind === "video") && r.totalTokens === 0 ? "—" : formatNumber(r.totalTokens)}
+                      </td>
                       <td className="px-5 py-2.5 text-right text-ink-2">{formatCost(r.estimatedCost)}</td>
                       <td className="px-5 py-2.5">
                         <Badge tone={r.status === "ok" ? "ok" : "danger"}>{r.status}</Badge>

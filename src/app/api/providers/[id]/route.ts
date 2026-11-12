@@ -43,6 +43,7 @@ export const PATCH = handle(async (req, { params }) => {
     "authType",
     "authHeaderName",
     "apiVersion",
+    "mediaApi",
     "timeoutMs",
     "priority",
     "notes",

@@ -1,43 +1,53 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { models, projects, providers, teams, workflows } from "@/db/schema";
-import { getCurrentUser } from "@/lib/auth";
-import { adapterIsImplemented } from "@/lib/adapters";
-import { serializeProject } from "@/lib/workforce";
+import { projects, teams, workflows } from "@/db/schema";
+import { requirePageUser } from "@/lib/auth";
+import { chatModels, mediaModelOptions, usableModels } from "@/lib/model-options";
+import { countMediaTasks } from "@/lib/orchestrator/plan";
+import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { CommandCenter } from "@/components/projects/command-center";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Manager" };
 
 export default function ProjectsPage() {
-  const user = getCurrentUser()!;
+  const user = requirePageUser();
 
   const projectRows =
     user.role === "admin"
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
       : db.select().from(projects).where(eq(projects.createdBy, user.id)).orderBy(desc(projects.updatedAt)).all();
 
-  const modelRows = db
-    .select({ id: models.id, modelId: models.modelId, displayName: models.displayName, providerName: providers.name, adapter: providers.adapter })
-    .from(models)
-    .innerJoin(providers, eq(models.providerId, providers.id))
-    .where(and(eq(models.enabled, true), eq(providers.status, "enabled")))
-    .orderBy(asc(models.modelId))
-    .all();
-
-  const managerModels = modelRows
-    .filter((m) => adapterIsImplemented(m.adapter))
-    .map((m) => ({ id: m.id, label: `${m.displayName || m.modelId} · ${m.providerName}` }));
+  const allModels = usableModels();
+  const managerModels = chatModels(allModels).map((m) => ({
+    id: m.id,
+    label: `${m.name} · ${m.providerName}`,
+  }));
+  const imageModels = mediaModelOptions("image", allModels).map((m) => ({ id: m.id, label: m.label }));
+  const videoModels = mediaModelOptions("video", allModels).map((m) => ({ id: m.id, label: m.label }));
 
   const teamRows = db.select({ id: teams.id, name: teams.name }).from(teams).orderBy(asc(teams.name)).all();
-  const workflowRows = db.select({ id: workflows.id, name: workflows.name }).from(workflows).orderBy(asc(workflows.name)).all();
+  // How many images / videos each workflow generates, so the form can ask for
+  // the models it needs before the project is created.
+  const workflowOptions = db
+    .select()
+    .from(workflows)
+    .orderBy(asc(workflows.name))
+    .all()
+    .map((w) => ({
+      id: w.id,
+      label: w.name,
+      media: countMediaTasks(serializeWorkflow(w).steps.map((step) => ({ kind: step.kind ?? "text" }))),
+    }));
 
   return (
     <CommandCenter
       initialProjects={projectRows.map((p) => serializeProject(p))}
       managerModels={managerModels}
+      imageModels={imageModels}
+      videoModels={videoModels}
       teams={teamRows.map((t) => ({ id: t.id, label: t.name }))}
-      workflows={workflowRows.map((w) => ({ id: w.id, label: w.name }))}
+      workflows={workflowOptions}
     />
   );
 }

@@ -1,9 +1,45 @@
 import { z } from "zod";
+import {
+  ASPECT_RATIO_PATTERN,
+  MAX_VIDEO_SECONDS,
+  RESOLUTION_PATTERN,
+  SIZE_PATTERN,
+} from "../adapters/media-protocol";
+import { TASK_KINDS, type TaskKind } from "../creative/prompt";
 
 /**
  * Plan parsing for the AI Manager. Pure + dependency-free so it can be
  * unit-tested without a model or the database.
  */
+
+export { TASK_KINDS };
+
+/**
+ * Options of an image / video task. A plan is written by a model, so each
+ * field is read leniently: a value that does not fit is dropped rather than
+ * failing the whole plan.
+ */
+export const plannedMediaSchema = z
+  .object({
+    aspectRatio: z.string().regex(ASPECT_RATIO_PATTERN).optional().catch(undefined),
+    durationSeconds: z.coerce.number().int().min(1).max(MAX_VIDEO_SECONDS).optional().catch(undefined),
+    resolution: z.string().regex(RESOLUTION_PATTERN).optional().catch(undefined),
+    size: z.string().regex(SIZE_PATTERN).optional().catch(undefined),
+  })
+  .transform((media) => {
+    // Leave out the fields that were dropped, instead of keeping them as undefined.
+    const out: {
+      aspectRatio?: string;
+      durationSeconds?: number;
+      resolution?: string;
+      size?: string;
+    } = {};
+    if (media.aspectRatio !== undefined) out.aspectRatio = media.aspectRatio;
+    if (media.durationSeconds !== undefined) out.durationSeconds = media.durationSeconds;
+    if (media.resolution !== undefined) out.resolution = media.resolution;
+    if (media.size !== undefined) out.size = media.size;
+    return out;
+  });
 
 export const plannedTaskSchema = z.object({
   seq: z.number().int().positive(),
@@ -14,6 +50,9 @@ export const plannedTaskSchema = z.object({
   dependsOn: z.array(z.number().int().positive()).max(20).optional().default([]),
   // Optional: save this task's artifact to the workspace at this relative path.
   outputFile: z.string().max(256).optional(),
+  // What the task delivers. Anything other than "image" / "video" is text.
+  kind: z.enum(TASK_KINDS).catch("text"),
+  media: plannedMediaSchema.optional().catch(undefined),
 });
 
 export const planSchema = z.object({
@@ -127,4 +166,73 @@ export function topoOrder(tasks: { seq: number; dependsOn: number[] }[]): number
     return tasks.map((t) => t.seq).sort((a, b) => a - b); // cycle: fall back
   }
   return order;
+}
+
+// ─── Creative tasks (v1.4) ───────────────────────────────────────────────────
+
+/** Which kinds of media a project can generate: it needs a model for each. */
+export interface MediaAvailability {
+  image: boolean;
+  video: boolean;
+}
+
+/**
+ * Turn the image / video tasks a run cannot generate into text tasks, so the
+ * agent still writes something useful instead of the task failing: tasks of a
+ * kind the project has no model for, and tasks beyond `limit`, the number of
+ * images and videos one run may generate (counted in task order).
+ * Returns the adjusted tasks and the seqs that were changed.
+ */
+export function downgradeUnavailableMedia<T extends { seq: number; kind: TaskKind }>(
+  tasks: T[],
+  available: MediaAvailability,
+  limit: number = Number.POSITIVE_INFINITY,
+): { tasks: T[]; downgraded: number[] } {
+  const downgraded: number[] = [];
+  let kept = 0;
+  const out = tasks.map((t) => {
+    if (t.kind === "text") return t;
+    if (available[t.kind] && kept < limit) {
+      kept++;
+      return t;
+    }
+    downgraded.push(t.seq);
+    return { ...t, kind: "text" as TaskKind, media: undefined };
+  });
+  return { tasks: out, downgraded };
+}
+
+/** How many images and videos a plan would generate. */
+export function countMediaTasks(tasks: { kind: TaskKind }[]): { image: number; video: number } {
+  return {
+    image: tasks.filter((t) => t.kind === "image").length,
+    video: tasks.filter((t) => t.kind === "video").length,
+  };
+}
+
+/** Longest piece of one earlier task's output handed to a later task. */
+export const MAX_DEPENDENCY_CHARS = 12_000;
+
+/**
+ * The outputs of the tasks a task depends on, as one block of text for its
+ * prompt. `outputOf` returns the finished output of a task, or nothing when
+ * that task has none.
+ */
+export function dependencyContext(
+  dependsOn: number[],
+  outputOf: (seq: number) => { title: string; artifact: string | null | undefined } | undefined,
+  maxChars: number = MAX_DEPENDENCY_CHARS,
+): string {
+  return dependsOn
+    .map((seq) => {
+      const dep = outputOf(seq);
+      if (!dep?.artifact) return "";
+      const text =
+        dep.artifact.length > maxChars
+          ? `${dep.artifact.slice(0, maxChars)}\n… (cut: the full output is longer)`
+          : dep.artifact;
+      return `### Output of task ${seq} (${dep.title})\n${text}`;
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }

@@ -44,6 +44,7 @@ export const POST = handle(async (req) => {
       authType: body.authType,
       authHeaderName: body.authHeaderName,
       apiVersion: body.apiVersion,
+      mediaApi: body.mediaApi ?? "auto",
       timeoutMs: body.timeoutMs,
       extraHeaders: body.extraHeaders ? JSON.stringify(body.extraHeaders) : null,
       priority: body.priority,

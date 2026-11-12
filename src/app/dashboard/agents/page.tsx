@@ -1,8 +1,8 @@
-import { and, asc, eq } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 import { db } from "@/db";
-import { agents as agentsTable, models, providers, teams } from "@/db/schema";
+import { agents as agentsTable, teams } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { adapterIsImplemented } from "@/lib/adapters";
+import { chatModels } from "@/lib/model-options";
 import { serializeAgents, serializeTeam } from "@/lib/workforce";
 import { PageHeader } from "@/components/ui";
 import { AgentsManager, type ModelOption } from "@/components/agents/agents-manager";
@@ -18,17 +18,11 @@ export default function AgentsPage() {
   const agentRows = db.select().from(agentsTable).orderBy(asc(agentsTable.name)).all();
   const teamRows = db.select().from(teams).orderBy(asc(teams.name)).all();
 
-  const modelRows = db
-    .select({ id: models.id, modelId: models.modelId, displayName: models.displayName, providerName: providers.name, adapter: providers.adapter })
-    .from(models)
-    .innerJoin(providers, eq(models.providerId, providers.id))
-    .where(and(eq(models.enabled, true), eq(providers.status, "enabled")))
-    .orderBy(asc(models.modelId))
-    .all();
-
-  const modelOptions: ModelOption[] = modelRows
-    .filter((m) => adapterIsImplemented(m.adapter))
-    .map((m) => ({ id: m.id, label: `${m.displayName || m.modelId} · ${m.providerName}` }));
+  // Agents think in text: image / video models are not offered here.
+  const modelOptions: ModelOption[] = chatModels().map((m) => ({
+    id: m.id,
+    label: `${m.name} · ${m.providerName}`,
+  }));
 
   const serializedAgents = serializeAgents(agentRows);
 

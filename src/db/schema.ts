@@ -9,6 +9,8 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { CAPABILITIES } from "@/lib/capabilities";
+import { MEDIA_API_SETTINGS } from "@/lib/adapters/media-protocol";
+import { TASK_KINDS } from "@/lib/creative/prompt";
 
 export { CAPABILITIES } from "@/lib/capabilities";
 export type { Capability } from "@/lib/capabilities";
@@ -118,6 +120,9 @@ export const providers = sqliteTable(
       .default("bearer"),
     authHeaderName: text("auth_header_name"), // for authType = 'header'
     apiVersion: text("api_version"),
+    // Which image/video wire format the provider speaks (v1.4). 'auto' decides
+    // from the Base URL host. Only the openai-compatible adapter uses it.
+    mediaApi: text("media_api", { enum: MEDIA_API_SETTINGS }).notNull().default("auto"),
     timeoutMs: integer("timeout_ms").notNull().default(60_000),
     // JSON object of safe, allowlisted static headers.
     extraHeaders: text("extra_headers"),
@@ -178,6 +183,9 @@ export const models = sqliteTable(
     contextWindow: integer("context_window"),
     inputPricePerMTok: real("input_price_per_mtok"),
     outputPricePerMTok: real("output_price_per_mtok"),
+    // Media price metadata (v1.4): per generated image, per second of video.
+    pricePerImage: real("price_per_image"),
+    pricePerSecond: real("price_per_second"),
     source: text("source", { enum: ["discovered", "manual"] })
       .notNull()
       .default("manual"),
@@ -269,7 +277,7 @@ export const usageRecords = sqliteTable(
     modelRowId: text("model_row_id").references(() => models.id, {
       onDelete: "set null",
     }),
-    kind: text("kind", { enum: ["chat", "test", "embedding", "other"] })
+    kind: text("kind", { enum: ["chat", "test", "embedding", "image", "video", "other"] })
       .notNull()
       .default("chat"),
     promptTokens: integer("prompt_tokens").notNull().default(0),
@@ -403,6 +411,16 @@ export const projects = sqliteTable(
     hardQaGate: integer("hard_qa_gate", { mode: "boolean" }).notNull().default(false),
     // Optional reusable workflow to run instead of AI-Manager planning.
     workflowId: text("workflow_id"),
+    // Creative workflows (v1.4): the models that image / video tasks generate
+    // with. Null means that kind of task is not available in this project.
+    imageModelRowId: text("image_model_row_id").references(() => models.id, {
+      onDelete: "set null",
+    }),
+    videoModelRowId: text("video_model_row_id").references(() => models.id, {
+      onDelete: "set null",
+    }),
+    // Most images + videos one run may generate.
+    maxMedia: integer("max_media").notNull().default(10),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -424,6 +442,8 @@ export const TASK_STATES = [
   "needs_approval",
 ] as const;
 
+export { TASK_KINDS };
+
 export const projectTasks = sqliteTable(
   "project_tasks",
   {
@@ -437,6 +457,10 @@ export const projectTasks = sqliteTable(
     acceptanceCriteria: text("acceptance_criteria"),
     agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
     status: text("status", { enum: TASK_STATES }).notNull().default("queued"),
+    // What the task delivers (v1.4): written text, or a generated image / video
+    // whose prompt the agent writes.
+    kind: text("kind", { enum: TASK_KINDS }).notNull().default("text"),
+    mediaOptions: text("media_options"), // JSON: { aspectRatio, durationSeconds, resolution, size }
     dependsOn: text("depends_on"), // JSON array of task seq numbers
     artifact: text("artifact"),
     error: text("error"),
@@ -476,7 +500,7 @@ export const workflows = sqliteTable("workflows", {
   id: id(),
   name: text("name").notNull(),
   description: text("description"),
-  // JSON array of steps: { seq, title, objective, acceptanceCriteria, role, dependsOn, outputFile }
+  // JSON array of steps: { seq, title, objective, acceptanceCriteria, role, dependsOn, outputFile, kind, media }
   steps: text("steps").notNull().default("[]"),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
@@ -571,6 +595,50 @@ export const execRuns = sqliteTable(
   (t) => ({ byWorkspace: index("exec_runs_workspace_idx").on(t.workspaceId) }),
 );
 
+// ─── Creative media (v1.4.0) ──────────────────────────────────────────────────
+
+/**
+ * A generated image or video. The bytes live on disk under the media folder
+ * (see src/lib/media/store.ts); this row holds the metadata and the file name.
+ * A video is created `pending` and becomes `ready` once the provider's job has
+ * finished and the file has been downloaded.
+ */
+export const mediaAssets = sqliteTable(
+  "media_assets",
+  {
+    id: id(),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    // Set when a project run produced the asset. Deleting the project or
+    // re-running it keeps the asset in the owner's library.
+    projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    taskId: text("task_id").references(() => projectTasks.id, { onDelete: "set null" }),
+    kind: text("kind", { enum: ["image", "video"] }).notNull(),
+    status: text("status", { enum: ["pending", "ready", "failed"] })
+      .notNull()
+      .default("pending"),
+    providerId: text("provider_id").references(() => providers.id, { onDelete: "set null" }),
+    modelRowId: text("model_row_id").references(() => models.id, { onDelete: "set null" }),
+    modelLabel: text("model_label").notNull().default(""), // kept after the model is deleted
+    prompt: text("prompt").notNull(),
+    params: text("params"), // JSON: what was requested (aspect ratio, duration, …)
+    providerJobId: text("provider_job_id"), // video: the provider's job id while pending
+    fileName: text("file_name"), // "<id>.<ext>" inside the media folder
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    durationSeconds: real("duration_seconds"),
+    error: text("error"), // sanitized
+    estimatedCost: real("estimated_cost"),
+    lastCheckedAt: integer("last_checked_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+  },
+  (t) => ({
+    byUser: index("media_assets_user_idx").on(t.userId, t.createdAt),
+    byProject: index("media_assets_project_idx").on(t.projectId),
+  }),
+);
+
 // Convenience exported types
 export type User = typeof users.$inferSelect;
 export type Provider = typeof providers.$inferSelect;
@@ -588,5 +656,6 @@ export type ExecRun = typeof execRuns.$inferSelect;
 export type WorkspaceSnapshot = typeof workspaceSnapshots.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type GitRemote = typeof gitRemotes.$inferSelect;
+export type MediaAsset = typeof mediaAssets.$inferSelect;
 
 export const _sqlKeepalive = sql``;

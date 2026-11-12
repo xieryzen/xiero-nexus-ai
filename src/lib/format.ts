@@ -12,6 +12,15 @@ export function formatCost(n: number | null | undefined): string {
   return `$${n < 0.01 ? n.toFixed(5) : n.toFixed(n < 1 ? 4 : 2)}`;
 }
 
+/** A file size: "840 KB", "12.4 MB". */
+export function formatBytes(n: number | null | undefined): string {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  const mb = n / (1024 * 1024);
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
 export function formatDateTime(d: Date | string | number): string {
   const date = new Date(d);
   return date.toLocaleString("en-US", {

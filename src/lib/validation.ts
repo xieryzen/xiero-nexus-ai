@@ -1,5 +1,15 @@
 import { z } from "zod";
+import {
+  ASPECT_RATIO_PATTERN,
+  MAX_IMAGES_PER_REQUEST,
+  MAX_MEDIA_PROMPT_CHARS,
+  MAX_VIDEO_SECONDS,
+  MEDIA_API_SETTINGS,
+  RESOLUTION_PATTERN,
+  SIZE_PATTERN,
+} from "@/lib/adapters/media-protocol";
 import { CAPABILITIES } from "@/lib/capabilities";
+import { MAX_MEDIA_PER_RUN, TASK_KINDS } from "@/lib/creative/prompt";
 
 export const usernameSchema = z
   .string()
@@ -59,6 +69,8 @@ export const providerCreateSchema = z.object({
     .regex(safeHeaderName, "Invalid header name")
     .optional(),
   apiVersion: z.string().trim().max(40).optional(),
+  // Image / video request style (openai-compatible adapter only).
+  mediaApi: z.enum(MEDIA_API_SETTINGS).optional(),
   timeoutMs: z.number().int().min(1000).max(300_000).default(60_000),
   extraHeaders: z
     .record(z.string().regex(safeHeaderName), z.string().max(500))
@@ -79,6 +91,8 @@ export const modelCreateSchema = z.object({
   contextWindow: z.number().int().positive().max(100_000_000).optional(),
   inputPricePerMTok: z.number().nonnegative().max(100_000).optional(),
   outputPricePerMTok: z.number().nonnegative().max(100_000).optional(),
+  pricePerImage: z.number().nonnegative().max(100_000).optional(),
+  pricePerSecond: z.number().nonnegative().max(100_000).optional(),
   capabilities: z.array(z.enum(CAPABILITIES)).optional(),
   notes: z.string().trim().max(1000).optional(),
 });
@@ -89,6 +103,8 @@ export const modelUpdateSchema = z.object({
   contextWindow: z.number().int().positive().max(100_000_000).nullable().optional(),
   inputPricePerMTok: z.number().nonnegative().max(100_000).nullable().optional(),
   outputPricePerMTok: z.number().nonnegative().max(100_000).nullable().optional(),
+  pricePerImage: z.number().nonnegative().max(100_000).nullable().optional(),
+  pricePerSecond: z.number().nonnegative().max(100_000).nullable().optional(),
   capabilities: z.array(z.enum(CAPABILITIES)).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
 });
@@ -144,6 +160,57 @@ export const projectCreateSchema = z.object({
   requiresApproval: z.boolean().optional(),
   hardQaGate: z.boolean().optional(),
   workflowId: z.string().min(1).nullable().optional(),
+  // Creative workflows: the models image / video tasks generate with.
+  imageModelRowId: z.string().min(1).nullable().optional(),
+  videoModelRowId: z.string().min(1).nullable().optional(),
+  maxMedia: z.number().int().min(0).max(MAX_MEDIA_PER_RUN).optional(),
+});
+
+// ─── Creative media (v1.4.0) ──────────────────────────────────────────────────
+
+const aspectRatioSchema = z.string().trim().regex(ASPECT_RATIO_PATTERN, "Use a ratio such as 9:16");
+const resolutionSchema = z.string().trim().regex(RESOLUTION_PATTERN, "Use a value such as 720p or 2K");
+const sizeSchema = z.string().trim().regex(SIZE_PATTERN, "Use WIDTHxHEIGHT, such as 1024x1536");
+const durationSchema = z.number().int().min(1).max(MAX_VIDEO_SECONDS);
+
+/** Options of an image / video step or request. */
+export const mediaOptionsSchema = z.object({
+  aspectRatio: aspectRatioSchema.optional(),
+  durationSeconds: durationSchema.optional(),
+  resolution: resolutionSchema.optional(),
+  size: sizeSchema.optional(),
+});
+
+/** Provider-specific parameters: a small, flat-ish JSON object. */
+const mediaExtraSchema = z
+  .record(z.string().min(1).max(64), z.unknown())
+  .refine((v) => Object.keys(v).length <= 20, "At most 20 extra parameters")
+  .refine((v) => JSON.stringify(v).length <= 4000, "Extra parameters are too large");
+
+const mediaPromptSchema = z
+  .string()
+  .trim()
+  .min(1, "Enter a prompt")
+  .max(MAX_MEDIA_PROMPT_CHARS, `A prompt can be at most ${MAX_MEDIA_PROMPT_CHARS} characters`);
+
+export const imageGenerateSchema = z.object({
+  modelRowId: z.string().min(1),
+  prompt: mediaPromptSchema,
+  n: z.number().int().min(1).max(MAX_IMAGES_PER_REQUEST).optional(),
+  aspectRatio: aspectRatioSchema.optional(),
+  resolution: resolutionSchema.optional(),
+  size: sizeSchema.optional(),
+  extra: mediaExtraSchema.optional(),
+});
+
+export const videoGenerateSchema = z.object({
+  modelRowId: z.string().min(1),
+  prompt: mediaPromptSchema,
+  durationSeconds: durationSchema.optional(),
+  aspectRatio: aspectRatioSchema.optional(),
+  resolution: resolutionSchema.optional(),
+  size: sizeSchema.optional(),
+  extra: mediaExtraSchema.optional(),
 });
 
 const workflowStepSchema = z.object({
@@ -153,6 +220,9 @@ const workflowStepSchema = z.object({
   role: z.string().trim().min(1).max(80),
   dependsOn: z.array(z.number().int()).max(20).optional().default([]),
   outputFile: z.string().trim().max(256).optional(),
+  // What the step delivers. An image / video step's agent writes the prompt.
+  kind: z.enum(TASK_KINDS).optional(),
+  media: mediaOptionsSchema.optional(),
 });
 
 export const workflowCreateSchema = z.object({

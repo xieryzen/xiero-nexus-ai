@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { formatDateTime } from "@/lib/format";
 import { Badge, Card, PageHeader, StatusDot } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
 
 export default function SettingsPage() {
-  const user = getCurrentUser()!;
+  const user = requirePageUser();
   return (
     <div>
       <PageHeader title="Settings" description="Your account and security." />

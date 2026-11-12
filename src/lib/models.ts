@@ -18,6 +18,8 @@ export interface SerializedModel {
   contextWindow: number | null;
   inputPricePerMTok: number | null;
   outputPricePerMTok: number | null;
+  pricePerImage: number | null;
+  pricePerSecond: number | null;
   source: "discovered" | "manual";
   capabilities: { capability: Capability; verified: boolean }[];
   lastTestedAt: Date | null;
@@ -70,6 +72,8 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     contextWindow: m.contextWindow,
     inputPricePerMTok: m.inputPricePerMTok,
     outputPricePerMTok: m.outputPricePerMTok,
+    pricePerImage: m.pricePerImage,
+    pricePerSecond: m.pricePerSecond,
     source: m.source,
     capabilities: caps.get(m.id) ?? [],
     lastTestedAt: m.lastTestedAt,
@@ -91,13 +95,24 @@ export function setCapabilities(
   modelRowId: string,
   capabilities: Capability[],
 ): void {
+  // A capability that stays keeps its "verified" mark: editing a model's name
+  // or price does not undo what a successful request has shown.
+  const verified = new Set(
+    tx
+      .select({ capability: modelCapabilities.capability, verified: modelCapabilities.verified })
+      .from(modelCapabilities)
+      .where(inArray(modelCapabilities.modelRowId, [modelRowId]))
+      .all()
+      .filter((c) => c.verified)
+      .map((c) => c.capability),
+  );
   tx.delete(modelCapabilities)
     .where(inArray(modelCapabilities.modelRowId, [modelRowId]))
     .run();
   const unique = [...new Set(capabilities)];
   for (const capability of unique) {
     tx.insert(modelCapabilities)
-      .values({ modelRowId, capability, verified: false })
+      .values({ modelRowId, capability, verified: verified.has(capability) })
       .run();
   }
 }

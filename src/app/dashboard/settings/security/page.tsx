@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getCurrentUser } from "@/lib/auth";
+import { requirePageUser } from "@/lib/auth";
 import { PageHeader } from "@/components/ui";
 import { SecurityClient } from "@/components/account/security-client";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Security" };
 
 export default function SecurityPage() {
-  const user = getCurrentUser()!;
+  const user = requirePageUser();
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Security" description="Two-factor authentication for your account." />

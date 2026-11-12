@@ -3,7 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { AppError, sanitizeUpstreamError } from "@/lib/errors";
 import {
   gatewayChatStream,
-  resolveEnabledModel,
+  resolveChatModel,
 } from "@/lib/gateway";
 import type { ChatMessage } from "@/lib/adapters/types";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
@@ -20,7 +20,7 @@ function sse(obj: unknown): string {
 export const POST = handle(async (req) => {
   const user = requireUser();
   const body = await parseBody(req, chatRequestSchema);
-  const resolved = resolveEnabledModel(body.modelRowId); // throws safe errors
+  const resolved = resolveChatModel(body.modelRowId); // throws safe errors
 
   const messages: ChatMessage[] = [];
   if (body.systemPrompt?.trim()) {

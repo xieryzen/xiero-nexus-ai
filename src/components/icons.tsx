@@ -27,7 +27,11 @@ type IconName =
   | "manager"
   | "workflow"
   | "git"
-  | "stop";
+  | "stop"
+  | "studio"
+  | "image"
+  | "video"
+  | "download";
 
 const paths: Record<IconName, React.ReactNode> = {
   overview: <path d="M4 13h7V4H4v9Zm0 7h7v-5H4v5Zm9 0h7v-9h-7v9Zm0-16v5h7V4h-7Z" />,
@@ -124,6 +128,26 @@ const paths: Record<IconName, React.ReactNode> = {
       <path d="M6 8.5v7M8.3 7.5 15.5 9M18 11.5c0 3-3 3.5-6 3.5" />
     </>
   ),
+  studio: (
+    <>
+      <path d="m11 3 1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9L11 3Z" />
+      <path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+    </>
+  ),
+  image: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <circle cx="8.5" cy="10" r="1.5" />
+      <path d="m21 15-4.5-4.5L8 19" />
+    </>
+  ),
+  video: (
+    <>
+      <rect x="3" y="6" width="13" height="12" rx="2" />
+      <path d="m16 10.5 5-3v9l-5-3" />
+    </>
+  ),
+  download: <path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" />,
 };
 
 export function Icon({

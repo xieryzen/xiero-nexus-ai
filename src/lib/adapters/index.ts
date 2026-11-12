@@ -31,4 +31,10 @@ export function adapterIsImplemented(adapterId: string): boolean {
   return Boolean(registry[adapterId]);
 }
 
+/** Whether a provider on this adapter can generate images or videos. */
+export function adapterSupportsMedia(adapterId: string): boolean {
+  const adapter = registry[adapterId];
+  return Boolean(adapter?.generateImages || adapter?.startVideo);
+}
+
 export type { ProviderAdapter } from "./types";
