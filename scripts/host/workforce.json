@@ -2,8 +2,8 @@
   "about": [
     "The workforce of the server this repository is deployed to. Read by scripts/host/workforce.py (Deploy workflow: workforce-plan, workforce); the format is in scripts/host/README.md.",
     "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints and LLM7 take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
-    "What costs nothing is limited: Kilo Gateway to about 200 requests an hour from one address, OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
-    "Every agent has a quick first model with Kilo Gateway, and a second with another provider, most with OVHcloud, whose models are open ones that stay. No agent depends on LLM7: without a key its allowance for a day lasts a few tasks. Its free models (codestral-latest and gpt-oss:20b answered) are in the app to be picked by hand. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was.",
+    "What costs nothing is limited: Kilo Gateway to 200 requests an hour from one address by its documentation (when it was counted on this server, to about a hundred), OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
+    "Every agent has a quick first model with Kilo Gateway, and a second with another provider, most with OVHcloud, whose models are open ones that stay. No agent depends on LLM7: without a key its allowance for a day lasts a few tasks. Its free models (codestral-latest and gpt-oss:20b answered) are in the app to be picked by hand. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was. When Kilo Gateway's allowance is used up, every agent works on its second model: that was seen on this server, and a project that takes a minute and a half took ten.",
     "gpt-oss-120b of OVHcloud is no agent's model: it is the one to pick as the manager model of a project, which plans, sums up, and is every task's last resort. \"tryRun\" uses it that way.",
     "What is sent to the free models of Kilo Gateway and LLM7 may be logged by the provider and used to improve its models: nothing personal or confidential.",
     "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes between ten seconds and a minute and a half for one, so the reel shows them cropped to its vertical frame.",
@@ -19,7 +19,7 @@
       "baseUrl": "https://api.kilo.ai/api/gateway",
       "authType": "none",
       "timeoutMs": 300000,
-      "notes": "Free models, no key. About 200 requests an hour from one address, for all its models together. The free models change often, and those hosted by NVIDIA are busy at times. What is sent may be logged and used to improve models: nothing personal or confidential."
+      "notes": "Free models, no key. Its documentation allows 200 requests an hour from one address, for all its models together; on this server it answered \"sign up for free or come back later\" after about a hundred. The agents then go on with their second models, slowly. A free account at kilo.ai gives a key. The free models change often, and those hosted by NVIDIA are busy at times. What is sent may be logged and used to improve models: nothing personal or confidential."
     },
     "OVHcloud AI Endpoints": {
       "adapter": "openai-compatible",

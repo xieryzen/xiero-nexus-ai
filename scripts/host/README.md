@@ -461,7 +461,7 @@ that is billed:
 
 | Provider | What it has | What it allows from one address |
 | --- | --- | --- |
-| [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | About 200 requests an hour, all models together |
+| [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | 200 requests an hour by its documentation, all models together; about a hundred when it was counted on one server |
 | [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
 | [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and an allowance for a day that a few tasks use up |
 
@@ -471,7 +471,12 @@ app waits and asks again when a provider answers "too many requests" (see
 not answer goes on with its second, so a project gets done, slowly. The
 agents have their first model with Kilo Gateway and their second with
 OVHcloud or Gemini. None depends on LLM7, whose allowance was used up after
-a few tasks: its free models are in the app to be picked by hand. The
+a few tasks: its free models are in the app to be picked by hand. When Kilo
+Gateway's allowance is used up it answers "sign up for free or come back
+later", and every agent works on its second model: on one server each of
+the eleven agents then did its small task there, in ten minutes instead of a
+minute and a half. A free account at Kilo gives a key, which the provider
+takes on the Providers page. The
 providers list far more models than they give away: one word from each
 (`--test`) is how the ones in the file were found. Kilo Gateway and LLM7 may
 log what is sent to their free models and use it to improve models: nothing

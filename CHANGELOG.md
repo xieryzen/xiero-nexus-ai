@@ -5,6 +5,26 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Notes
+
+- Seen on the real server with 1.6.0, after the release: the waiting at work
+  with a provider. Kilo Gateway answered "sign up for free or come back
+  later" for all its free models. A request to a model was asked again for
+  85 seconds, and the next requests to that model were not waited for; each
+  of the eleven agents' small tasks went on with the agent's second model and was
+  done there, nine of them on models of OVHcloud, which allow two requests a
+  minute. The project took ten minutes instead of a minute and a half. The
+  app does not record a request that is sent again, so that the waiting let
+  those tasks through at OVHcloud is concluded, not seen.
+- Kilo Gateway's allowance without a key was used up after about a hundred
+  requests of these tests in three quarters of an hour (what else was asked
+  from that address is not known); its documentation speaks of 200 an hour.
+  `workforce.json` says so now. Its answer then is "sign up for free": an
+  account there gives a key, which the provider takes on the Providers page
+  (the `workforce` action leaves how a provider signs in as it is).
+
 ## [1.6.0] - 2026-11-15
 
 Providers that cost nothing, and what it takes to work with them: the app
