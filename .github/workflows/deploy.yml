@@ -4,12 +4,14 @@ name: Deploy to a Pterodactyl node
 # over SSH. Started by hand only: Actions, "Deploy to a Pterodactyl node",
 # "Run workflow".
 #
-#   check        sign in and say what is on the node; changes nothing
-#   plan         what an upgrade would do; changes nothing
-#   upgrade      the upgrade: backup, new version, and back to the old one by
-#                itself when the new one does not answer
-#   disk-report  what takes the space on the node; changes nothing
-#   last-log     what the last run on the node said and how it ended
+#   check         sign in and say what is on the node; changes nothing
+#   plan          what an upgrade would do; changes nothing
+#   upgrade       the upgrade: backup, new version, and back to the old one by
+#                 itself when the new one does not answer
+#   install-plan  what a first installation would do; changes nothing
+#   install       the first installation, on a server that has no bundle yet
+#   disk-report   what takes the space on the node; changes nothing
+#   last-log      what the last run on the node said and how it ended
 #
 # Secrets (Settings, Secrets and variables, Actions):
 #
@@ -42,7 +44,7 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, disk-report, last-log]
+        options: [check, plan, upgrade, install-plan, install, disk-report, last-log]
         default: plan
         required: true
       server:

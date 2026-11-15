@@ -16,6 +16,14 @@
 //
 //   node fake-wings.mjs <port> <volumes folder> <token> <app port> [releases folder]
 //
+// What a server runs when it starts is "node xiero-nexus-ai/start.js" (or
+// start.js at the top of its files), the way a server is set up by hand. For
+// the common Node.js egg, which runs a main file through a runner of its own:
+//   FAKE_MAIN_FILE=index.js            the file of the server that is started
+//   FAKE_RUNNER="/path/to/ts-node --esm"   what it is started with (default: node)
+// When the server's process ends, everything it started ends with it, as the
+// processes of a container do.
+//
 // Test controls, without a token:
 //   POST /__control/<uuid>   {"ignoreStop": true, "suspended": true, "preboot": 12000}
 //   GET  /__state/<uuid>     {"running": true, "state": "starting", "starts": 2, "startedAt": "…", "daemon": […]}
@@ -23,7 +31,7 @@
 //   GET  /__requests         what Wings was asked: ["GET /api/servers", …]
 //   GET  /releases/…         files of the releases folder
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { join, normalize } from "node:path";
 
@@ -40,6 +48,28 @@ const PREBOOT_MS = Number(process.env.FAKE_WINGS_PREBOOT_MS ?? 1200);
 // Wings does not restart a server that crashes twice within this time.
 const CRASH_TIMEOUT_MS = 60_000;
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const MAIN_FILE = process.env.FAKE_MAIN_FILE ?? "";
+const RUNNER = (process.env.FAKE_RUNNER ?? "").split(" ").filter(Boolean);
+
+// A container ends with its first process: whatever that started is killed
+// with it, also what moved into a process group of its own. Here the
+// processes of a "container" are known by a mark in their environment.
+function endContainer(mark) {
+  let pids = [];
+  try {
+    pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+  } catch {
+    return; // Not Linux: nothing to look through.
+  }
+  for (const pid of pids) {
+    if (Number(pid) === process.pid) continue;
+    try {
+      if (readFileSync(`/proc/${pid}/environ`, "latin1").split("\0").includes(`FAKE_WINGS_CONTAINER=${mark}`)) process.kill(Number(pid), "SIGKILL");
+    } catch {
+      // Gone meanwhile, or someone else's process.
+    }
+  }
+}
 
 const servers = new Map();
 function server(uuid) {
@@ -105,20 +135,26 @@ async function boot(uuid, s) {
   s.starts += 1;
   s.startedAt = new Date().toISOString();
   const folder = join(volumes, uuid);
-  const entry = existsSync(join(folder, "xiero-nexus-ai", "start.js")) ? "xiero-nexus-ai/start.js" : "start.js";
-  const child = spawn(process.execPath, [entry], {
+  const entry = MAIN_FILE || (existsSync(join(folder, "xiero-nexus-ai", "start.js")) ? "xiero-nexus-ai/start.js" : "start.js");
+  const mark = `${uuid}-${s.starts}-${process.pid}`;
+  // An egg gives its runner the whole path of the file.
+  const [command, ...args] = RUNNER.length > 0 ? [...RUNNER, join(folder, entry)] : [process.execPath, entry];
+  const child = spawn(command, args, {
     cwd: folder,
     // What a container gets: its own home and the port the panel assigned.
-    env: { PATH: process.env.PATH, HOME: folder, SERVER_PORT: String(appPort), BIND_HOST: "127.0.0.1" },
+    env: { PATH: process.env.PATH, HOME: folder, SERVER_PORT: String(appPort), BIND_HOST: "127.0.0.1", FAKE_WINGS_CONTAINER: mark },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  s.mark = mark;
   const keep = (chunk) => {
     for (const line of String(chunk).split("\n")) if (line.trim()) s.log.push(line);
     if (s.log.length > 200) s.log.splice(0, s.log.length - 200);
   };
   child.stdout.on("data", keep);
   child.stderr.on("data", keep);
+  child.once("error", (err) => keep(`cannot start: ${err.message}`));
   child.once("exit", () => {
+    endContainer(mark);
     if (s.child === child) s.child = null;
     setState(uuid, s, "offline");
   });
@@ -251,7 +287,10 @@ const http = createServer(async (req, res) => {
 });
 
 function shutdown() {
-  for (const s of servers.values()) s.child?.kill("SIGKILL");
+  for (const s of servers.values()) {
+    s.child?.kill("SIGKILL");
+    if (s.mark) endContainer(s.mark);
+  }
   process.exit(0);
 }
 process.on("SIGTERM", shutdown);

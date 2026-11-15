@@ -7,8 +7,9 @@
 # It says what the machine runs, whether Wings and Docker are there, whether
 # the releases on GitHub can be reached from here, which servers hold a Xiero
 # Nexus AI bundle, and for one server what is in its files, which image it
-# runs in and how much room is left. Of .env it shows which names are set and
-# no value; it shows no token and no file's content.
+# runs in, what it runs when it starts and how much room is left. Of .env it
+# shows which names are set and no value; it shows no token and no file's
+# content.
 #
 #   --server <id>        The server to look at: its UUID or the first 8
 #                        characters. Without it: the one server that has the app.
@@ -16,6 +17,15 @@
 #                        configuration, else /var/lib/pterodactyl/volumes).
 #   --wings-config <f>   The Wings configuration (default /etc/pterodactyl/config.yml).
 #   --backup-dir <dir>   Where the upgrade keeps its backups (default /root/xiero-nexus-backups).
+#   --site <url>         Also say how the site's public address is answered on
+#                        this machine: where the name leads, what listens on
+#                        ports 80 and 443, whether a web server's configuration
+#                        names the site, and what a request gets.
+#   --try-image          Also find out what the server's image holds and whether
+#                        its startup command can run a file. For that, and only
+#                        with this option, a container is started from the image
+#                        for a moment: without network, without any server's
+#                        files, and removed again. The image is not pulled.
 set -uo pipefail
 
 REPO="${XIERO_REPO:-xieryzen/xiero-nexus-ai}"
@@ -24,6 +34,8 @@ SERVER=""
 VOLUMES=""
 WINGS_CONFIG="/etc/pterodactyl/config.yml"
 BACKUP_ROOT="/root/xiero-nexus-backups"
+TRY_IMAGE=false
+SITE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,8 +43,10 @@ while [ "$#" -gt 0 ]; do
     --volumes) VOLUMES="${2:-}"; shift 2 ;;
     --wings-config) WINGS_CONFIG="${2:-}"; shift 2 ;;
     --backup-dir) BACKUP_ROOT="${2:-}"; shift 2 ;;
+    --try-image) TRY_IMAGE=true; shift ;;
+    --site) SITE="${2:-}"; shift 2 ;;
     -h | --help)
-      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -99,7 +113,10 @@ elif [ -e "${WINGS_CONFIG}" ]; then
 else
   row "Wings" "no configuration at ${WINGS_CONFIG}: is this the machine that runs Wings?"
 fi
-if have wings; then more "$(wings --version 2> /dev/null | head -n 1 || true)"; fi
+if have wings; then
+  wings_says="$(wings --version 2> /dev/null | head -n 1 || true)"
+  [ -z "${wings_says}" ] || more "${wings_says}"
+fi
 if have systemctl; then
   service="$(systemctl is-active wings 2> /dev/null || true)"
   [ -z "${service}" ] || more "service: ${service}"
@@ -191,7 +208,7 @@ UUID="${matches[0]}"
 VOLUME="${VOLUMES}/${UUID}"
 
 head_line "Server ${UUID}"
-row "Files" "${VOLUME} ($(human "$(size_kb "${VOLUME}")"))"
+row "Files" "${VOLUME} ($(human "$(size_kb "${VOLUME}")")), owned by $(stat -c '%U:%G (%u:%g)' "${VOLUME}" 2> /dev/null)"
 
 names=()
 for entry in "${VOLUME}"/* "${VOLUME}"/.[!.]* "${VOLUME}"/..?*; do
@@ -226,7 +243,8 @@ if [ -n "${APP_DIR}" ]; then
   more "in ${APP_DIR}, owned by $(stat -c '%U:%G (%u:%g)' "${APP_DIR}" 2> /dev/null)"
   if [ -f "${APP_DIR}/.env" ]; then
     set_names="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2/p' "${APP_DIR}/.env" 2> /dev/null | sort -u | tr '\n' ' ')"
-    row ".env" "sets: ${set_names:+${set_names% }}${set_names:-nothing}"
+    set_names="${set_names% }"
+    row ".env" "sets: ${set_names:-nothing}"
   else
     row ".env" "missing: the app does not start without SECRET_ENCRYPTION_KEY"
   fi
@@ -239,6 +257,19 @@ if [ -n "${APP_DIR}" ]; then
 elif grep -qs '"name": *"xiero-nexus-ai"' "${VOLUME}/package.json" "${VOLUME}"/*/package.json 2> /dev/null; then
   row "Bundle" "none. The app is here as source code (a package.json of xiero-nexus-ai),"
   more "which the upgrade script does not replace. See RELEASING.md, \"Install a release\"."
+  source_dir="$(dirname "$(grep -ls '"name": *"xiero-nexus-ai"' "${VOLUME}/package.json" "${VOLUME}"/*/package.json 2> /dev/null | head -n 1)")"
+  source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "${source_dir}/package.json" 2> /dev/null | head -n 1)"
+  row "Source" "version ${source_version:-unknown} in ${source_dir}"
+  for name in .env data .next; do
+    if [ -e "${source_dir}/${name}" ]; then
+      more "${name} is there$([ -d "${source_dir}/${name}" ] && echo " ($(human "$(size_kb "${source_dir}/${name}")"))")"
+    else
+      more "${name} is not there"
+    fi
+  done
+  if [ ! -e "${source_dir}/data" ] && [ ! -e "${source_dir}/.env" ]; then
+    more "So it has not run here: there is no database and no key to keep."
+  fi
 else
   row "Bundle" "none: no folder here has the VERSION, start.js and server.js of a release bundle"
 fi
@@ -248,6 +279,8 @@ if have docker; then
   if [ -z "${image}" ]; then
     row "Container" "none: the server has not been started since it was made, or Docker does not answer this user"
   else
+    built="$(docker image inspect -f '{{.Created}}' "${image}" 2> /dev/null | cut -c 1-10 || true)"
+    [ -z "${built}" ] || image="${image} (built ${built})"
     if [ "$(docker inspect -f '{{.State.Running}}' "${UUID}" 2> /dev/null || true)" = "true" ]; then
       row "Container" "running, image ${image}"
       inside="$(timeout 20 docker exec "${UUID}" sh -c 'printf "Node.js %s" "$(node -v 2> /dev/null || echo "not found")"; if command -v ffmpeg > /dev/null 2>&1; then printf ", ffmpeg installed"; else printf ", no ffmpeg"; fi; if [ -e /etc/alpine-release ]; then printf ", Alpine (the published bundles do not run on it)"; fi' 2> /dev/null || true)"
@@ -258,6 +291,60 @@ if have docker; then
     case "${image}" in
       *pterodactyl/yolks:nodejs_*) more "This image is built on Alpine, where the published bundles do not run. See RELEASING.md, \"On Pterodactyl\"." ;;
     esac
+    # What the server runs when it starts, as the panel gave it to Wings for
+    # this container. Of the settings the command names, those that look like
+    # a secret are not shown; of all others, only that they exist.
+    container_env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${UUID}" 2> /dev/null || true)"
+    startup="$(printf '%s\n' "${container_env}" | sed -n 's/^STARTUP=//p' | head -n 1)"
+    if [ -n "${startup}" ]; then
+      row "Startup" "${startup}"
+      named=" "
+      for name in $(printf '%s\n' "${startup}" | grep -oE '\{\{[A-Za-z_][A-Za-z0-9_]*\}\}|\$\{?[A-Za-z_][A-Za-z0-9_]*' | tr -d '{}$' | sort -u); do
+        printf '%s\n' "${container_env}" | grep -q "^${name}=" || continue
+        named="${named}${name} "
+        value="$(printf '%s\n' "${container_env}" | sed -n "s/^${name}=//p" | head -n 1)"
+        case "${name}" in
+          *TOKEN* | *PASS* | *SECRET* | *KEY* | *AUTH* | *CREDENTIAL*) [ -z "${value}" ] || value="(set, not shown)" ;;
+        esac
+        more "${name}=${value}"
+      done
+      others=""
+      while IFS= read -r line; do
+        name="${line%%=*}"
+        case "${name}" in "" | STARTUP) continue ;; esac
+        case "${named}" in *" ${name} "*) continue ;; esac
+        others="${others}${name} "
+      done <<< "${container_env}"
+      [ -z "${others}" ] || more "also set, values not shown: ${others% }"
+    fi
+    if [ "${TRY_IMAGE}" = true ]; then
+      # A container of its own, for a moment: no network, none of the server's
+      # files, little memory, and gone afterwards. It says what the image
+      # holds, and tries what the common Node.js egg does with a main file.
+      tried="$(timeout 90 docker run --rm --pull never --network none --memory 512m --pids-limit 200 --entrypoint /bin/sh "${image%% *}" -c '
+        echo "Node.js $(node -v 2> /dev/null || echo "not found"), npm $(npm -v 2> /dev/null || echo "not found")"
+        if [ -e /etc/alpine-release ]; then echo "Alpine $(cat /etc/alpine-release)"; else echo "$(sed -n "s/^PRETTY_NAME=//p" /etc/os-release 2> /dev/null | tr -d \")"; fi
+        if command -v ffmpeg > /dev/null 2>&1; then echo "$(ffmpeg -version 2> /dev/null | head -n 1 | cut -d " " -f 1-3)"; else echo "no ffmpeg"; fi
+        if command -v ts-node > /dev/null 2>&1; then
+          echo "ts-node $(ts-node --version 2>&1 | head -n 1), TypeScript $(tsc --version 2>&1 | head -n 1)"
+          mkdir -p /tmp/try && cd /tmp/try && echo "console.log(\"a-main-file-ran\")" > index.js
+          if ts-node --esm /tmp/try/index.js > out.txt 2>&1 && grep -q a-main-file-ran out.txt; then
+            echo "ts-node --esm runs a JavaScript file"
+          else
+            echo "ts-node --esm does NOT run a JavaScript file: $(grep -m 1 -E "Error|error" out.txt | cut -c 1-160)"
+          fi
+        else
+          echo "no ts-node"
+        fi
+        if node -e "process.exit(0)" 2> /dev/null; then echo "node runs a JavaScript file"; fi
+      ' 2>&1 || true)"
+      if [ -n "${tried}" ]; then
+        row "Image" "$(printf '%s\n' "${tried}" | head -n 1)"
+        printf '%s\n' "${tried}" | tail -n +2 | while IFS= read -r line; do more "${line}"; done
+      else
+        row "Image" "a container could not be started from it"
+      fi
+    fi
   fi
 fi
 
@@ -269,4 +356,72 @@ else
 fi
 if [ -d "${BACKUP_ROOT}" ]; then backup_at="${BACKUP_ROOT}"; else backup_at="$(dirname "${BACKUP_ROOT}")"; fi
 row "Room" "$(human "$(free_kb "${VOLUME}")") free for the server's files, $(human "$(free_kb "${backup_at}")") free for backups"
+
+# ── The site ─────────────────────────────────────────────────────────────────
+
+# What a request gets: the status, or why there was none.
+ask() { # URL [curl options]
+  local url="$1" said
+  shift
+  said="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$@" "${url}" 2>&1 | tr '\n' ' ')"
+  case "${said}" in
+    [0-9][0-9][0-9]\ | [0-9][0-9][0-9]) if [ "${said%% *}" = "000" ]; then echo "no answer"; else echo "HTTP ${said%% *}"; fi ;;
+    *) echo "no answer: $(printf '%s' "${said}" | sed -e 's/^curl: ([0-9]*) //' -e 's/ *000 *$//' | cut -c 1-140)" ;;
+  esac
+}
+
+# The port of this machine that leads to the server, and whether the app answers there.
+PORTS=""
+if have docker; then
+  PORTS="$(docker inspect -f '{{range $port, $to := .NetworkSettings.Ports}}{{range $to}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "${UUID}" 2> /dev/null | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' || true)"
+fi
+if [ -n "${PORTS}" ]; then
+  first="${PORTS%% *}"
+  local_port="${first##*:}"
+  row "Port" "this machine passes ${PORTS% } on to the server"
+  if have curl; then more "the app at http://127.0.0.1:${local_port}/api/health: $(ask "http://127.0.0.1:${local_port}/api/health")"; fi
+fi
+
+if [ -n "${SITE}" ] && have curl; then
+  site_host="${SITE#*://}"
+  site_host="${site_host%%[:/]*}"
+  head_line "The site ${SITE}"
+  leads_to="$(getent ahosts "${site_host}" 2> /dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
+  own="$( (hostname -I 2> /dev/null || true) | tr ' ' '\n' | grep -v '^$')"
+  if [ -z "${leads_to}" ]; then
+    row "Name" "${site_host} does not lead anywhere (no DNS record that this machine can see)"
+  else
+    here_too="not an address of this machine: something else stands in front, or the name leads elsewhere"
+    for address in ${leads_to}; do
+      if printf '%s\n' "${own}" | grep -qxF "${address}"; then here_too="an address of this machine"; fi
+    done
+    row "Name" "${site_host} leads to ${leads_to% }, ${here_too}"
+  fi
+  if have ss; then
+    for port in 80 443; do
+      who="$(ss -ltnpH "sport = :${port}" 2> /dev/null | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ')"
+      if [ -n "${who}" ]; then row "Port ${port}" "${who% } listens"; else row "Port ${port}" "nothing listens"; fi
+    done
+  fi
+  named=""
+  for folder in /etc/nginx /etc/apache2 /etc/httpd /etc/caddy; do
+    [ -d "${folder}" ] || continue
+    while IFS= read -r file; do
+      named="${named}${file} "
+      row "Web server" "${file} names ${site_host}"
+      grep -E '^[[:space:]]*(proxy_pass|reverse_proxy|ProxyPass|listen|root)[[:space:]]' "${file}" 2> /dev/null | sed 's/^[[:space:]]*//' | sort -u | head -n 8 | while IFS= read -r line; do more "${line}"; done
+    done < <(grep -rlsF -- "${site_host}" "${folder}" 2> /dev/null | head -n 5)
+  done
+  [ -n "${named}" ] || row "Web server" "no configuration of nginx, Apache or Caddy on this machine names ${site_host}"
+  row "Asked" "${SITE}/api/health: $(ask "${SITE}/api/health")"
+  case "${SITE}" in
+    https://*)
+      more "http://${site_host}/api/health: $(ask "http://${site_host}/api/health")"
+      if have openssl; then
+        cert_names="$(echo | timeout 10 openssl s_client -connect "${site_host}:443" -servername "${site_host}" 2> /dev/null | openssl x509 -noout -ext subjectAltName 2> /dev/null | grep -o 'DNS:[^,]*' | sed 's/DNS://' | head -n 6 | tr '\n' ' ')"
+        if [ -n "${cert_names}" ]; then more "the certificate shown for it is for: ${cert_names% }"; fi
+      fi
+      ;;
+  esac
+fi
 exit 0

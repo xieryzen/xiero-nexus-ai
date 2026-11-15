@@ -6,11 +6,15 @@
 #
 # Actions:
 #
-#   check        sign in and say what is on the node (node-check.sh). Changes nothing.
-#   plan         what an upgrade would do (pterodactyl-upgrade.sh --dry-run). Changes nothing.
-#   upgrade      the upgrade (pterodactyl-upgrade.sh --yes).
-#   disk-report  what takes the space (disk-report.sh). Changes nothing.
-#   last-log     what the last run on the node said and how it ended.
+#   check         sign in and say what is on the node (node-check.sh). Changes nothing.
+#   plan          what an upgrade would do (pterodactyl-upgrade.sh --dry-run). Changes nothing.
+#   upgrade       the upgrade (pterodactyl-upgrade.sh --yes).
+#   install-plan  what a first installation would do (pterodactyl-install.sh --dry-run).
+#                 Changes nothing.
+#   install       the first installation on a server that has no bundle yet
+#                 (pterodactyl-install.sh --yes).
+#   disk-report   what takes the space (disk-report.sh). Changes nothing.
+#   last-log      what the last run on the node said and how it ended.
 #
 # Anything after "--" is given to the host script as it is:
 #
@@ -64,7 +68,7 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -86,13 +90,14 @@ fi
 case "${ACTION}" in
   check) REMOTE_SCRIPT="node-check.sh" ;;
   plan | upgrade) REMOTE_SCRIPT="pterodactyl-upgrade.sh" ;;
+  install-plan | install) REMOTE_SCRIPT="pterodactyl-install.sh" ;;
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
   last-log) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, disk-report, last-log." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, last-log." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -104,12 +109,19 @@ ARGS=()
 case "${ACTION}" in
   check)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    [ -z "${APP_URL}" ] || ARGS+=(--site "${APP_URL}")
     ;;
   plan | upgrade)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
     [ -z "${APP_URL}" ] || ARGS+=(--app-url "${APP_URL}")
     if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
     if [ "${ACTION}" = "plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  install-plan | install)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    [ -z "${APP_URL}" ] || ARGS+=(--app-url "${APP_URL}")
+    if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
+    if [ "${ACTION}" = "install-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
     ;;
 esac
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})
@@ -296,7 +308,7 @@ find "${dir}" -maxdepth 1 -name 'run.*' -mmin +1440 -exec rm -rf {} + 2> /dev/nu
 run="$(mktemp -d "${dir}/run.XXXXXX")"
 if ! base64 -d << 'PAYLOAD' | tar -xzf - -C "${run}"; then
 REMOTE
-  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh disk-report.sh node-check.sh | base64
+  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh | base64
   cat << 'REMOTE'
 PAYLOAD
   echo "error: the scripts did not arrive whole on the node."

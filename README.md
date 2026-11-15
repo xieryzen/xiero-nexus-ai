@@ -18,8 +18,9 @@ OpenAI's format.
 > against **local mocks** written from the providers' public documentation,
 > **not against a live provider**; the **remote Git** push (GitHub API) has
 > likewise **not been tested against a live repository**; the
-> [scripts for a Pterodactyl host](scripts/host) were tested against a
-> stand-in for Wings, **not on a real node**; and the **workflow builder** is
+> [scripts for a Pterodactyl host](scripts/host) are tested against a
+> stand-in for Wings and were used on **one real node**, where going back
+> after a failed upgrade has not happened yet; and the **workflow builder** is
 > step-based (a reusable ordered plan), not a drag-and-drop canvas. Joining
 > clips into one video is done by ffmpeg on the server, and was tested with a
 > real ffmpeg on generated test clips.
@@ -698,7 +699,12 @@ the startup file to `xiero-nexus-ai/start.js`. The port the panel assigns is
 used automatically. The steps are in
 [RELEASING.md](RELEASING.md#on-pterodactyl).
 
-To upgrade, whoever has root on the node can use
+Whoever has root on the node can leave those steps to
+[`scripts/host/pterodactyl-install.sh`](scripts/host#installing-pterodactyl-installsh),
+which also writes the key, a password for the first administrator, and the
+file the common Node.js egg starts.
+
+To upgrade, there is
 [`scripts/host/pterodactyl-upgrade.sh`](scripts/host): it stops the server,
 backs up the database and the program files, installs the new release, starts
 it, and goes back by itself when the new version does not answer. The same

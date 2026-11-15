@@ -55,6 +55,7 @@ FORCE=false
 ALLOW_DOWNGRADE=false
 LEAVE_STOPPED=false
 ROLLBACK=true
+START_ONLY=false
 SETTINGS=()
 
 usage() {
@@ -78,6 +79,8 @@ Upgrade Xiero Nexus AI on a Pterodactyl server. Run as root on the machine that 
   --backup-dir <dir>   Where backups are kept (default /root/xiero-nexus-backups).
   --restore <folder>   Instead of upgrading, put back the program files and the
                        database of that backup folder.
+  --start              Instead of upgrading, start the server and wait until
+                       the app answers; show its console when it does not.
   --dry-run            Show the plan and stop.
   --yes                Do not ask before starting.
 
@@ -132,6 +135,7 @@ while [ "$#" -gt 0 ]; do
     --with-media) WITH_MEDIA=true; shift ;;
     --backup-dir) need_value "$@"; BACKUP_ROOT="$2"; shift 2 ;;
     --restore) need_value "$@"; RESTORE="$2"; shift 2 ;;
+    --start) START_ONLY=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --yes | -y) YES=true; shift ;;
     --power) need_value "$@"; POWER="$2"; shift 2 ;;
@@ -155,6 +159,12 @@ case "${CHECK_URL}" in "" | http://* | https://*) ;; *) die "--check-url is an a
 case "${STOP_TIMEOUT}${HEALTH_TIMEOUT}" in *[!0-9]*) die "--stop-timeout and --health-timeout are whole seconds." ;; esac
 if [ -n "${RESTORE}" ] && { [ -n "${ZIP}" ] || [ "${VERSION}" != "latest" ]; }; then
   die "--restore puts a backup back; it cannot be combined with --zip or --version."
+fi
+if [ "${START_ONLY}" = true ]; then
+  if [ -n "${RESTORE}" ] || [ -n "${ZIP}" ] || [ "${VERSION}" != "latest" ]; then
+    die "--start only starts the server; it cannot be combined with --restore, --zip or --version."
+  fi
+  [ "${POWER}" = "wings" ] || die "--start asks Wings to start the server; with --power manual there is nothing for it to do."
 fi
 
 for setting in ${SETTINGS[@]+"${SETTINGS[@]}"}; do
@@ -762,6 +772,37 @@ describe_target() {
   say "  Files       ${APP_DIR}"
   say "  Installed   ${OLD_VERSION}${OLD_COMMIT:+ (${OLD_COMMIT})}, for Node.js ${NODE_MAJOR}"
 }
+
+# ── --start ──────────────────────────────────────────────────────────────────
+
+if [ "${START_ONLY}" = true ]; then
+  step "Starting the server"
+  describe_target
+  say "  Power       through Wings at ${WINGS_URL} (now: ${STATE_BEFORE})"
+  say "  Check       ${CHECK_URL:-no address found: the site has to be looked at by hand (--check-url)}"
+  if [ "${CHECK_TRUSTED}" = true ]; then
+    say ""
+    say "The server runs and answers at ${CHECK_URL}. Nothing to do."
+    exit 0
+  fi
+  if [ "${DRY_RUN}" = true ]; then
+    say ""
+    say "Dry run: nothing was changed."
+    exit 0
+  fi
+  say ""
+  result=0
+  start_and_check || result=$?
+  case "${result}" in
+    0) say "The server answers at ${CHECK_URL}." ;;
+    2) say "The server was started. Whether the app answers cannot be told from here: open the site." ;;
+    *)
+      show_log
+      die "the server was asked to start, but the app does not answer. Look at the console above."
+      ;;
+  esac
+  exit 0
+fi
 
 # ── --restore ────────────────────────────────────────────────────────────────
 

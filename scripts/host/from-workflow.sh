@@ -40,9 +40,9 @@ summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$*" >> "${
 
 ACTION="$(input action)"
 case "${ACTION}" in
-  check | plan | upgrade | disk-report | last-log) ;;
+  check | plan | upgrade | install-plan | install | disk-report | last-log) ;;
   *)
-    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, disk-report, last-log."
+    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, last-log."
     exit 1
     ;;
 esac
@@ -127,9 +127,9 @@ if [ "${lines}" -gt 0 ]; then
   fi
 fi
 
-# After an upgrade: does the site answer from the outside?
+# After an upgrade or an installation: does the site answer from the outside?
 site_says=""
-if [ "${ACTION}" = "upgrade" ] && [ "${code}" = "0" ] && [ -n "${APP_URL}" ]; then
+if { [ "${ACTION}" = "upgrade" ] || [ "${ACTION}" = "install" ]; } && [ "${code}" = "0" ] && [ -n "${APP_URL}" ]; then
   for _ in 1 2 3 4 5 6; do
     site_says="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${APP_URL}/api/health" 2> /dev/null || true)"
     [ "${site_says}" = "200" ] && break
@@ -138,7 +138,7 @@ if [ "${ACTION}" = "upgrade" ] && [ "${code}" = "0" ] && [ -n "${APP_URL}" ]; th
   if [ "${site_says}" = "200" ]; then
     notice "The site" "answers at /api/health from the outside."
   else
-    printf '::warning title=The site::%s\n' "The upgrade ended well on the node, but /api/health did not answer 200 from the outside (it said ${site_says:-nothing}). Look at the site and at what stands in front of it."
+    printf '::warning title=The site::%s\n' "The ${ACTION} ended well on the node, but /api/health did not answer 200 from the outside (it said ${site_says:-nothing}). Look at the site and at what stands in front of it."
   fi
 fi
 

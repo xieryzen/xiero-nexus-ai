@@ -22,12 +22,33 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
   the middle, an upgrade still finishes or goes back by itself, and
   `last-log` shows how it ended. The node's host key can be given, so that
   nobody else can answer in its place.
-- `scripts/host/node-check.sh`: a read-only look at a node before an upgrade.
-  It says whether Wings and Docker are there, which servers hold the app, and
-  what is in one server's files, without showing a setting's value.
+- **A first installation from the node**, `scripts/host/pterodactyl-install.sh`:
+  for a server that was made in the panel and does not have the app yet. It
+  downloads and checks the bundle for the Node.js of the server's image,
+  writes `.env` with a new key and a password for the first administrator
+  (neither is printed), and starts the server. For the common Node.js egg it
+  writes the file that egg starts, a few lines that run the bundle with plain
+  Node.js, and can move the source code that egg cloned into one folder. It
+  deletes nothing and overwrites nothing. The workflow and `over-ssh.sh` have
+  the actions `install-plan` and `install` for it.
+- `pterodactyl-upgrade.sh --start` starts a server through Wings and waits
+  until the app answers, without upgrading anything.
+- `scripts/host/node-check.sh`: a read-only look at a node. It says whether
+  Wings and Docker are there, which servers hold the app, what is in one
+  server's files, what that server runs when it starts, and how the site's
+  address is answered on the machine, without showing a setting's value.
+  With `--try-image` it says what the server's image holds.
 - CI runs these against an SSH server on the runner itself, as a plain user
-  with a key and as root with a password and through sudo. No test signs in
-  to a real node.
+  with a key and as root with a password and through sudo, and installs each
+  bundle on a made-up Pterodactyl host, started through `ts-node` the way the
+  common Node.js egg starts it. No test signs in to a real node.
+
+### Notes
+
+- The host scripts were used on one real node on 2026-11-15: an
+  installation, the check, the disk report, and one upgrade that installed
+  the same version again. Going back by itself after a failed start has
+  still only run against the stand-in for Wings.
 
 ## [1.5.0] - 2026-11-15
 

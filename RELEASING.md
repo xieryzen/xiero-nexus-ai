@@ -171,7 +171,8 @@ Good to know:
 
 1. Use a Node.js egg and note its Node.js version (20 or 22). Its Docker
    image must be one that is built on Debian or Ubuntu, such as
-   `ghcr.io/parkervcp/yolks:nodejs_22`, which the common Node.js eggs use.
+   `ghcr.io/ptero-eggs/yolks:nodejs_22` (earlier `ghcr.io/parkervcp/yolks`),
+   which the common Node.js eggs use.
    The images `ghcr.io/pterodactyl/yolks:nodejs_*` are built on Alpine, where
    the published bundles do not run (see [Other platforms](#other-platforms)).
 2. Upload the matching zip to the server's files and unarchive it. A
@@ -186,6 +187,15 @@ Good to know:
 
 The bundle has no `package.json` on purpose, so the egg does not run
 `npm install` against it.
+
+**With root on the node**, `scripts/host/pterodactyl-install.sh` does steps 2
+to 5 for a server that was made in the panel: it downloads and checks the
+bundle, writes `.env` with a new key and a password for the first
+administrator, and starts the server. It also takes care of two things the
+common Node.js egg does on its own: that egg runs one file, `index.js` by
+default, through `ts-node`, and clones, installs and updates the source code
+when it was given the repository's address. See
+[scripts/host/README.md](scripts/host/README.md#installing-pterodactyl-installsh).
 
 Joining clips into one video needs ffmpeg inside the server's container. The
 `yolks` Node.js images include it; the status page (Observability) says
@@ -229,9 +239,9 @@ sudo bash pterodactyl-upgrade.sh --server <short id>
 
 The short ID is the one in the panel's address of the server. Options, what
 is backed up where, and how to go back are in
-[scripts/host/README.md](scripts/host/README.md). The script was tested
-against a stand-in for Wings, not on a real node: do the dry run first and
-read the plan.
+[scripts/host/README.md](scripts/host/README.md). The script is tested
+against a stand-in for Wings and has upgraded one real node so far: do the
+dry run first and read the plan.
 
 **Without signing in to the node yourself:** the workflow *Deploy to a
 Pterodactyl node* (Actions, started by hand) runs the same script over SSH,
