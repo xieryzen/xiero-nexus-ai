@@ -2,11 +2,11 @@
   "about": [
     "The workforce of the server this repository is deployed to. Read by scripts/host/workforce.py (Deploy workflow: workforce-plan, workforce); the format is in scripts/host/README.md.",
     "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints and LLM7 take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
-    "What costs nothing is limited: Kilo Gateway to about 200 requests an hour from one address, OVHcloud to 2 requests a minute for each model, LLM7 to 1 request a second and a daily allowance. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
-    "Every agent has a quick first model with Kilo Gateway or LLM7, and a second with another provider, most with OVHcloud, whose models are open ones that stay. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was.",
+    "What costs nothing is limited: Kilo Gateway to about 200 requests an hour from one address, OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
+    "Every agent has a quick first model with Kilo Gateway, and a second with another provider, most with OVHcloud, whose models are open ones that stay. No agent depends on LLM7: without a key its allowance for a day lasts a few tasks. Its free models (codestral-latest and gpt-oss:20b answered) are in the app to be picked by hand. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was.",
     "gpt-oss-120b of OVHcloud is no agent's model: it is the one to pick as the manager model of a project, which plans, sums up, and is every task's last resort. \"tryRun\" uses it that way.",
     "What is sent to the free models of Kilo Gateway and LLM7 may be logged by the provider and used to improve its models: nothing personal or confidential.",
-    "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes about a minute and a half for one, so the reel shows them cropped to its vertical frame.",
+    "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes between ten seconds and a minute and a half for one, so the reel shows them cropped to its vertical frame.",
     "Two models that were tried and did not serve are switched off: one was rate-limited by its provider, the other took four minutes to answer.",
     "The app waits up to 300 seconds for an answer of a provider instead of 60: an agent's request is answered in one piece."
   ],
@@ -33,7 +33,7 @@
       "baseUrl": "https://api.llm7.io/v1",
       "authType": "none",
       "timeoutMs": 300000,
-      "notes": "Free models, no key: 1 request a second, and a daily allowance that a few tasks use up. Most of the models it lists need its paid plan. What is sent may be logged and used to improve models: nothing personal or confidential."
+      "notes": "Free models, no key, for picking by hand: 1 request a second, and an allowance for a day that a few tasks use up, so no agent depends on it. Its documentation gives a free token 100,000 tokens a day. Most of the models it lists need its paid plan. What is sent may be logged and used to improve models: nothing personal or confidential."
     }
   },
   "models": {
@@ -64,18 +64,6 @@
     "kilo-glyph": {
       "provider": "Kilo Gateway",
       "model": "stealth/glyph-cluster",
-      "inputPricePerMTok": 0,
-      "outputPricePerMTok": 0
-    },
-    "llm7-codestral": {
-      "provider": "LLM7",
-      "model": "codestral-latest",
-      "inputPricePerMTok": 0,
-      "outputPricePerMTok": 0
-    },
-    "llm7-gpt-oss": {
-      "provider": "LLM7",
-      "model": "gpt-oss:20b",
       "inputPricePerMTok": 0,
       "outputPricePerMTok": 0
     },
@@ -374,7 +362,7 @@
     {
       "name": "DevOps",
       "role": "DevOps Engineer",
-      "primary": "llm7-codestral",
+      "primary": "kilo-code",
       "fallback": "ovh-gpt-oss-20b",
       "tools": [
         "list_files",
@@ -431,7 +419,7 @@
     {
       "name": "Copywriter",
       "role": "Copywriter",
-      "primary": "llm7-gpt-oss",
+      "primary": "kilo-lightning",
       "fallback": "gemini-hydrogen",
       "tools": [
         "list_files",
