@@ -324,6 +324,7 @@ machine() { # NAME INCLUDES...
     for part in body proxy fastcgi uwsgi scgi; do
       printf '    %s_temp_path tmp/%s;\n' "$([ "${part}" = "body" ] && echo client_body || echo "${part}")" "${part}"
     done
+    if [ -n "${FOR_ALL_SITES:-}" ]; then printf '    %s\n' "${FOR_ALL_SITES}"; fi
     for include in "$@"; do printf '    include %s;\n' "${include}"; done
     printf '}\n'
   } > "${PREFIX}/nginx.conf"
@@ -852,6 +853,20 @@ check_not "  and not the other way as well" grep -qF "http2 on;" "${PREFIX}/site
 is "nginx warns about nothing it did not warn about before" "${KINDS_BEFORE}" "$("${STUB}/nginx" -t 2>&1 | grep -F '[warn]' | sed -E 's/ in [^ ]+:[0-9]+$//' | sort -u || true)"
 if [ "${CURL_H2}" = "yes" ]; then is "HTTP/2 is offered" "2" "$(visit -o /dev/null -w '%{http_version}' --http2 "${SITE}/api/health")"; fi
 is "the other sites and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get agent.test panel.test)"
+
+begin "An nginx that warns about every certificate already"
+rm -rf "${LE}/live" "${LE}/renewal"
+FOR_ALL_SITES="ssl_stapling on;" machine stapling "sites-enabled/*"
+neighbour agent.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl"
+start_nginx
+stapling_warnings() { "${STUB}/nginx" -t 2>&1 | grep -c '\[warn\] "ssl_stapling" ignored' || true; }
+is "it warns about the certificate of the site that is there" "1" "$(stapling_warnings)"
+OTHERS_BEFORE="$(others_get agent.test)"
+run -- --site nexus.test --upstream "${APP}" --yes
+is "one more warning of that kind is nothing new: it ends well" "0" "${CODE}"
+is "  (nginx does warn about the new certificate too)" "2" "$(stapling_warnings)"
+is "the site answers" '{"status":"ok"}' "$(visit "${SITE}/api/health")"
+is "the other site and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get agent.test)"
 
 begin "An nginx that has no sites yet"
 rm -rf "${LE}/live" "${LE}/renewal"

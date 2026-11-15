@@ -267,9 +267,10 @@ listen_rows() {
       print $1 "\t" where "\t" substr(flags, 2)
     }'
 }
-# What nginx warns about, without the place: more of a warning that was there
-# before is nothing new, another warning is.
-warning_kinds() { (grep -F '[warn]' "$1" || true) | sed -E 's/ in [^ ]+:[0-9]+$//' | sort -u; }
+# What nginx warns about, without the place and without the certificate it is
+# about: more of a warning that was there before is nothing new, another
+# warning is.
+warning_kinds() { (grep -F '[warn]' "$1" || true) | sed -E -e 's/ in [^ ]+:[0-9]+$//' -e 's/ in the certificate "[^"]*"//' | sort -u; }
 
 # ── nginx as it is ───────────────────────────────────────────────────────────
 
