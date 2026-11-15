@@ -343,6 +343,8 @@ function chat(req, res, body) {
   if (/^(img|vid|tts|embed)-/.test(model)) {
     return send(res, 404, { error: { message: `The model \`${body.model}\` does not support chat completions`, type: "invalid_request_error" } });
   }
+  if (model === "chat-down") return send(res, 500, { error: { message: "The model is down." } });
+  if (model === "chat-limited") return send(res, 429, { error: { message: "Rate limit reached for requests." } });
   if (model === "chat-notools" && Array.isArray(body?.tools) && body.tools.length > 0) {
     return send(res, 400, { error: { message: "This model does not support tools.", type: "invalid_request_error", param: "tools" } });
   }
@@ -872,7 +874,14 @@ function hook(req, res, url, body) {
 
 // ─── The provider API ────────────────────────────────────────────────────────
 
-const STYLES = { "/openai/v1": "openai", "/openrouter/api/v1": "openrouter", "/xai/v1": "xai" };
+const STYLES = { "/openai/v1": "openai", "/openrouter/api/v1": "openrouter", "/xai/v1": "xai", "/free/v1": "openai" };
+// A gateway that takes no key, as the free ones do. A key that is sent anyway
+// is refused, so that a test sees that none was.
+const KEYLESS = "/free/v1";
+// Its model "chat-busy" says "not now" every other time it is asked, as a
+// free tier does: an app that asks again gets its answer. "chat-slow" is one
+// more chat model, for a file that switches a model off.
+let busyAsked = 0;
 
 const api = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${API_PORT}`);
@@ -898,14 +907,24 @@ const api = http.createServer(async (req, res) => {
   const style = STYLES[prefix];
   const path = url.pathname.slice(prefix.length);
 
-  if (req.headers.authorization !== `Bearer ${KEY}`) {
+  if (prefix === KEYLESS) {
+    if (req.headers.authorization) return send(res, 401, { error: { message: "This gateway takes no key" } });
+  } else if (req.headers.authorization !== `Bearer ${KEY}`) {
     return send(res, 401, { error: { message: "Missing or invalid API key" } });
+  }
+
+  if (prefix === KEYLESS && req.method === "POST" && path === "/chat/completions" && body?.model === "chat-busy") {
+    busyAsked++;
+    if (busyAsked % 2 === 1) {
+      return send(res, 429, { error: { message: "Rate limit exceeded. Retry after 1 seconds." } }, { "retry-after": "1" });
+    }
   }
 
   if (req.method === "GET" && path === "/models") {
     return send(res, 200, {
       object: "list",
       data: [
+        ...(prefix === KEYLESS ? [{ id: "chat-busy" }, { id: "chat-slow" }] : []),
         { id: "chat-mini" },
         { id: "img-ok" },
         { id: "vid-ok" },
