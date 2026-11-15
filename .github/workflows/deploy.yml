@@ -16,6 +16,11 @@ name: Deploy to a Pterodactyl node
 #   site          the public address: a site in the node's nginx for the name
 #                 in "app_url", with a certificate from Let's Encrypt. The
 #                 other sites of that nginx are left as they are.
+#   workforce-plan  what the app has (models, agents, teams, workflows) and
+#                 what scripts/host/workforce.json asks for that is not there
+#                 yet; changes nothing
+#   workforce     adds that to the app, signed in as its administrator. What
+#                 is there already is left as it is.
 #   last-log      what the last run on the node said and how it ended
 #
 # Secrets (Settings, Secrets and variables, Actions):
@@ -49,7 +54,7 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, last-log]
+        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log]
         default: plan
         required: true
       server:

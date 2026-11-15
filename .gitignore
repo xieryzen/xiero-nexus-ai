@@ -27,3 +27,6 @@ next-env.d.ts
 
 # release bundles
 /dist
+
+# python (scripts/host/workforce.py)
+__pycache__/
