@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { PublicUser } from "@/lib/auth";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatDateTime } from "@/lib/format";
+import { DateTime } from "@/components/time";
 import { Alert, Badge, Button, Card, Select, StatusDot } from "@/components/ui";
 
 export function UsersManager({
@@ -101,7 +101,7 @@ export function UsersManager({
                       </Button>
                     )}
                   </td>
-                  <td className="whitespace-nowrap px-5 py-3 text-ink-3">{formatDateTime(u.createdAt)}</td>
+                  <td className="whitespace-nowrap px-5 py-3 text-ink-3"><DateTime at={u.createdAt} /></td>
                 </tr>
               );
             })}

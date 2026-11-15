@@ -57,6 +57,7 @@ export const POST = handle(async (req) => {
         outputPricePerMTok: body.outputPricePerMTok,
         pricePerImage: body.pricePerImage,
         pricePerSecond: body.pricePerSecond,
+        pricePerMChars: body.pricePerMChars,
         notes: body.notes,
         source: "manual",
       })

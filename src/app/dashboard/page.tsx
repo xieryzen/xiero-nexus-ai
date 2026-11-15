@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { getOverviewStats, getRecentAudit } from "@/lib/stats";
-import { formatCompact, formatNumber, formatRelative } from "@/lib/format";
+import { formatCompact, formatNumber } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -95,9 +96,7 @@ export default function OverviewPage() {
                         {ev.targetType ? ` · ${ev.targetType}` : ""}
                       </span>
                     </div>
-                    <span className="shrink-0 text-xs text-ink-3">
-                      {formatRelative(ev.createdAt)}
-                    </span>
+                    <RelativeTime at={new Date(ev.createdAt).getTime()} className="shrink-0 text-xs text-ink-3" />
                   </li>
                 ))}
               </ul>

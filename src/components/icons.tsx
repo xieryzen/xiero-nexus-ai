@@ -13,6 +13,8 @@ type IconName =
   | "plus"
   | "check"
   | "x"
+  | "up"
+  | "down"
   | "key"
   | "lock"
   | "trash"
@@ -31,7 +33,19 @@ type IconName =
   | "studio"
   | "image"
   | "video"
-  | "download";
+  | "download"
+  | "audio"
+  | "render"
+  | "bell"
+  | "knowledge"
+  | "clock"
+  | "tool"
+  | "upload"
+  | "history"
+  | "search"
+  | "link"
+  | "memory"
+  | "api";
 
 const paths: Record<IconName, React.ReactNode> = {
   overview: <path d="M4 13h7V4H4v9Zm0 7h7v-5H4v5Zm9 0h7v-9h-7v9Zm0-16v5h7V4h-7Z" />,
@@ -72,6 +86,8 @@ const paths: Record<IconName, React.ReactNode> = {
   plus: <path d="M12 5v14M5 12h14" />,
   check: <path d="m5 12 5 5L20 7" />,
   x: <path d="M6 6l12 12M18 6 6 18" />,
+  up: <path d="M12 19V5m-6 6 6-6 6 6" />,
+  down: <path d="M12 5v14m6-6-6 6-6-6" />,
   key: (
     <>
       <circle cx="7.5" cy="15.5" r="4.5" />
@@ -148,6 +164,50 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   download: <path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" />,
+  // A voice: sound waves.
+  audio: <path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4" />,
+  // Clips joined into one strip of film.
+  render: (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M8 5v14M16 5v14M3 9.5h5M3 14.5h5M16 9.5h5M16 14.5h5" />
+    </>
+  ),
+  bell: <path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2Zm4 5h4" />,
+  knowledge: (
+    <>
+      <path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4Z" />
+      <path d="M5 17a3 3 0 0 1 3-3h10M9 8h5" />
+    </>
+  ),
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3.5 2" />
+    </>
+  ),
+  tool: <path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L3 18l3 3 6.2-6.2a4 4 0 0 0 5.3-5.3L15 12l-3-3 2.5-2.5Z" />,
+  upload: <path d="M12 16V5m0 0-4 4m4-4 4 4M5 19h14" />,
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5" />
+      <path d="M12 8v4l3 2" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
+    </>
+  ),
+  link: <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1" />,
+  memory: (
+    <>
+      <path d="M7 3h10a2 2 0 0 1 2 2v16l-7-4-7 4V5a2 2 0 0 1 2-2Z" />
+      <path d="M9.5 8h5M9.5 11.5h3" />
+    </>
+  ),
+  api: <path d="m8 8-4 4 4 4m8-8 4 4-4 4M13.5 5l-3 14" />,
 };
 
 export function Icon({

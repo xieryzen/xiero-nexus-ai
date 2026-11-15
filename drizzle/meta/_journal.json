@@ -50,6 +50,13 @@
       "when": 1794494722799,
       "tag": "0006_smooth_namorita",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794505440521,
+      "tag": "0007_background_tools_knowledge",
+      "breakpoints": true
     }
   ]
 }

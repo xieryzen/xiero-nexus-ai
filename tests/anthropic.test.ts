@@ -7,12 +7,14 @@ import {
   buildMessagesPayload,
   createMessageStream,
   createSseParser,
+  echoBlocks,
   modelsPath,
   parseMessageResponse,
   parseModelsPage,
   toAnthropicMessages,
   upstreamErrorMessage,
 } from "../src/lib/adapters/anthropic-protocol";
+import type { ChatMessage } from "../src/lib/adapters/types";
 import { AppError } from "../src/lib/errors";
 
 function appError(status: number, code: string, message?: RegExp) {
@@ -459,4 +461,150 @@ test("a stream with no message events is rejected instead of read as an empty re
       runStream('data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n').message.result(),
     appError(502, "upstream_error"),
   );
+});
+
+// ─── Tools (v1.5) ─────────────────────────────────────────────────────────────
+
+const WRITE_TOOL = {
+  name: "write_file",
+  description: "Write a file",
+  parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+};
+
+test("tools are sent with their input schema, and the choice in Anthropic's words", () => {
+  const payload = buildMessagesPayload(
+    { model: "claude-x", messages: [{ role: "user", content: "hi" }], tools: [WRITE_TOOL], toolChoice: "required", maxTokens: 2000 },
+    { stream: false },
+  );
+  assert.deepEqual(payload.tools, [{ name: "write_file", description: "Write a file", input_schema: WRITE_TOOL.parameters }]);
+  assert.deepEqual(payload.tool_choice, { type: "any" });
+  assert.equal(payload.max_tokens, 2000);
+  const plain = buildMessagesPayload({ model: "claude-x", messages: [{ role: "user", content: "hi" }], toolChoice: "auto" }, { stream: false });
+  assert.equal("tools" in plain, false);
+  assert.equal("tool_choice" in plain, false);
+});
+
+test("tool results are one user message, results first, with the text that follows them", () => {
+  const messages: ChatMessage[] = [
+    { role: "user", content: "Save both." },
+    {
+      role: "assistant",
+      content: "On it.",
+      toolCalls: [
+        { id: "toolu_1", name: "write_file", arguments: { path: "a" } },
+        { id: "toolu_2", name: "write_file", arguments: { path: "b" } },
+      ],
+    },
+    { role: "tool", toolCallId: "toolu_1", name: "write_file", content: "Saved a." },
+    { role: "tool", toolCallId: "toolu_2", name: "write_file", content: "", isError: true },
+    { role: "user", content: "Now list them." },
+  ];
+  assert.deepEqual(toAnthropicMessages(messages).messages, [
+    { role: "user", content: "Save both." },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "On it." },
+        { type: "tool_use", id: "toolu_1", name: "write_file", input: { path: "a" } },
+        { type: "tool_use", id: "toolu_2", name: "write_file", input: { path: "b" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "toolu_1", content: "Saved a." },
+        // An empty result is not valid block content.
+        { type: "tool_result", tool_use_id: "toolu_2", content: "(no output)", is_error: true },
+        { type: "text", text: "Now list them." },
+      ],
+    },
+  ]);
+});
+
+test("a turn this adapter received goes back with its thinking blocks exactly as they came", () => {
+  const raw = [
+    { type: "thinking", thinking: "I should save it.", signature: "sig-abc" },
+    { type: "redacted_thinking", data: "opaque" },
+    { type: "text", text: "Saving." },
+    { type: "tool_use", id: "toolu_1", name: "write_file", input: { path: "a" } },
+    { type: "server_tool_use", id: "x", name: "web_search" }, // a kind this adapter does not write: dropped
+    { type: "text", text: "" },
+  ];
+  assert.deepEqual(echoBlocks(raw), raw.slice(0, 4));
+  assert.deepEqual(echoBlocks("nope"), []);
+  // A thinking block without its signature would be refused by the API: left out.
+  assert.deepEqual(echoBlocks([{ type: "thinking", thinking: "…" }]), []);
+
+  const { messages } = toAnthropicMessages([
+    { role: "user", content: "Save it." },
+    {
+      role: "assistant",
+      content: "Saving.",
+      toolCalls: [{ id: "toolu_1", name: "write_file", arguments: { path: "a" } }],
+      raw: { adapter: "anthropic", content: raw },
+    },
+    { role: "tool", toolCallId: "toolu_1", content: "Saved." },
+  ]);
+  assert.deepEqual(messages[1], { role: "assistant", content: raw.slice(0, 4) });
+});
+
+test("a turn from another provider is rebuilt from its text and calls", () => {
+  const { messages } = toAnthropicMessages([
+    { role: "user", content: "Go." },
+    {
+      role: "assistant",
+      content: "",
+      toolCalls: [{ id: "call_1", name: "list_files", arguments: {} }],
+      raw: { adapter: "gemini", content: [{ functionCall: { name: "list_files" } }] },
+    },
+    { role: "tool", toolCallId: "call_1", content: "a.txt" },
+  ]);
+  assert.deepEqual(messages[1], { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "list_files", input: {} }] });
+});
+
+test("a reply that calls tools yields the calls, and keeps its blocks to send back", () => {
+  const content = [
+    { type: "thinking", thinking: "Plan.", signature: "sig" },
+    { type: "text", text: "Let me check." },
+    { type: "tool_use", id: "toolu_9", name: "list_files", input: {} },
+    { type: "tool_use", name: "read_file", input: ["not", "an", "object"] },
+  ];
+  const result = parseMessageResponse({ content, stop_reason: "tool_use", usage: { input_tokens: 10, output_tokens: 5 } });
+  assert.equal(result.content, "Let me check.");
+  assert.equal(result.finishReason, "tool_use");
+  assert.deepEqual(result.toolCalls, [
+    { id: "toolu_9", name: "list_files", arguments: {} },
+    { id: "toolu_1", name: "read_file", arguments: {} },
+  ]);
+  assert.equal(result.raw?.adapter, "anthropic");
+  assert.deepEqual((result.raw?.content as unknown[]).slice(0, 3), content.slice(0, 3));
+  // A reply without tool calls carries nothing to send back.
+  assert.equal(parseMessageResponse({ content: [{ type: "text", text: "Done." }], stop_reason: "end_turn" }).raw, undefined);
+});
+
+test("a streamed tool call is put together from its pieces, with the thinking before it", () => {
+  const stream = createMessageStream(() => undefined);
+  const send = (data: unknown) => stream.handle({ event: "", data: JSON.stringify(data) });
+  send({ type: "message_start", message: { usage: { input_tokens: 12 } } });
+  send({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } });
+  send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Save " } });
+  send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "it." } });
+  send({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig-1" } });
+  send({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_5", name: "write_file", input: {} } });
+  send({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"pa' } });
+  send({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: 'th":"a.txt"}' } });
+  send({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 30 } });
+  send({ type: "message_stop" });
+  const result = stream.result();
+  assert.equal(result.content, "");
+  assert.equal(result.finishReason, "tool_use");
+  assert.deepEqual(result.toolCalls, [{ id: "toolu_5", name: "write_file", arguments: { path: "a.txt" } }]);
+  assert.deepEqual(result.raw, {
+    adapter: "anthropic",
+    content: [
+      { type: "thinking", thinking: "Save it.", signature: "sig-1" },
+      { type: "tool_use", id: "toolu_5", name: "write_file", input: { path: "a.txt" } },
+    ],
+  });
+  assert.deepEqual(result.usage, { promptTokens: 12, completionTokens: 30, totalTokens: 42 });
 });

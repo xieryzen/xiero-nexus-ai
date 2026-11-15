@@ -14,6 +14,12 @@ export interface BodyLimits {
   timeoutMs: number;
 }
 
+/** What a body is read from: a provider's response, or an upload's request. */
+export interface BodySource {
+  headers: Headers;
+  body: ReadableStream<Uint8Array> | null;
+}
+
 function megabytes(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   return mb >= 10 ? `${Math.round(mb)} MB` : `${Math.round(mb * 10) / 10} MB`;
@@ -32,7 +38,7 @@ function timedOut(): AppError {
 }
 
 /** Reject early when the declared length is already over the limit. */
-function checkDeclaredLength(res: Response, maxBytes: number): void {
+function checkDeclaredLength(res: BodySource, maxBytes: number): void {
   const declared = Number(res.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxBytes) {
     void res.body?.cancel().catch(() => undefined);
@@ -45,7 +51,7 @@ function checkDeclaredLength(res: Response, maxBytes: number): void {
  * passes `maxBytes` or is not finished within `timeoutMs`.
  */
 async function pump(
-  res: Response,
+  res: BodySource,
   limits: BodyLimits,
   onChunk: (chunk: Uint8Array) => Promise<void> | void,
 ): Promise<number> {
@@ -84,7 +90,7 @@ async function pump(
 }
 
 /** The whole body in memory. For JSON answers and images. */
-export async function readBodyCapped(res: Response, limits: BodyLimits): Promise<Buffer> {
+export async function readBodyCapped(res: BodySource, limits: BodyLimits): Promise<Buffer> {
   const chunks: Uint8Array[] = [];
   await pump(res, limits, (chunk) => {
     chunks.push(chunk);

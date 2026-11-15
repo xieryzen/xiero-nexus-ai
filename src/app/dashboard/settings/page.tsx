@@ -1,8 +1,13 @@
 import Link from "next/link";
+import { listApiKeys, serializeApiKey } from "@/lib/apikeys";
 import { requirePageUser } from "@/lib/auth";
-import { formatDateTime } from "@/lib/format";
+import { env } from "@/lib/env";
+import { DateTime } from "@/components/time";
+import { usableModels } from "@/lib/model-options";
+import { serializeWebhook, webhookFor } from "@/lib/notifications";
 import { Badge, Card, PageHeader, StatusDot } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { IntegrationsClient } from "@/components/account/integrations-client";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
@@ -11,7 +16,7 @@ export default function SettingsPage() {
   const user = requirePageUser();
   return (
     <div>
-      <PageHeader title="Settings" description="Your account and security." />
+      <PageHeader title="Settings" description="Your account, its security, API keys and notifications." />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Account">
@@ -33,7 +38,7 @@ export default function SettingsPage() {
                 </Badge>
               </dd>
             </div>
-            <Row label="Member since" value={formatDateTime(user.createdAt)} />
+            <Row label="Member since" value={<DateTime at={new Date(user.createdAt).getTime()} />} />
           </dl>
         </Card>
 
@@ -52,11 +57,18 @@ export default function SettingsPage() {
           </Link>
         </Card>
       </div>
+
+      <IntegrationsClient
+        webhook={serializeWebhook(webhookFor(user.id))}
+        apiKeys={listApiKeys(user.id).map(serializeApiKey)}
+        models={usableModels().map((m) => ({ id: m.id, label: `${m.name} · ${m.providerName}` }))}
+        baseUrl={env.appUrl.replace(/\/+$/, "")}
+      />
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between">
       <dt className="text-ink-3">{label}</dt>

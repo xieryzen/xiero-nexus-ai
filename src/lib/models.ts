@@ -20,6 +20,7 @@ export interface SerializedModel {
   outputPricePerMTok: number | null;
   pricePerImage: number | null;
   pricePerSecond: number | null;
+  pricePerMChars: number | null;
   source: "discovered" | "manual";
   capabilities: { capability: Capability; verified: boolean }[];
   lastTestedAt: Date | null;
@@ -74,6 +75,7 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     outputPricePerMTok: m.outputPricePerMTok,
     pricePerImage: m.pricePerImage,
     pricePerSecond: m.pricePerSecond,
+    pricePerMChars: m.pricePerMChars,
     source: m.source,
     capabilities: caps.get(m.id) ?? [],
     lastTestedAt: m.lastTestedAt,

@@ -5,6 +5,7 @@ import type {
   ChatResult,
   ChatUsage,
   ProviderContext,
+  ToolCall,
 } from "./types";
 
 /**
@@ -56,9 +57,23 @@ export function anthropicHeaders(ctx: HeaderContext): Record<string, string> {
   return h;
 }
 
+/** A content block of a request. Only the kinds this adapter writes. */
+export type AnthropicBlock =
+  | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; tool_use_id: string; content: string; is_error?: true };
+
 export interface AnthropicMessage {
   role: "user" | "assistant";
-  content: string;
+  content: string | AnthropicBlock[];
+}
+
+export interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
 }
 
 export interface AnthropicMessagesPayload {
@@ -66,14 +81,66 @@ export interface AnthropicMessagesPayload {
   max_tokens: number;
   system?: string;
   messages: AnthropicMessage[];
+  tools?: AnthropicTool[];
+  tool_choice?: { type: "auto" | "any" | "none" };
   stream?: true;
+}
+
+export const ANTHROPIC_ADAPTER_ID = "anthropic";
+
+/**
+ * The blocks of an assistant turn that go back to the API: text, tool calls
+ * and thinking. Thinking blocks have to be returned exactly as they came (the
+ * signature is checked), so only their own fields are copied and nothing is
+ * rewritten. Blocks of any other kind are dropped.
+ */
+export function echoBlocks(raw: unknown): AnthropicBlock[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AnthropicBlock[] = [];
+  for (const item of raw) {
+    const block = asObject<Record<string, unknown>>(item);
+    if (!block) continue;
+    if (block.type === "text" && typeof block.text === "string") {
+      if (block.text) out.push({ type: "text", text: block.text });
+    } else if (
+      block.type === "thinking" &&
+      typeof block.thinking === "string" &&
+      typeof block.signature === "string"
+    ) {
+      out.push({ type: "thinking", thinking: block.thinking, signature: block.signature });
+    } else if (block.type === "redacted_thinking" && typeof block.data === "string") {
+      out.push({ type: "redacted_thinking", data: block.data });
+    } else if (
+      block.type === "tool_use" &&
+      typeof block.id === "string" &&
+      typeof block.name === "string"
+    ) {
+      out.push({ type: "tool_use", id: block.id, name: block.name, input: block.input ?? {} });
+    }
+  }
+  return out;
+}
+
+function assistantContent(m: ChatMessage): string | AnthropicBlock[] | null {
+  if (m.raw?.adapter === ANTHROPIC_ADAPTER_ID) {
+    const blocks = echoBlocks(m.raw.content);
+    if (blocks.length > 0) return blocks;
+  }
+  if (!m.toolCalls?.length) return m.content.trim() ? m.content : null;
+  const blocks: AnthropicBlock[] = [];
+  if (m.content.trim()) blocks.push({ type: "text", text: m.content });
+  for (const call of m.toolCalls) {
+    blocks.push({ type: "tool_use", id: call.id, name: call.name, input: call.arguments ?? {} });
+  }
+  return blocks;
 }
 
 /**
  * Split gateway messages into Anthropic's top-level `system` prompt and its
  * user/assistant turns. Blank messages are dropped because the API rejects
- * empty content. That can leave two turns of one role next to each other,
- * which the API merges.
+ * empty content. Tool results are user turns there: the results of one
+ * assistant turn, and any user text that follows them, are put into a single
+ * user message with the results first, as the API requires.
  */
 export function toAnthropicMessages(messages: ChatMessage[]): {
   system?: string;
@@ -81,16 +148,51 @@ export function toAnthropicMessages(messages: ChatMessage[]): {
 } {
   const system: string[] = [];
   const turns: AnthropicMessage[] = [];
+
+  /** Add blocks to the user turn at the end, or start one. */
+  const pushUser = (blocks: AnthropicBlock[]) => {
+    const last = turns[turns.length - 1];
+    if (last && last.role === "user" && Array.isArray(last.content)) {
+      last.content.push(...blocks);
+    } else {
+      turns.push({ role: "user", content: blocks });
+    }
+  };
+
   for (const m of messages) {
-    if (!m.content.trim()) continue;
-    if (m.role === "system") system.push(m.content.trim());
-    else turns.push({ role: m.role, content: m.content });
+    if (m.role === "system") {
+      if (m.content.trim()) system.push(m.content.trim());
+    } else if (m.role === "tool") {
+      pushUser([
+        {
+          type: "tool_result",
+          tool_use_id: m.toolCallId ?? "",
+          // An empty result is valid for a tool, but not as block content.
+          content: m.content || "(no output)",
+          ...(m.isError ? { is_error: true as const } : {}),
+        },
+      ]);
+    } else if (m.role === "assistant") {
+      const content = assistantContent(m);
+      if (content !== null) turns.push({ role: "assistant", content });
+    } else {
+      if (!m.content.trim()) continue;
+      const last = turns[turns.length - 1];
+      // Text after tool results joins their message; otherwise a plain turn.
+      if (last && last.role === "user" && Array.isArray(last.content)) {
+        last.content.push({ type: "text", text: m.content });
+      } else {
+        turns.push({ role: "user", content: m.content });
+      }
+    }
   }
   return {
     system: system.length > 0 ? system.join("\n\n") : undefined,
     messages: turns,
   };
 }
+
+const TOOL_CHOICE = { auto: "auto", required: "any", none: "none" } as const;
 
 /**
  * Body for `POST /messages`. `req.temperature` is deliberately not sent: API
@@ -108,13 +210,22 @@ export function buildMessagesPayload(
       "An Anthropic request needs at least one user or assistant message",
     );
   }
-  return {
+  const payload: AnthropicMessagesPayload = {
     model: req.model,
-    max_tokens: ANTHROPIC_MAX_TOKENS,
+    max_tokens: req.maxTokens ?? ANTHROPIC_MAX_TOKENS,
     ...(system ? { system } : {}),
     messages,
-    ...(opts.stream ? { stream: true as const } : {}),
   };
+  if (req.tools?.length) {
+    payload.tools = req.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    }));
+    if (req.toolChoice) payload.tool_choice = { type: TOOL_CHOICE[req.toolChoice] };
+  }
+  if (opts.stream) payload.stream = true;
+  return payload;
 }
 
 /** Path and query of one Models API page, relative to the base URL. */
@@ -138,8 +249,19 @@ interface WireStopDetails {
   explanation?: string | null;
 }
 
+interface WireBlock {
+  type?: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  thinking?: string;
+  signature?: string;
+  data?: string;
+}
+
 interface WireMessage {
-  content?: { type?: string; text?: string }[];
+  content?: WireBlock[];
   stop_reason?: string | null;
   stop_details?: WireStopDetails | null;
   usage?: WireUsage | null;
@@ -152,10 +274,15 @@ interface WireError {
 
 interface WireStreamEvent {
   type?: string;
+  index?: number;
   message?: WireMessage;
+  content_block?: WireBlock;
   delta?: {
     type?: string;
     text?: string;
+    partial_json?: string;
+    thinking?: string;
+    signature?: string;
     stop_reason?: string | null;
     stop_details?: WireStopDetails | null;
   };
@@ -239,14 +366,46 @@ export function parseMessageResponse(json: unknown): ChatResult {
   const stopReason = message.stop_reason ?? undefined;
   if (stopReason === "refusal") throw refusalError(message.stop_details);
 
-  // Only text blocks are the reply; thinking and tool blocks are not.
-  const content = message.content
-    .map((b) => (b?.type === "text" && typeof b.text === "string" ? b.text : ""))
-    .join("");
-
   const tally: UsageTally = {};
   mergeUsage(tally, message.usage);
-  return { content, finishReason: stopReason, usage: toChatUsage(tally) };
+  return fromBlocks(message.content, stopReason, toChatUsage(tally));
+}
+
+/** The tool calls among a message's blocks. */
+function toolCallsOf(blocks: WireBlock[]): ToolCall[] {
+  const calls: ToolCall[] = [];
+  for (const block of blocks) {
+    if (block?.type !== "tool_use" || typeof block.name !== "string" || !block.name) continue;
+    const input = asObject<Record<string, unknown>>(block.input);
+    calls.push({
+      id: typeof block.id === "string" && block.id ? block.id : `toolu_${calls.length}`,
+      name: block.name,
+      arguments: input && !Array.isArray(input) ? input : {},
+    });
+  }
+  return calls;
+}
+
+/**
+ * A reply from its content blocks. Only text blocks are the visible reply.
+ * When the model called tools, the blocks are kept as `raw`, because the next
+ * request has to return this turn's thinking blocks unchanged.
+ */
+function fromBlocks(
+  blocks: WireBlock[],
+  stopReason: string | undefined,
+  usage: ChatUsage | undefined,
+): ChatResult {
+  const content = blocks
+    .map((b) => (b?.type === "text" && typeof b.text === "string" ? b.text : ""))
+    .join("");
+  const result: ChatResult = { content, finishReason: stopReason, usage };
+  const toolCalls = toolCallsOf(blocks);
+  if (toolCalls.length > 0) {
+    result.toolCalls = toolCalls;
+    result.raw = { adapter: ANTHROPIC_ADAPTER_ID, content: echoBlocks(blocks) };
+  }
+  return result;
 }
 
 /** Model ids of one Models API page, and the cursor of the next page if any. */
@@ -363,18 +522,30 @@ export function createSseParser(): {
 
 /**
  * Fold the events of a streamed message into one result. Text deltas are
- * forwarded to `onDelta` as they arrive; other deltas (thinking, signatures,
- * tool input) and event types this code does not know are skipped.
+ * forwarded to `onDelta` as they arrive. Thinking and tool-call blocks are put
+ * together from their deltas and returned with the result; event types this
+ * code does not know are skipped.
  */
 export function createMessageStream(onDelta: (text: string) => void): {
   handle(event: SseEvent): void;
   result(): ChatResult;
 } {
-  let content = "";
   let stopReason: string | undefined;
   let stopDetails: WireStopDetails | null | undefined;
   let sawMessage = false;
   const tally: UsageTally = {};
+  // Blocks by their index in the message, and the JSON text of tool inputs.
+  const blocks = new Map<number, WireBlock>();
+  const inputJson = new Map<number, string>();
+  const blockAt = (index: number | undefined, type: string): WireBlock => {
+    const key = index ?? 0;
+    let block = blocks.get(key);
+    if (!block) {
+      block = { type };
+      blocks.set(key, block);
+    }
+    return block;
+  };
 
   return {
     handle(sse) {
@@ -404,17 +575,32 @@ export function createMessageStream(onDelta: (text: string) => void): {
           sawMessage = true;
           mergeUsage(tally, chunk.message?.usage);
           break;
+        case "content_block_start": {
+          sawMessage = true;
+          const start = chunk.content_block;
+          if (start && typeof start.type === "string") {
+            blocks.set(chunk.index ?? blocks.size, { ...start });
+          }
+          break;
+        }
         case "content_block_delta": {
           sawMessage = true;
           const delta = chunk.delta;
-          if (
-            delta &&
-            (delta.type ?? "text_delta") === "text_delta" &&
-            typeof delta.text === "string" &&
-            delta.text
-          ) {
-            content += delta.text;
+          if (!delta) break;
+          const kind = delta.type ?? "text_delta";
+          if (kind === "text_delta" && typeof delta.text === "string" && delta.text) {
+            const block = blockAt(chunk.index, "text");
+            block.text = (block.text ?? "") + delta.text;
             onDelta(delta.text);
+          } else if (kind === "input_json_delta" && typeof delta.partial_json === "string") {
+            const key = chunk.index ?? 0;
+            inputJson.set(key, (inputJson.get(key) ?? "") + delta.partial_json);
+          } else if (kind === "thinking_delta" && typeof delta.thinking === "string") {
+            const block = blockAt(chunk.index, "thinking");
+            block.thinking = (block.thinking ?? "") + delta.thinking;
+          } else if (kind === "signature_delta" && typeof delta.signature === "string") {
+            const block = blockAt(chunk.index, "thinking");
+            block.signature = (block.signature ?? "") + delta.signature;
           }
           break;
         }
@@ -442,7 +628,22 @@ export function createMessageStream(onDelta: (text: string) => void): {
         );
       }
       if (stopReason === "refusal") throw refusalError(stopDetails);
-      return { content, usage: toChatUsage(tally), finishReason: stopReason };
+      const ordered = [...blocks.entries()].sort(([a], [b]) => a - b);
+      for (const [index, block] of ordered) {
+        if (block.type !== "tool_use") continue;
+        const text = inputJson.get(index);
+        if (!text) continue;
+        try {
+          block.input = JSON.parse(text) as unknown;
+        } catch {
+          block.input = {};
+        }
+      }
+      return fromBlocks(
+        ordered.map(([, block]) => block),
+        stopReason,
+        toChatUsage(tally),
+      );
     },
   };
 }

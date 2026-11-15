@@ -11,6 +11,7 @@ import {
   type Team,
   type Workflow,
 } from "@/db/schema";
+import { parseToolNames } from "./agent/catalog";
 import { parseMediaOptions, type MediaOptions, type TaskKind } from "./creative/prompt";
 
 function modelLabels(ids: string[]): Map<string, string> {
@@ -27,7 +28,14 @@ function modelLabels(ids: string[]): Map<string, string> {
   return map;
 }
 
-export function serializeAgent(a: Agent, labels?: Map<string, string>) {
+export interface AgentExtras {
+  /** Shared knowledge collections the agent searches. */
+  collectionIds?: string[];
+  /** Notes the agent has kept. */
+  memoryCount?: number;
+}
+
+export function serializeAgent(a: Agent, labels?: Map<string, string>, extras: AgentExtras = {}) {
   const l = labels ?? modelLabels([a.primaryModelRowId ?? "", a.fallbackModelRowId ?? ""]);
   return {
     id: a.id,
@@ -41,14 +49,27 @@ export function serializeAgent(a: Agent, labels?: Map<string, string>) {
     routingMode: a.routingMode,
     requiredCapability: a.requiredCapability,
     temperature: a.temperature,
+    tools: parseToolNames(a.tools),
+    maxSteps: a.maxSteps,
+    memoryEnabled: a.memoryEnabled,
+    collectionIds: extras.collectionIds ?? [],
+    memoryCount: extras.memoryCount ?? 0,
     status: a.status,
     createdAt: a.createdAt,
   };
 }
 
-export function serializeAgents(list: Agent[]) {
+export function serializeAgents(
+  list: Agent[],
+  extras: { collections?: Map<string, string[]>; memories?: Map<string, number> } = {},
+) {
   const labels = modelLabels(list.flatMap((a) => [a.primaryModelRowId ?? "", a.fallbackModelRowId ?? ""]));
-  return list.map((a) => serializeAgent(a, labels));
+  return list.map((a) =>
+    serializeAgent(a, labels, {
+      collectionIds: extras.collections?.get(a.id),
+      memoryCount: extras.memories?.get(a.id),
+    }),
+  );
 }
 
 export function serializeTeam(t: Team) {
@@ -84,6 +105,10 @@ export function serializeTask(t: ProjectTask) {
     attempts: t.attempts,
     promptTokens: t.promptTokens,
     completionTokens: t.completionTokens,
+    outputFile: t.outputFile,
+    // Model calls and tool calls the task took (an agent with tools).
+    steps: t.steps,
+    toolCalls: t.toolCallCount,
   };
 }
 
@@ -108,7 +133,9 @@ export function serializeProject(p: Project, opts: { withTasks?: boolean } = {})
     workflowId: p.workflowId,
     imageModelRowId: p.imageModelRowId,
     videoModelRowId: p.videoModelRowId,
+    speechModelRowId: p.speechModelRowId,
     maxMedia: p.maxMedia,
+    memory: p.memory,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     startedAt: p.startedAt,

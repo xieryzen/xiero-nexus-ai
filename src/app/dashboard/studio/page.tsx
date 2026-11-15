@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { projects } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
 import { serializeAsset } from "@/lib/media/dto";
+import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { listAssets } from "@/lib/media/service";
 import { mediaModelOptions, usableModels } from "@/lib/model-options";
 import { StudioClient } from "@/components/studio/studio-client";
@@ -12,7 +13,7 @@ export const metadata = { title: "Creative Studio" };
 
 const PAGE_SIZE = 60;
 
-export default function StudioPage({
+export default async function StudioPage({
   searchParams,
 }: {
   searchParams: { project?: string | string[] };
@@ -36,10 +37,13 @@ export default function StudioPage({
   });
 
   const all = usableModels();
+  const ffmpeg = await ffmpegStatus();
   return (
     <StudioClient
       imageModels={mediaModelOptions("image", all)}
       videoModels={mediaModelOptions("video", all)}
+      speechModels={mediaModelOptions("audio", all)}
+      render={{ available: ffmpeg.available && ffmpeg.h264, subtitles: ffmpeg.available && ffmpeg.subtitles }}
       initialAssets={rows.slice(0, PAGE_SIZE).map((r) => serializeAsset(r.asset))}
       initialNextOffset={rows.length > PAGE_SIZE ? PAGE_SIZE : null}
       isAdmin={user.role === "admin"}

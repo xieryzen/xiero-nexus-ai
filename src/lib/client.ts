@@ -37,6 +37,32 @@ export async function apiFetch<T = unknown>(
 }
 
 /**
+ * Upload a file as the body of a request, with its name in a header. Throws
+ * ApiError on non-2xx, like `apiFetch`.
+ */
+export async function apiUpload<T = unknown>(url: string, file: File): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": file.type || "application/octet-stream",
+      "x-file-name": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  let data: unknown = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* no body */
+  }
+  if (!res.ok) {
+    const err = (data as { error?: { message?: string; code?: string } })?.error;
+    throw new ApiError(err?.message ?? "Upload failed", err?.code ?? "error", res.status);
+  }
+  return data as T;
+}
+
+/**
  * Copy text to the clipboard. Resolves to whether it worked.
  *
  * `navigator.clipboard` exists only on HTTPS and on localhost, and this app

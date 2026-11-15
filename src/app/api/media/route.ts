@@ -11,7 +11,7 @@ const PAGE_SIZE = 60;
 
 /**
  * The signed-in user's media, newest first.
- *   ?kind=image|video   one kind only
+ *   ?kind=image|video|audio   one kind only
  *   ?projectId=…        what one project's runs produced (owner or admin)
  *   ?scope=all          everyone's media (administrators)
  *   ?offset=N           paging
@@ -21,10 +21,9 @@ export const GET = handle(async (req) => {
   const query = new URL(req.url).searchParams;
 
   const kindParam = query.get("kind");
-  if (kindParam && kindParam !== "image" && kindParam !== "video") {
-    throw Errors.badRequest("kind must be image or video");
-  }
-  const kind = kindParam === "image" || kindParam === "video" ? kindParam : undefined;
+  const kind =
+    kindParam === "image" || kindParam === "video" || kindParam === "audio" ? kindParam : undefined;
+  if (kindParam && !kind) throw Errors.badRequest("kind must be image, video or audio");
 
   const all = query.get("scope") === "all";
   if (all && user.role !== "admin") throw Errors.forbidden();

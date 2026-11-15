@@ -1,4 +1,4 @@
-import type { Capability } from "@/db/schema";
+import type { Capability } from "@/lib/capabilities";
 import type {
   DownloadPlan,
   ImageRequest,
@@ -7,15 +7,60 @@ import type {
   VideoRequest,
 } from "./media-protocol";
 
+/** A function the model asked to have called (v1.5). */
+export interface ToolCall {
+  /** The provider's id for the call. The result is sent back under it. */
+  id: string;
+  name: string;
+  /** Parsed arguments; `{}` when the model sent none. */
+  arguments: Record<string, unknown>;
+  /** The raw text, when the model's arguments were not a JSON object. */
+  invalidArguments?: string;
+}
+
+/** A function a model may call. `parameters` is a JSON Schema object. */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+}
+
+export type ToolChoice = "auto" | "none" | "required";
+
+/**
+ * A provider's own form of an assistant turn. Some providers need parts of it
+ * back unchanged on the next request (Anthropic thinking blocks, Gemini thought
+ * signatures), so the adapter that produced it sends it again as it is. Other
+ * adapters ignore it and use `content` and `toolCalls`.
+ */
+export interface RawAssistantContent {
+  adapter: string;
+  content: unknown;
+}
+
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Assistant: the tool calls made in this turn. */
+  toolCalls?: ToolCall[];
+  /** Tool: the id of the call this is the result of. */
+  toolCallId?: string;
+  /** Tool: the name of the tool that was called. */
+  name?: string;
+  /** Tool: the call failed and `content` says why. */
+  isError?: boolean;
+  /** Assistant: see {@link RawAssistantContent}. */
+  raw?: RawAssistantContent;
 }
 
 export interface ChatRequest {
   model: string; // upstream model id
   messages: ChatMessage[];
   temperature?: number;
+  tools?: ToolDefinition[];
+  toolChoice?: ToolChoice;
+  /** Upper limit on the answer's length, when the caller set one. */
+  maxTokens?: number;
 }
 
 export interface ChatUsage {
@@ -26,12 +71,50 @@ export interface ChatUsage {
 
 export interface ChatResult {
   content: string;
+  toolCalls?: ToolCall[];
+  raw?: RawAssistantContent;
   usage?: ChatUsage;
   finishReason?: string;
 }
 
 export interface ListedModel {
   id: string;
+  displayName?: string;
+  contextWindow?: number;
+  /** What the provider's list says the model can do, when it says so. */
+  capabilities?: Capability[];
+}
+
+export interface EmbedRequest {
+  model: string;
+  input: string[];
+  dimensions?: number;
+}
+
+export interface EmbedResult {
+  /** One vector per input, in the same order. */
+  vectors: number[][];
+  promptTokens?: number;
+}
+
+export const SPEECH_FORMATS = ["mp3", "wav", "opus", "aac", "flac"] as const;
+export type SpeechFormat = (typeof SPEECH_FORMATS)[number];
+
+export interface SpeechRequest {
+  model: string;
+  input: string;
+  voice?: string;
+  format?: SpeechFormat;
+  /** 0.25 to 4; 1 is normal. */
+  speed?: number;
+  /** How to speak, for models that take such a hint. */
+  instructions?: string;
+}
+
+export interface SpeechResult {
+  bytes: Buffer;
+  /** Set when `bytes` is headerless PCM, which still has to be put into a WAV file. */
+  pcm?: { sampleRate: number; channels: number; bitsPerSample: number };
 }
 
 /** Everything an adapter needs to talk to one provider connection. */
@@ -43,6 +126,8 @@ export interface ProviderContext {
   apiVersion?: string | null;
   /** The provider's media style setting ("auto", "openai", "openrouter", "xai"). */
   mediaApi?: string | null;
+  /** The provider's JSON configuration (custom-http adapter). */
+  config?: string | null;
   extraHeaders?: Record<string, string>;
   timeoutMs: number;
   allowHosts?: string[];
@@ -64,14 +149,26 @@ export interface ProviderAdapter {
   listModels(ctx: ProviderContext): Promise<ListedModel[]>;
   testConnection(ctx: ProviderContext): Promise<void>;
   chat(ctx: ProviderContext, req: ChatRequest): Promise<ChatResult>;
-  /** Streams text deltas; resolves the final aggregated result. */
+  /**
+   * Streams text deltas; resolves the final aggregated result. Tool calls are
+   * not streamed: they are in the result.
+   */
   chatStream(
     ctx: ProviderContext,
     req: ChatRequest,
     onDelta: (text: string) => void,
   ): Promise<ChatResult>;
 
-  // ── Media (v1.4). Absent on adapters whose protocol has no such API. ──────
+  // ── Optional. Absent on adapters whose protocol has no such API. ──────────
+
+  /** Text embeddings (v1.5). */
+  embed?(ctx: ProviderContext, req: EmbedRequest): Promise<EmbedResult>;
+  /** Text to speech (v1.5). */
+  generateSpeech?(
+    ctx: ProviderContext,
+    req: SpeechRequest,
+    opts: { timeoutMs: number },
+  ): Promise<SpeechResult>;
 
   /** Generate images. Waits for the provider's complete answer. */
   generateImages?(

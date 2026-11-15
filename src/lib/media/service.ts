@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import { and, asc, count, desc, eq, lt } from "drizzle-orm";
 import { db } from "@/db";
 import {
   mediaAssets,
@@ -17,31 +18,50 @@ import {
   type ParsedImage,
   type ParsedVideoJob,
 } from "../adapters/media-protocol";
-import type { MediaDownload, ProviderAdapter, ProviderContext } from "../adapters/types";
+import type {
+  MediaDownload,
+  ProviderAdapter,
+  ProviderContext,
+  SpeechFormat,
+} from "../adapters/types";
 import { MEDIA_CAPABILITY } from "../capabilities";
-import { parseMediaOptions, type MediaOptions } from "../creative/prompt";
+import { MAX_SPEECH_CHARS, parseMediaOptions, type MediaOptions } from "../creative/prompt";
 import { AppError, Errors, sanitizeUpstreamError } from "../errors";
 import { contextFor, resolveEnabledModel, type ResolvedModel } from "../gateway";
 import { safeFetch } from "../http-client";
+import { notify } from "../notifications";
+import { currentApiKeyId } from "../request-context";
+import { runtime } from "../runtime";
 import { recordUsage } from "../usage";
-import { computeImageCost, computeVideoCost } from "./cost";
-import { MAX_IMAGE_BYTES, type MediaKind } from "./files";
+import { computeImageCost, computeSpeechCost, computeVideoCost } from "./cost";
+import { ffmpegStatusNow, probeFile } from "./ffmpeg";
+import { MAX_IMAGE_BYTES, mimeForFileName, pcmToWav, sniffMedia, type MediaKind } from "./files";
 import { readBodyCapped } from "./http";
-import { deleteMediaFile, saveMediaBytes, saveMediaResponse, type StoredFile } from "./store";
+import { inputFormat, wavDurationSeconds } from "./render-plan";
+import {
+  deleteMediaFile,
+  mediaFilePath,
+  saveMediaBytes,
+  saveMediaResponse,
+  type StoredFile,
+} from "./store";
 
 /**
- * Image and video generation through the gateway.
+ * Image, video and speech generation through the gateway.
  *
- * An image request waits for the provider and stores the files. A video is a
- * job: `startVideo` creates a `pending` asset, and `refreshVideo` asks the
- * provider about it and, once it is finished, downloads the file. Nothing runs
- * in the background: a pending video moves forward only when someone asks
- * about it (the Studio page, or a project run waiting for it).
+ * An image or speech request waits for the provider and stores the file. A
+ * video is a job: `startVideo` creates a `pending` asset, and `refreshVideo`
+ * asks the provider about it and, once it is finished, downloads the file.
+ * The background worker refreshes pending videos, so they finish whether or
+ * not a page is open; a page or a project run that is waiting asks as well.
  */
 
 /** How long an image request may take until the provider answers. */
 const IMAGE_TIMEOUT_MS = 180_000;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 60_000;
+const SPEECH_TIMEOUT_MS = 180_000;
+/** Largest picture sent to a provider as the first frame of a video. */
+export const MAX_FIRST_FRAME_BYTES = 10 * 1024 * 1024;
 const VIDEO_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 /** A provider is asked about one job at most this often. */
 const VIDEO_MIN_POLL_INTERVAL_MS = 3_000;
@@ -53,7 +73,7 @@ const MAX_REDIRECTS = 3;
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
-const KIND_NOUN: Record<MediaKind, string> = { image: "image", video: "video" };
+const KIND_NOUN: Record<MediaKind, string> = { image: "image", video: "video", audio: "speech" };
 
 /** An enabled model that is marked for this kind of media, or a safe error. */
 export function resolveMediaModel(modelRowId: string, kind: MediaKind): ResolvedModel {
@@ -74,10 +94,16 @@ export function resolveMediaModel(modelRowId: string, kind: MediaKind): Resolved
     );
   }
   const adapter = getAdapter(resolved.provider.adapter);
-  const able = kind === "image" ? adapter.generateImages : adapter.startVideo && adapter.getVideo;
+  const able =
+    kind === "image"
+      ? adapter.generateImages
+      : kind === "video"
+        ? adapter.startVideo && adapter.getVideo
+        : adapter.generateSpeech;
   if (!able) {
     throw Errors.badRequest(
-      `The ${adapter.label} adapter cannot generate ${KIND_NOUN[kind]}s. Use a provider with the OpenAI-compatible adapter.`,
+      `The ${adapter.label} adapter cannot generate ${KIND_NOUN[kind]}${kind === "audio" ? "" : "s"}. ` +
+        "Use a model of a provider whose adapter can.",
     );
   }
   return resolved;
@@ -122,6 +148,9 @@ function optionsJson(options: MediaOptions): string | null {
   if (options.durationSeconds) clean.durationSeconds = options.durationSeconds;
   if (options.resolution) clean.resolution = options.resolution;
   if (options.size) clean.size = options.size;
+  if (options.voice) clean.voice = options.voice;
+  if (options.speed) clean.speed = options.speed;
+  if (options.imageAssetId) clean.imageAssetId = options.imageAssetId;
   return Object.keys(clean).length ? JSON.stringify(clean) : null;
 }
 
@@ -287,6 +316,7 @@ export async function generateImages(input: GenerateImagesInput): Promise<MediaA
             providerId: resolved.provider.id,
             modelRowId: resolved.model.id,
             modelLabel: modelLabel(resolved),
+            apiKeyId: currentApiKeyId(),
             prompt: input.prompt,
             params,
             fileName: file.fileName,
@@ -337,6 +367,32 @@ export async function generateImages(input: GenerateImagesInput): Promise<MediaA
 
 export interface StartVideoInput extends MediaRequestBase {
   durationSeconds?: number;
+  /**
+   * An image asset the video starts from (image-to-video). The caller has
+   * checked that the requester may use it.
+   */
+  imageAssetId?: string;
+}
+
+/** A stored picture as a `data:` URL, for a provider that takes a first frame. */
+async function firstFrame(assetId: string): Promise<string> {
+  const image = loadAsset(assetId);
+  if (!image || image.kind !== "image" || image.status !== "ready" || !image.fileName) {
+    throw Errors.badRequest("The image to start from was not found");
+  }
+  if ((image.sizeBytes ?? 0) > MAX_FIRST_FRAME_BYTES) {
+    throw Errors.badRequest(
+      `The image to start from is larger than ${Math.round(MAX_FIRST_FRAME_BYTES / (1024 * 1024))} MB`,
+    );
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(mediaFilePath(image.fileName));
+  } catch {
+    throw Errors.badRequest("The image to start from is no longer on disk");
+  }
+  const mime = mimeForFileName(image.fileName) ?? "image/png";
+  return `data:${mime};base64,${bytes.toString("base64")}`;
 }
 
 export function pendingVideoCount(userId: string): number {
@@ -365,6 +421,7 @@ export async function startVideo(input: StartVideoInput): Promise<MediaAsset> {
 
   let job: ParsedVideoJob;
   try {
+    const image = input.imageAssetId ? await firstFrame(input.imageAssetId) : undefined;
     const ctx = contextFor(resolved.provider);
     job = await adapter.startVideo!(ctx, {
       model: resolved.model.modelId,
@@ -373,6 +430,7 @@ export async function startVideo(input: StartVideoInput): Promise<MediaAsset> {
       aspectRatio: input.aspectRatio,
       resolution: input.resolution,
       size: input.size,
+      image,
       extra: input.extra,
     });
     if (job.state === "failed") {
@@ -412,12 +470,14 @@ export async function startVideo(input: StartVideoInput): Promise<MediaAsset> {
       providerId: resolved.provider.id,
       modelRowId: resolved.model.id,
       modelLabel: modelLabel(resolved),
+      apiKeyId: currentApiKeyId(),
       prompt: input.prompt,
       params: optionsJson({
         aspectRatio: input.aspectRatio,
         durationSeconds: input.durationSeconds,
         resolution: input.resolution,
         size: input.size,
+        imageAssetId: input.imageAssetId,
       }),
       providerJobId: job.id,
       createdAt: now,
@@ -448,6 +508,22 @@ function tooOld(asset: MediaAsset): boolean {
   return Date.now() - asset.createdAt.getTime() > VIDEO_JOB_MAX_AGE_MS;
 }
 
+/**
+ * Tell the owner that a video from Creative Studio or the API is finished. A
+ * project run reports on its own videos.
+ */
+function announceVideo(asset: MediaAsset): void {
+  if (asset.taskId) return;
+  const about = asset.prompt.length > 120 ? `${asset.prompt.slice(0, 119)}…` : asset.prompt;
+  notify(asset.userId, {
+    kind: "media",
+    level: asset.status === "ready" ? "success" : "error",
+    title: asset.status === "ready" ? "Your video is ready" : "A video could not be generated",
+    body: asset.status === "ready" ? about : `${asset.error ?? "The provider failed."}\n${about}`,
+    link: "/dashboard/studio",
+  });
+}
+
 /** Mark a pending video as failed. Returns the row as it is afterwards. */
 function failVideo(asset: MediaAsset, message: string, errorCode: string): MediaAsset {
   const now = new Date();
@@ -468,11 +544,13 @@ function failVideo(asset: MediaAsset, message: string, errorCode: string): Media
     userId: asset.userId,
     providerId: asset.providerId,
     modelRowId: asset.modelRowId,
+    apiKeyId: asset.apiKeyId,
     kind: "video",
     status: "error",
     errorCode,
     latencyMs: now.getTime() - asset.createdAt.getTime(),
   });
+  announceVideo(updated);
   return updated;
 }
 
@@ -588,34 +666,45 @@ async function refreshNow(asset: MediaAsset): Promise<RefreshResult> {
     userId: asset.userId,
     providerId: asset.providerId,
     modelRowId: asset.modelRowId,
+    apiKeyId: asset.apiKeyId,
     kind: "video",
     estimatedCost: cost,
     status: "ok",
     latencyMs: now.getTime() - asset.createdAt.getTime(),
   });
   if (asset.modelRowId) markVerified(asset.modelRowId, "video");
+  announceVideo(updated);
   return { asset: updated };
 }
 
-/** One refresh per asset at a time, shared by everyone who asks meanwhile. */
-const refreshing = new Map<string, Promise<RefreshResult>>();
+/**
+ * One refresh per asset at a time, shared by everyone who asks meanwhile: the
+ * Studio page, a project run and the background worker. The map is one per
+ * server process (see runtime.ts).
+ */
+function refreshing(): Map<string, Promise<RefreshResult>> {
+  return runtime().refreshing as Map<string, Promise<RefreshResult>>;
+}
 
 /**
  * Ask the provider about a pending video and, when it is finished, download
  * it. Safe to call often and from several places at once: calls are shared
  * while one is running, and the provider is not asked more than once every
- * few seconds. Anything that is not a pending video is returned as it is.
+ * few seconds. Anything that is not a provider's pending video is returned as
+ * it is: a video being joined on this server moves forward by itself.
  */
 export async function refreshVideo(
   assetId: string,
   opts: { force?: boolean } = {},
 ): Promise<RefreshResult> {
-  const running = refreshing.get(assetId);
+  const running = refreshing().get(assetId);
   if (running) return running;
 
   const asset = loadAsset(assetId);
   if (!asset) throw Errors.notFound("Media not found");
-  if (asset.kind !== "video" || asset.status !== "pending") return { asset };
+  if (asset.kind !== "video" || asset.status !== "pending" || asset.source !== "provider") {
+    return { asset };
+  }
   if (
     !opts.force &&
     asset.lastCheckedAt &&
@@ -624,9 +713,74 @@ export async function refreshVideo(
     return { asset };
   }
 
-  const work = refreshNow(asset).finally(() => refreshing.delete(assetId));
-  refreshing.set(assetId, work);
+  const work = refreshNow(asset).finally(() => refreshing().delete(assetId));
+  refreshing().set(assetId, work);
   return work;
+}
+
+/** How often the background worker asks a provider about one video. */
+const BACKGROUND_POLL_INTERVAL_MS = 10_000;
+
+/**
+ * Move every pending video forward. Called by the background worker, so that
+ * a video finishes and is downloaded with no page open. Returns the assets
+ * that reached `ready` or `failed` in this call.
+ */
+export async function refreshPendingVideos(limit = 20): Promise<MediaAsset[]> {
+  const due = db
+    .select({ id: mediaAssets.id, lastCheckedAt: mediaAssets.lastCheckedAt })
+    .from(mediaAssets)
+    .where(
+      and(
+        eq(mediaAssets.kind, "video"),
+        eq(mediaAssets.status, "pending"),
+        eq(mediaAssets.source, "provider"),
+      ),
+    )
+    .orderBy(asc(mediaAssets.lastCheckedAt))
+    .limit(limit * 3)
+    .all()
+    .filter(
+      (a) => !a.lastCheckedAt || Date.now() - a.lastCheckedAt.getTime() >= BACKGROUND_POLL_INTERVAL_MS,
+    )
+    .slice(0, limit);
+  const finished: MediaAsset[] = [];
+  await Promise.all(
+    due.map(async ({ id }) => {
+      try {
+        const { asset } = await refreshVideo(id);
+        if (asset.status !== "pending") finished.push(asset);
+      } catch {
+        /* deleted meanwhile, or a problem that the next round sees again */
+      }
+    }),
+  );
+  return finished;
+}
+
+/**
+ * Give up on renders that were never finished: their job was lost, or the
+ * server stopped for good while ffmpeg ran.
+ */
+export function failStaleRenders(maxAgeMs: number): MediaAsset[] {
+  const now = new Date();
+  return db
+    .update(mediaAssets)
+    .set({
+      status: "failed",
+      error: "The server stopped before the clips were joined. Join them again.",
+      completedAt: now,
+      updatedAt: now,
+    })
+    .where(
+      and(
+        eq(mediaAssets.source, "render"),
+        eq(mediaAssets.status, "pending"),
+        lt(mediaAssets.createdAt, new Date(now.getTime() - maxAgeMs)),
+      ),
+    )
+    .returning()
+    .all();
 }
 
 export interface WaitResult extends RefreshResult {
@@ -728,6 +882,175 @@ export function assetsForProject(projectId: string): MediaAsset[] {
     .where(eq(mediaAssets.projectId, projectId))
     .orderBy(asc(mediaAssets.createdAt), asc(mediaAssets.id))
     .all();
+}
+
+// ─── Speech ──────────────────────────────────────────────────────────────────
+
+export interface GenerateSpeechInput {
+  userId: string | null;
+  modelRowId: string;
+  /** What is spoken. */
+  text: string;
+  voice?: string;
+  format?: SpeechFormat;
+  speed?: number;
+  /** How to speak, for models that take such a hint. */
+  instructions?: string;
+  projectId?: string | null;
+  taskId?: string | null;
+}
+
+/** Length of stored speech, when it can be told without much work. */
+async function speechSeconds(file: StoredFile, bytes: Uint8Array): Promise<number | null> {
+  if (file.mimeType === "audio/wav") {
+    const seconds = wavDurationSeconds(bytes);
+    if (seconds !== null) return seconds;
+  }
+  // Other formats need ffmpeg. It is not asked for here if it is not known to be there.
+  if (!ffmpegStatusNow()?.available) return null;
+  const path = mediaFilePath(file.fileName);
+  return (await probeFile(path, inputFormat(path)))?.durationSeconds ?? null;
+}
+
+/** Generate speech from text and store it. Resolves to the new asset, `ready`. */
+export async function generateSpeech(input: GenerateSpeechInput): Promise<MediaAsset> {
+  const text = input.text.trim();
+  if (!text) throw Errors.badRequest("Enter the text to speak");
+  if (text.length > MAX_SPEECH_CHARS) {
+    throw Errors.badRequest(`One request can speak at most ${MAX_SPEECH_CHARS} characters`);
+  }
+  const resolved = resolveMediaModel(input.modelRowId, "audio");
+  const adapter = getAdapter(resolved.provider.adapter);
+  const started = Date.now();
+  const id = randomUUID();
+  let stored: StoredFile | null = null;
+  let committed = false;
+
+  try {
+    const result = await adapter.generateSpeech!(
+      contextFor(resolved.provider),
+      {
+        model: resolved.model.modelId,
+        input: text,
+        voice: input.voice,
+        format: input.format,
+        speed: input.speed,
+        instructions: input.instructions,
+      },
+      { timeoutMs: Math.max(resolved.provider.timeoutMs, SPEECH_TIMEOUT_MS) },
+    );
+    if (result.bytes.byteLength === 0) {
+      throw new AppError(502, "upstream_error", "The provider answered without audio");
+    }
+    // Bare samples are no file a player opens: give them a WAV header.
+    const bytes: Uint8Array = result.pcm ? pcmToWav(result.bytes, result.pcm) : result.bytes;
+    stored = await saveMediaBytes(id, "audio", bytes);
+    const seconds = await speechSeconds(stored, bytes).catch(() => null);
+    const cost = computeSpeechCost(resolved.model, text.length);
+    const now = new Date();
+    const asset = db
+      .insert(mediaAssets)
+      .values({
+        id,
+        userId: input.userId,
+        projectId: input.projectId ?? null,
+        taskId: input.taskId ?? null,
+        kind: "audio",
+        status: "ready",
+        providerId: resolved.provider.id,
+        modelRowId: resolved.model.id,
+        modelLabel: modelLabel(resolved),
+        apiKeyId: currentApiKeyId(),
+        prompt: text,
+        params: optionsJson({ voice: input.voice, speed: input.speed }),
+        fileName: stored.fileName,
+        mimeType: stored.mimeType,
+        sizeBytes: stored.sizeBytes,
+        durationSeconds: seconds,
+        estimatedCost: cost,
+        createdAt: now,
+        updatedAt: now,
+        completedAt: now,
+      })
+      .returning()
+      .get();
+    committed = true;
+    recordUsage({
+      userId: input.userId,
+      providerId: resolved.provider.id,
+      modelRowId: resolved.model.id,
+      kind: "speech",
+      estimatedCost: cost,
+      status: "ok",
+      latencyMs: Date.now() - started,
+    });
+    markVerified(resolved.model.id, "audio");
+    return asset;
+  } catch (err) {
+    if (committed) throw err;
+    if (stored) await deleteMediaFile(stored.fileName);
+    const safe = toAppError(err);
+    recordUsage({
+      userId: input.userId,
+      providerId: resolved.provider.id,
+      modelRowId: resolved.model.id,
+      kind: "speech",
+      status: "error",
+      errorCode: safe.code,
+      latencyMs: Date.now() - started,
+    });
+    throw safe;
+  }
+}
+
+// ─── Uploads ─────────────────────────────────────────────────────────────────
+
+/**
+ * Store a picture a user uploaded, to start a video from or to use as a still
+ * when clips are joined. The type is read from the file's own bytes, as for
+ * everything else that is stored.
+ */
+export async function storeUploadedImage(input: {
+  userId: string;
+  bytes: Buffer;
+  name: string;
+}): Promise<MediaAsset> {
+  if (input.bytes.byteLength === 0) throw Errors.badRequest("The file is empty");
+  if (input.bytes.byteLength > MAX_IMAGE_BYTES) {
+    throw Errors.badRequest(`An image can be at most ${Math.round(MAX_IMAGE_BYTES / (1024 * 1024))} MB`);
+  }
+  const type = sniffMedia(input.bytes.subarray(0, 16));
+  if (!type || type.kind !== "image") {
+    throw Errors.badRequest("Upload a PNG, JPEG, GIF or WebP image");
+  }
+  const id = randomUUID();
+  let file: StoredFile;
+  try {
+    file = await saveMediaBytes(id, "image", input.bytes);
+  } catch (err) {
+    throw toAppError(err);
+  }
+  const now = new Date();
+  const label = input.name.replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 200) || "Uploaded image";
+  return db
+    .insert(mediaAssets)
+    .values({
+      id,
+      userId: input.userId,
+      kind: "image",
+      source: "upload",
+      status: "ready",
+      modelLabel: "Uploaded",
+      prompt: label,
+      fileName: file.fileName,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+    })
+    .returning()
+    .get();
 }
 
 /** Remove an asset and its file. A video still in progress is abandoned. */

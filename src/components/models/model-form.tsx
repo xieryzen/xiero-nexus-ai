@@ -6,21 +6,38 @@ import { CAPABILITIES, CAPABILITY_LABELS, type Capability } from "@/lib/capabili
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input, Select, cn } from "@/components/ui";
 
-type ModelType = "chat" | "image" | "video" | "custom";
+type ModelType = "chat" | "image" | "video" | "speech" | "embedding" | "custom";
 
 const TYPE_CAPABILITIES: Record<Exclude<ModelType, "custom">, Capability[]> = {
   chat: ["text", "streaming"],
   image: ["image_generation"],
   video: ["video_generation"],
+  speech: ["speech_generation"],
+  embedding: ["embeddings"],
 };
+
+/** The capabilities that make a model something other than a chat model. */
+const SPECIAL: [Capability, Exclude<ModelType, "custom" | "chat">][] = [
+  ["image_generation", "image"],
+  ["video_generation", "video"],
+  ["speech_generation", "speech"],
+  ["embeddings", "embedding"],
+];
 
 /** The model type the ticked capabilities amount to. */
 function typeOf(caps: Set<Capability>): ModelType {
-  const image = caps.has("image_generation");
-  const video = caps.has("video_generation");
-  if (!image && !video) return caps.has("text") ? "chat" : "custom";
-  if (caps.has("text") || (image && video)) return "custom";
-  return image ? "image" : "video";
+  const special = SPECIAL.filter(([cap]) => caps.has(cap));
+  if (special.length === 0) return caps.has("text") ? "chat" : "custom";
+  if (caps.has("text") || special.length > 1) return "custom";
+  return special[0]![1];
+}
+
+interface ProviderAbilities {
+  image: boolean;
+  video: boolean;
+  audio: boolean;
+  embed: boolean;
+  tools: boolean;
 }
 
 export function ModelForm({
@@ -29,7 +46,7 @@ export function ModelForm({
   onSaved,
   onCancel,
 }: {
-  providers: { id: string; name: string; supportsMedia: boolean }[];
+  providers: { id: string; name: string; supportsMedia: boolean; abilities: ProviderAbilities }[];
   initial?: SerializedModel;
   onSaved: (m: SerializedModel) => void;
   onCancel: () => void;
@@ -53,6 +70,9 @@ export function ModelForm({
   const [secondPrice, setSecondPrice] = useState(
     initial?.pricePerSecond != null ? String(initial.pricePerSecond) : "",
   );
+  const [charsPrice, setCharsPrice] = useState(
+    initial?.pricePerMChars != null ? String(initial.pricePerMChars) : "",
+  );
   const [caps, setCaps] = useState<Set<Capability>>(
     new Set(initial?.capabilities.map((c) => c.capability) ?? ["text", "streaming"]),
   );
@@ -63,8 +83,25 @@ export function ModelForm({
   const modelType = typeOf(caps);
   const generatesImages = caps.has("image_generation");
   const generatesVideos = caps.has("video_generation");
-  const mediaNoun = generatesImages && generatesVideos ? "images and videos" : generatesImages ? "images" : "videos";
+  const generatesSpeech = caps.has("speech_generation");
+  const embeds = caps.has("embeddings");
   const provider = providers.find((p) => p.id === providerId);
+  // What is ticked that this provider's adapter has no API for.
+  const unsupported = provider
+    ? [
+        generatesImages && !provider.abilities.image ? "generate images" : "",
+        generatesVideos && !provider.abilities.video ? "generate videos" : "",
+        generatesSpeech && !provider.abilities.audio ? "generate speech" : "",
+        embeds && !provider.abilities.embed ? "make embeddings" : "",
+        caps.has("tool_calling") && !provider.abilities.tools ? "call tools" : "",
+      ].filter(Boolean)
+    : [];
+  const special = [
+    generatesImages ? "images" : "",
+    generatesVideos ? "videos" : "",
+    generatesSpeech ? "speech" : "",
+    embeds ? "embeddings" : "",
+  ].filter(Boolean);
 
   function toggleCap(c: Capability) {
     setCaps((prev) => {
@@ -90,6 +127,7 @@ export function ModelForm({
       // A media price is kept only while the model has that capability.
       pricePerImage: caps.has("image_generation") ? num(imagePrice) : empty,
       pricePerSecond: caps.has("video_generation") ? num(secondPrice) : empty,
+      pricePerMChars: caps.has("speech_generation") ? num(charsPrice) : empty,
       capabilities: [...caps],
       notes: notes.trim() || empty,
     };
@@ -146,7 +184,7 @@ export function ModelForm({
         <Field label="Display name" htmlFor="m-name" hint="Optional friendly label">
           <Input id="m-name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="optional" />
         </Field>
-        <Field label="Model type" htmlFor="m-type" hint="Sets the capabilities below. An image or video model is kept out of chat, agents and routing.">
+        <Field label="Model type" htmlFor="m-type" hint="Sets the capabilities below. Only a chat model is offered in chat, to agents and for routing.">
           <Select
             id="m-type"
             value={modelType}
@@ -158,6 +196,8 @@ export function ModelForm({
             <option value="chat">Chat / text model</option>
             <option value="image">Image generation model</option>
             <option value="video">Video generation model</option>
+            <option value="speech">Speech model (text to speech)</option>
+            <option value="embedding">Embedding model</option>
             {modelType === "custom" && <option value="custom">Custom (see capabilities)</option>}
           </Select>
         </Field>
@@ -175,7 +215,7 @@ export function ModelForm({
         </Field>
       </div>
 
-      {(generatesImages || generatesVideos) && (
+      {(generatesImages || generatesVideos || generatesSpeech) && (
         <div className="grid gap-4 sm:grid-cols-3">
           {generatesImages && (
             <Field label="Price per image ($)" htmlFor="m-img-price" hint="optional, for cost estimates">
@@ -187,19 +227,24 @@ export function ModelForm({
               <Input id="m-sec-price" type="number" step="0.0001" min={0} value={secondPrice} onChange={(e) => setSecondPrice(e.target.value)} placeholder="0.10" />
             </Field>
           )}
+          {generatesSpeech && (
+            <Field label="Price per 1M characters ($)" htmlFor="m-chars-price" hint="of spoken text, optional">
+              <Input id="m-chars-price" type="number" step="0.0001" min={0} value={charsPrice} onChange={(e) => setCharsPrice(e.target.value)} placeholder="15" />
+            </Field>
+          )}
         </div>
       )}
 
-      {(generatesImages || generatesVideos) && provider && !provider.supportsMedia && (
+      {unsupported.length > 0 && provider && (
         <Alert tone="warn">
-          {provider.name} cannot generate {mediaNoun}: that needs a provider with the OpenAI-compatible
-          adapter. On this provider the model is not offered in Creative Studio or for image and video tasks.
+          The adapter of {provider.name} cannot {unsupported.join(" or ")}. The capability can be ticked, but
+          the model will not be offered for it until it is on a provider whose adapter can.
         </Alert>
       )}
-      {(generatesImages || generatesVideos) && caps.has("text") && (
+      {special.length > 0 && caps.has("text") && (
         <Alert tone="info">
           Text is ticked too, so this model is also offered for chat, agents and routing. Untick Text if it
-          only generates {mediaNoun}.
+          only does {special.join(" and ")}.
         </Alert>
       )}
 

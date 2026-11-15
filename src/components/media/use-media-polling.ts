@@ -12,9 +12,10 @@ export interface MediaPollHandlers {
 }
 
 /**
- * While any of `pendingIds` is given, ask the server every few seconds to move
- * those videos forward. A video does not progress on its own: the server asks
- * the provider, and downloads the finished file, only when it is asked.
+ * While any of `pendingIds` is given, ask the server every few seconds how
+ * those videos are doing. The server's background worker moves them forward
+ * by itself; asking also makes it check a provider's video at once, so the
+ * page shows the result as soon as it is there.
  * One request at a time, so a slow download does not pile requests up.
  */
 export function useMediaPolling(

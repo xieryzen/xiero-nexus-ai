@@ -32,24 +32,49 @@ function clampInt(value: number | undefined, min: number, max: number, fallback:
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
+export interface ReelOptions {
+  scenes?: number;
+  clipSeconds?: number;
+  /**
+   * Generate a still for each scene first and start the scene's clip from it
+   * (image-to-video). Keeps the look of the scenes together.
+   */
+  keyframes?: boolean;
+  /** Have each scene's line of the script spoken. Needs a speech model. */
+  voiceOver?: boolean;
+  /** The voice, as the speech provider names it. */
+  voice?: string;
+  /** Join the clips, with the voice-overs over them, into one video. Needs ffmpeg on the server. */
+  join?: boolean;
+  /** Burn the spoken words into the joined video. */
+  subtitles?: boolean;
+}
+
 /**
  * A Reel: a short vertical video made of separately generated clips.
  *
  *   1  Concept and script      text
- *   2  Storyboard              text   needs 1
- *   3… Scene k clip            video  needs 2   (one per scene, run in parallel)
- *      Cover image             image  needs 1, 2
- *      Caption and hashtags    text   needs 1
+ *   2  Storyboard              text    needs 1
+ *   per scene (the scenes run in parallel):
+ *      Scene k keyframe        image   needs 2          (with keyframes)
+ *      Scene k clip            video   needs 2, and starts from the keyframe
+ *      Scene k voice-over      audio   needs 1          (with voice-over)
+ *      Final cut               render  needs every clip and voice-over (with join)
+ *      Cover image             image   needs 1, 2
+ *      Caption and hashtags    text    needs 1
  *
- * The clips stay separate files. Nothing is stitched together.
+ * Without the options it is the v1.4 template: the clips stay separate files.
  */
-export function reelWorkflowTemplate(
-  opts: { scenes?: number; clipSeconds?: number } = {},
-): WorkflowTemplate {
+export function reelWorkflowTemplate(opts: ReelOptions = {}): WorkflowTemplate {
   const scenes = clampInt(opts.scenes, 1, REEL_MAX_SCENES, REEL_DEFAULT_SCENES);
   const seconds = clampInt(opts.clipSeconds, 1, REEL_MAX_CLIP_SECONDS, REEL_DEFAULT_CLIP_SECONDS);
   const total = scenes * seconds;
   const sceneWord = scenes === 1 ? "scene" : "scenes";
+  const keyframes = Boolean(opts.keyframes);
+  const voiceOver = Boolean(opts.voiceOver);
+  const join = Boolean(opts.join);
+  const subtitles = join && voiceOver && Boolean(opts.subtitles);
+  const voice = opts.voice?.trim() || undefined;
 
   const steps: TemplateStep[] = [
     {
@@ -76,18 +101,72 @@ export function reelWorkflowTemplate(
     },
   ];
 
+  const clipSteps: number[] = [];
+  const voiceSteps: number[] = [];
   for (let k = 1; k <= scenes; k++) {
+    let keyframe: number | null = null;
+    if (keyframes) {
+      steps.push({
+        title: `Scene ${k} keyframe`,
+        role: "Designer",
+        kind: "image",
+        media: { aspectRatio: REEL_ASPECT_RATIO },
+        dependsOn: [2],
+        objective:
+          `The opening frame of scene ${k} of the storyboard, and only that scene: one still that ` +
+          "shows its subject and setting at the moment the scene begins, in the storyboard's visual " +
+          `style, so that it matches the other scenes. Vertical ${REEL_ASPECT_RATIO}, no text in the image.`,
+      });
+      keyframe = steps.length;
+    }
     steps.push({
       title: `Scene ${k} clip`,
       role: "Video Artist",
       kind: "video",
-      media: { aspectRatio: REEL_ASPECT_RATIO, durationSeconds: seconds },
-      dependsOn: [2],
+      media: {
+        aspectRatio: REEL_ASPECT_RATIO,
+        durationSeconds: seconds,
+        ...(keyframe ? { imageFrom: keyframe } : {}),
+      },
+      dependsOn: keyframe ? [2, keyframe] : [2],
       objective:
         `Scene ${k} of the storyboard, and only that scene. Describe it for a video generator: the ` +
         "subject and what it does, the setting, the camera movement, and the storyboard's visual " +
         `style, so that it matches the other scenes. Vertical ${REEL_ASPECT_RATIO}, about ${seconds} ` +
-        "seconds, no text on screen.",
+        "seconds, no text on screen." +
+        (keyframe
+          ? " The clip starts from this scene's keyframe image: say how that picture comes to life."
+          : ""),
+    });
+    clipSteps.push(steps.length);
+    if (voiceOver) {
+      steps.push({
+        title: `Scene ${k} voice-over`,
+        role: "Creative Director",
+        kind: "audio",
+        media: { durationSeconds: seconds, ...(voice ? { voice } : {}) },
+        dependsOn: [1],
+        objective:
+          `The voiceover of scene ${k} from the script, and only that scene: the words as they are ` +
+          `spoken, one or two short sentences that take about ${seconds} seconds to say. Keep the ` +
+          "script's wording unless a phrase is hard to say aloud.",
+      });
+      voiceSteps.push(steps.length);
+    }
+  }
+
+  if (join) {
+    steps.push({
+      title: "Final cut",
+      role: "Video Artist",
+      kind: "render",
+      media: { aspectRatio: REEL_ASPECT_RATIO, ...(voiceOver ? { subtitles } : {}) },
+      dependsOn: [...clipSteps, ...voiceSteps],
+      objective:
+        `Join the ${scenes} scene ${scenes === 1 ? "clip" : "clips"} in order into one vertical video` +
+        (voiceOver
+          ? `, with each scene's voice-over over its clip${subtitles ? " and its words as subtitles" : ""}.`
+          : "."),
     });
   }
 
@@ -113,11 +192,46 @@ export function reelWorkflowTemplate(
     },
   );
 
+  const extras = [
+    keyframes ? "keyframes" : "",
+    voiceOver ? "voice-over" : "",
+    join ? (subtitles ? "joined, subtitles" : "joined") : "",
+  ].filter(Boolean);
+  const needs = ["a video model", "an image model", ...(voiceOver ? ["a speech model"] : [])];
   return {
-    name: `Reel (${scenes} ${sceneWord})`,
+    name: `Reel (${scenes} ${sceneWord}${extras.length ? `, ${extras.join(", ")}` : ""})`,
     description:
-      `Script, storyboard, ${scenes} vertical ${sceneWord} of ${seconds} s, a cover image and a ` +
-      "caption. The project needs a video model and an image model.",
+      `Script, storyboard, ${scenes} vertical ${sceneWord} of ${seconds} s` +
+      (keyframes ? ", each started from its own keyframe image" : "") +
+      (voiceOver ? ", a voice-over for each" : "") +
+      (join ? `, joined into one video${subtitles ? " with subtitles" : ""}` : "") +
+      ", a cover image and a caption. The project needs " +
+      (needs.length === 2 ? needs.join(" and ") : `${needs.slice(0, -1).join(", ")} and ${needs[needs.length - 1]}`) +
+      (join ? ", and the server needs ffmpeg" : "") +
+      ".",
     steps,
+  };
+}
+
+/** What a template's steps ask of a project: how many tasks and how much generated media. */
+export function templateNeeds(steps: { kind?: TaskKind }[]): {
+  tasks: number;
+  media: number;
+  image: boolean;
+  video: boolean;
+  audio: boolean;
+  render: boolean;
+} {
+  const count = (kind: TaskKind) => steps.filter((s) => (s.kind ?? "text") === kind).length;
+  const image = count("image");
+  const video = count("video");
+  const audio = count("audio");
+  return {
+    tasks: steps.length,
+    media: image + video + audio,
+    image: image > 0,
+    video: video > 0,
+    audio: audio > 0,
+    render: count("render") > 0,
   };
 }

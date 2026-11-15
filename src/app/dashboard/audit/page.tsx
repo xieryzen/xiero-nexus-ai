@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { getRecentAudit } from "@/lib/stats";
-import { formatDateTime } from "@/lib/format";
+import { DateTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export default function AuditPage() {
               <tbody className="divide-y divide-line">
                 {events.map((e) => (
                   <tr key={e.id}>
-                    <td className="whitespace-nowrap px-5 py-2.5 text-ink-3">{formatDateTime(e.createdAt)}</td>
+                    <td className="whitespace-nowrap px-5 py-2.5 text-ink-3"><DateTime at={new Date(e.createdAt).getTime()} /></td>
                     <td className="px-5 py-2.5 text-ink-2">{e.actorUsername ?? "system"}</td>
                     <td className="px-5 py-2.5">
                       <Badge tone="neutral">{e.action}</Badge>

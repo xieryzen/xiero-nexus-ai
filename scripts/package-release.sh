@@ -40,6 +40,8 @@ mkdir -p "${OUT}/.next"
 cp -R .next/static "${OUT}/.next/static"
 if [ -d public ]; then cp -R public "${OUT}/public"; fi
 rm -rf "${OUT}/drizzle" && cp -R drizzle "${OUT}/drizzle"
+# The font that subtitles are drawn with, and its licence.
+rm -rf "${OUT}/assets" && cp -R assets "${OUT}/assets"
 cp scripts/bundle-start.js "${OUT}/start.js"
 cp scripts/get-release.mjs "${OUT}/get-release.mjs"
 cp .env.example README.md CHANGELOG.md RELEASING.md "${OUT}/"
@@ -59,6 +61,14 @@ if [ ! -f "${BINDING}" ]; then
   echo "error: the SQLite binding is missing from the standalone build" >&2
   exit 1
 fi
+# Packages that are loaded while the server runs, not when it is built: the
+# build only brings them along because next.config.mjs names them.
+for needed in node_modules/unpdf/package.json assets/fonts/NotoSans-Bold.ttf; do
+  if [ ! -f "${OUT}/${needed}" ]; then
+    echo "error: ${needed} is missing from the bundle" >&2
+    exit 1
+  fi
+done
 GLIBC=""
 if [ "$(uname -s)" = "Linux" ] && command -v objdump >/dev/null 2>&1; then
   GLIBC="$(objdump -T "${BINDING}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | cut -d_ -f2 | sort -uV | tail -n 1 || true)"

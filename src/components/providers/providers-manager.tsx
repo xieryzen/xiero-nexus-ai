@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { ProviderDTO } from "@/lib/providers";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import {
   Badge,
   Button,
@@ -170,7 +170,7 @@ export function ProvidersManager({
                         {p.lastTestStatus ? (
                           <span className={p.lastTestStatus === "ok" ? "text-ok" : "text-danger"}>
                             {p.lastTestStatus}
-                            {p.lastTestedAt ? ` · ${formatRelative(p.lastTestedAt)}` : ""}
+                            {p.lastTestedAt ? <> · <RelativeTime at={p.lastTestedAt} /></> : ""}
                           </span>
                         ) : (
                           <span className="text-ink-3">never</span>

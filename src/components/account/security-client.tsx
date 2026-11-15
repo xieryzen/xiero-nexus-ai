@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { apiFetch, ApiError } from "@/lib/client";
+import { apiFetch, ApiError, copyText } from "@/lib/client";
 import { Alert, Badge, Button, Card, Field, Input, StatusDot } from "@/components/ui";
 
 type Mode = "view" | "enroll" | "disable" | "regen";
@@ -249,17 +249,15 @@ export function SecurityClient({ initialEnabled }: { initialEnabled: boolean }) 
 }
 
 function RecoveryCodes({ codes, onDismiss }: { codes: string[]; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"yes" | "failed" | null>(null);
   const text = codes.join("\n");
 
-  function copy() {
-    navigator.clipboard?.writeText(text).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => {},
-    );
+  // `copyText` also works over plain HTTP, where `navigator.clipboard` does
+  // not exist; calling that directly made this button do nothing there.
+  async function copy() {
+    const ok = await copyText(text);
+    setCopied(ok ? "yes" : "failed");
+    setTimeout(() => setCopied(null), ok ? 1500 : 4000);
   }
   function download() {
     const blob = new Blob([`Xiero Nexus AI — recovery codes\n\n${text}\n`], { type: "text/plain" });
@@ -284,13 +282,18 @@ function RecoveryCodes({ codes, onDismiss }: { codes: string[]; onDismiss: () =>
       </div>
       <div className="mt-4 flex gap-2">
         <Button variant="ghost" onClick={copy}>
-          {copied ? "Copied" : "Copy"}
+          {copied === "yes" ? "Copied" : "Copy"}
         </Button>
         <Button variant="ghost" onClick={download}>
           Download
         </Button>
         <Button onClick={onDismiss}>I’ve saved them</Button>
       </div>
+      {copied === "failed" && (
+        <p className="mt-2 text-xs text-warn" role="status">
+          This browser did not allow copying. Select the codes and copy them by hand, or use Download.
+        </p>
+      )}
     </div>
   );
 }

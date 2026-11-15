@@ -9,6 +9,7 @@ import { assertSafeProviderUrl } from "./ssrf";
  *   `redirect: "manual"` the 3xx response is returned instead, so the caller
  *   can validate the next address itself (see src/lib/media/service.ts).
  * - Enforces a timeout until the response headers arrive.
+ * - Never served from, or stored in, the framework's fetch cache.
  *
  * Note: DNS is checked before the request; a determined attacker controlling
  * DNS could still rebind between check and connect (TOCTOU). Defense in depth
@@ -26,6 +27,10 @@ export async function safeFetch(
   try {
     return await fetch(targetUrl, {
       ...init,
+      // Said outright, because the framework otherwise keeps the answer to a
+      // GET made while a GET request is being handled and returns it again
+      // for the same address: a video's status would then never change.
+      cache: "no-store",
       redirect: opts.redirect ?? "error",
       signal: controller.signal,
     });

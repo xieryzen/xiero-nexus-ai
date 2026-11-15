@@ -60,8 +60,8 @@ test("sniffMedia refuses everything else, whatever it claims to be", () => {
   // Still images in a video-style container.
   assert.equal(sniffMedia(bytes([0, 0, 0, 0x18], "ftypheic")), null);
   assert.equal(sniffMedia(bytes([0, 0, 0, 0x1c], "ftypavif")), null);
-  // A RIFF file that is not WebP (WAV, AVI).
-  assert.equal(sniffMedia(bytes("RIFF", [0x24, 0, 0, 0], "WAVEfmt ")), null);
+  // A RIFF file that is neither WebP nor WAV (AVI).
+  assert.equal(sniffMedia(bytes("RIFF", [0x24, 0, 0, 0], "AVI LIST")), null);
   assert.equal(sniffMedia(bytes('{"error":"nope"}')), null);
   assert.equal(sniffMedia(new Uint8Array(0)), null);
   assert.equal(sniffMedia(bytes([0x89], "PN")), null);

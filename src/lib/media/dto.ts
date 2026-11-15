@@ -7,12 +7,14 @@ import { parseMediaOptions, type MediaOptions } from "../creative/prompt";
 
 export interface MediaAssetDTO {
   id: string;
-  kind: "image" | "video";
+  kind: "image" | "video" | "audio";
+  /** Made by a provider's model, joined on this server from other files, or uploaded. */
+  source: "provider" | "render" | "upload";
   status: "pending" | "ready" | "failed";
   prompt: string;
   modelRowId: string | null;
   modelLabel: string;
-  /** What was asked for: aspect ratio, duration, resolution, size. */
+  /** What was asked for: aspect ratio, duration, resolution, size, voice. */
   options: MediaOptions;
   mimeType: string | null;
   sizeBytes: number | null;
@@ -37,6 +39,7 @@ export function serializeAsset(asset: MediaAsset, owner?: string | null): MediaA
   const dto: MediaAssetDTO = {
     id: asset.id,
     kind: asset.kind,
+    source: asset.source,
     status: asset.status,
     prompt: asset.prompt,
     modelRowId: asset.modelRowId,

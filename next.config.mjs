@@ -16,9 +16,13 @@ const nextConfig = {
   },
   // Type errors still fail the build; lint is run separately via `npm run lint`.
   eslint: { ignoreDuringBuilds: true },
-  // better-sqlite3 is a native module and must not be bundled by Next's server compiler.
   experimental: {
-    serverComponentsExternalPackages: ["better-sqlite3"],
+    // Loaded from node_modules at run time instead of being bundled by Next's
+    // server compiler: better-sqlite3 is a native module, and unpdf (PDF text
+    // for the knowledge base) loads its PDF reader with an import of its own.
+    serverComponentsExternalPackages: ["better-sqlite3", "unpdf"],
+    // src/instrumentation.ts starts the background worker with the server.
+    instrumentationHook: true,
   },
   async headers() {
     return [

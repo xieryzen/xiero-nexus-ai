@@ -25,10 +25,11 @@ function Elapsed({ since }: { since: number }) {
 }
 
 /**
- * The preview of one asset: the image, the video player, a "generating" box
- * while a video is in progress, or a "failed" box. The box has a fixed height
- * and the media is fitted inside it, whatever its shape, so a list of
- * previews does not move when files arrive.
+ * The preview of one asset: the image, the video or audio player, a
+ * "generating" box while a video is in progress, or a "failed" box. The box
+ * has a fixed height and the media is fitted inside it, whatever its shape,
+ * so a list of previews does not move when files arrive. Audio has no
+ * picture, so its box is only as tall as the player and what is said.
  */
 export function MediaView({
   asset,
@@ -45,6 +46,21 @@ export function MediaView({
     heightClass,
     className,
   );
+
+  if (asset.status === "ready" && asset.url && asset.kind === "audio") {
+    return (
+      <div className={cn("w-full rounded-md border border-line bg-surface-2/60 p-3", className)}>
+        <div className="flex items-center gap-2 text-ink-3">
+          <Icon name="audio" size={16} />
+          <span className="text-xs">
+            Voice-over{asset.options.voice ? ` · ${asset.options.voice}` : ""}
+            {asset.durationSeconds ? ` · ${Math.round(asset.durationSeconds * 10) / 10}s` : ""}
+          </span>
+        </div>
+        <audio src={asset.url} controls preload="metadata" className="mt-2 w-full" />
+      </div>
+    );
+  }
 
   if (asset.status === "ready" && asset.url) {
     if (asset.kind === "image") {
@@ -82,9 +98,12 @@ export function MediaView({
       <div className={cn(box, "grid place-items-center")} role="status">
         <div className="flex flex-col items-center gap-2 px-4 text-center text-ink-2">
           <Spinner size={20} />
-          <p className="text-sm">Generating the video…</p>
+          <p className="text-sm">{asset.source === "render" ? "Joining the clips…" : "Generating the video…"}</p>
           <p className="text-xs text-ink-3">
-            <Elapsed since={asset.createdAt} /> so far. This can take a few minutes.
+            <Elapsed since={asset.createdAt} /> so far.{" "}
+            {asset.source === "render"
+              ? "It goes on if you leave this page."
+              : "This can take a few minutes, and goes on if you leave this page."}
           </p>
         </div>
       </div>
@@ -95,7 +114,13 @@ export function MediaView({
     <div className={cn(box, "grid place-items-center")}>
       <div className="flex flex-col items-center gap-2 px-4 text-center text-danger">
         <Icon name="warning" size={20} />
-        <p className="text-sm">{asset.status === "failed" ? "Generation failed" : "The file is not available"}</p>
+        <p className="text-sm">
+          {asset.status === "failed"
+            ? asset.source === "render"
+              ? "Joining failed"
+              : "Generation failed"
+            : "The file is not available"}
+        </p>
       </div>
     </div>
   );

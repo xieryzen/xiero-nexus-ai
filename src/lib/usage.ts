@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/db";
 import { usageRecords, type Model } from "@/db/schema";
+import { currentApiKeyId } from "./request-context";
 
 /** Rough token estimate when a provider does not report usage (~4 chars/token). */
 export function estimateTokens(text: string): number {
@@ -29,7 +30,12 @@ export interface RecordUsageInput {
   userId?: string | null;
   providerId?: string | null;
   modelRowId?: string | null;
-  kind?: "chat" | "test" | "embedding" | "image" | "video" | "other";
+  kind?: "chat" | "test" | "embedding" | "image" | "video" | "speech" | "other";
+  /**
+   * The API key the work was requested with. Left out, it is the key of the
+   * request being handled, if that came in with one.
+   */
+  apiKeyId?: string | null;
   promptTokens?: number;
   completionTokens?: number;
   estimatedCost?: number | null;
@@ -48,6 +54,7 @@ export function recordUsage(input: RecordUsageInput): void {
         providerId: input.providerId ?? null,
         modelRowId: input.modelRowId ?? null,
         kind: input.kind ?? "chat",
+        apiKeyId: input.apiKeyId === undefined ? currentApiKeyId() : input.apiKeyId,
         promptTokens: prompt,
         completionTokens: completion,
         totalTokens: prompt + completion,

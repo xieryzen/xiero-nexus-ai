@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# A stand-in for the docker command in the tests of the host scripts: it
+# answers the few questions they ask. What runs comes from fake-wings.mjs; the
+# rest is made up, the way a host that needs tidying looks.
+set -euo pipefail
+control="${FAKE_WINGS_URL:-}"
+# What it was asked, for a test that wants to know that nothing was changed.
+if [ -n "${FAKE_DOCKER_LOG:-}" ]; then printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"; fi
+case "${1:-}" in
+  info)
+    if [ "${2:-}" = "--format" ]; then echo "${FAKE_DOCKER_ROOT:-/var/lib/docker}"; fi
+    ;;
+  inspect)
+    if [ "${2:-}" = "-f" ]; then
+      state="$(curl -fsS "${control}/__state/${4}" 2> /dev/null)" || exit 1
+      case "${3}" in
+        *StartedAt*) printf '%s\n' "${state}" | sed -n 's/.*"startedAt":"\([^"]*\)".*/\1/p' ;;
+        *) if printf '%s' "${state}" | grep -q '"running":true'; then echo true; else echo false; fi ;;
+      esac
+    elif [ "${2:-}" = "--format" ]; then
+      echo "/${FAKE_LOG_CONTAINER:-some-container}"
+    else
+      curl -fsS -o /dev/null "${control}/__state/${2}"
+    fi
+    ;;
+  logs) curl -fsS "${control}/__log/${*: -1}" ;;
+  exec) [ "${FAKE_FFMPEG:-yes}" = "yes" ] ;;
+  system)
+    printf '%s\n' \
+      'TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE' \
+      'Images          12        4         9.1GB     6.2GB (68%)' \
+      'Containers      6         3         120MB     80MB (66%)' \
+      'Local Volumes   3         1         2.4GB     1.9GB (79%)' \
+      'Build Cache     0         0         0B        0B'
+    ;;
+  images)
+    case " $* " in
+      *" --format "*)
+        printf '%s\t%s\t%s\n' \
+          '356MB' 'ghcr.io/parkervcp/yolks:nodejs_22' '1111aaaa1111' \
+          '1.21GB' 'ghcr.io/pterodactyl/yolks:java_17' '2222bbbb2222' \
+          '2.4GB' '<none>:<none>' 'aaaaaaaaaaaa' \
+          '412MB' 'mariadb:10.5' '3333cccc3333' \
+          '12.3kB' 'hello-world:latest' '4444dddd4444'
+        ;;
+      *) printf 'aaaaaaaaaaaa\nbbbbbbbbbbbb\n' ;;
+    esac
+    ;;
+  ps)
+    case " $* " in
+      *"{{.Names}}"*) printf '%s\tghcr.io/parkervcp/yolks:nodejs_22\tExited (0) 3 days ago\nold-panel-db\tmariadb:10.5\tExited (137) 2 months ago\n' "${FAKE_STOPPED_SERVER:-00000000-0000-4000-8000-000000000000}" ;;
+      *) printf 'ghcr.io/parkervcp/yolks:nodejs_22\nmariadb:10.5\n' ;;
+    esac
+    ;;
+  volume)
+    case " $* " in
+      *" dangling=true "*) printf 'panel_database\n%s\n' "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+      *) printf 'panel_database\n%s\nsite_uploads\n' "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;;
+    esac
+    ;;
+  *) exit 1 ;;
+esac

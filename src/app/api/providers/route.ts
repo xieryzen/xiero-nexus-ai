@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { providerCredentials, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { parseCustomHttpConfig } from "@/lib/adapters/custom-http-protocol";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -34,6 +35,9 @@ export const POST = handle(async (req) => {
     throw Errors.badRequest("An API key is required for this authentication type");
   }
   await assertAllowedBaseUrl(body.baseUrl);
+  // A custom HTTP provider is its configuration: without a valid one it cannot work.
+  const config = body.adapter === "custom-http" ? (body.config ?? "") : null;
+  if (config !== null) parseCustomHttpConfig(config);
 
   const provider = db
     .insert(providers)
@@ -45,6 +49,7 @@ export const POST = handle(async (req) => {
       authHeaderName: body.authHeaderName,
       apiVersion: body.apiVersion,
       mediaApi: body.mediaApi ?? "auto",
+      config,
       timeoutMs: body.timeoutMs,
       extraHeaders: body.extraHeaders ? JSON.stringify(body.extraHeaders) : null,
       priority: body.priority,

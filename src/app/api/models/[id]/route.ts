@@ -32,6 +32,7 @@ export const PATCH = handle(async (req, { params }) => {
     "outputPricePerMTok",
     "pricePerImage",
     "pricePerSecond",
+    "pricePerMChars",
     "notes",
   ] as const) {
     if (body[f] !== undefined) patch[f] = body[f];

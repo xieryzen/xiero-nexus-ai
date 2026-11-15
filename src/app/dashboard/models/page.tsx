@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { serializeModels } from "@/lib/models";
-import { adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
+import { adapterAbilities, adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
 import { ModelsManager } from "@/components/models/models-manager";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +26,7 @@ export default function ModelsPage() {
         name: p.name,
         adapterImplemented: adapterIsImplemented(p.adapter),
         supportsMedia: adapterSupportsMedia(p.adapter),
+        abilities: adapterAbilities(p.adapter),
         status: p.status,
       }))}
       isAdmin={user?.role === "admin"}

@@ -68,7 +68,7 @@ test("parsePlan reads a model's sloppy media fields without failing the plan", (
   const plan = parsePlan(
     JSON.stringify({
       tasks: [
-        { seq: 1, title: "a", objective: "o", agent: "A", kind: "audio" },
+        { seq: 1, title: "a", objective: "o", agent: "A", kind: "hologram" },
         { seq: 2, title: "b", objective: "o", agent: "A", kind: null, media: "vertical" },
         {
           seq: 3,
@@ -248,14 +248,21 @@ test("parseMediaOptions never throws and keeps only known fields", () => {
 // ─── What a run does with media tasks ────────────────────────────────────────
 
 test("countMediaTasks counts what a plan would generate", () => {
-  assert.deepEqual(countMediaTasks([]), { image: 0, video: 0 });
+  assert.deepEqual(countMediaTasks([]), { image: 0, video: 0, audio: 0, render: 0 });
   assert.deepEqual(
-    countMediaTasks([{ kind: "text" }, { kind: "video" }, { kind: "image" }, { kind: "video" }]),
-    { image: 1, video: 2 },
+    countMediaTasks([
+      { kind: "text" },
+      { kind: "video" },
+      { kind: "image" },
+      { kind: "video" },
+      { kind: "audio" },
+      { kind: "render" },
+    ]),
+    { image: 1, video: 2, audio: 1, render: 1 },
   );
   // The Reel template: one clip per scene and one cover.
   const reel = reelWorkflowTemplate({ scenes: 4 }).steps.map((s) => ({ kind: s.kind ?? ("text" as const) }));
-  assert.deepEqual(countMediaTasks(reel), { image: 1, video: 4 });
+  assert.deepEqual(countMediaTasks(reel), { image: 1, video: 4, audio: 0, render: 0 });
 });
 
 test("downgradeUnavailableMedia turns media tasks without a model into text tasks", () => {
@@ -265,20 +272,21 @@ test("downgradeUnavailableMedia turns media tasks without a model into text task
     { seq: 3, kind: "video" as const, title: "clip", media: { durationSeconds: 8 } },
   ];
 
-  const both = downgradeUnavailableMedia(tasks, { image: true, video: true });
+  const off = { audio: false, render: false };
+  const both = downgradeUnavailableMedia(tasks, { image: true, video: true, ...off });
   assert.deepEqual(both.downgraded, []);
   assert.deepEqual(both.tasks, tasks);
 
-  const imagesOnly = downgradeUnavailableMedia(tasks, { image: true, video: false });
+  const imagesOnly = downgradeUnavailableMedia(tasks, { image: true, video: false, ...off });
   assert.deepEqual(imagesOnly.downgraded, [3]);
   assert.deepEqual(imagesOnly.tasks.map((t) => t.kind), ["text", "image", "text"]);
   // The options of a task that no longer generates anything are dropped.
   assert.equal((imagesOnly.tasks[2] as { media?: unknown }).media, undefined);
   assert.deepEqual((imagesOnly.tasks[1] as { media?: unknown }).media, { aspectRatio: "9:16" });
 
-  const none = downgradeUnavailableMedia(tasks, { image: false, video: false });
+  const none = downgradeUnavailableMedia(tasks, { image: false, video: false, ...off });
   assert.deepEqual(none.downgraded, [2, 3]);
-  assert.deepEqual(countMediaTasks(none.tasks), { image: 0, video: 0 });
+  assert.deepEqual(countMediaTasks(none.tasks), { image: 0, video: 0, audio: 0, render: 0 });
   // The input is not changed.
   assert.equal(tasks[1]!.kind, "image");
 });
@@ -321,7 +329,7 @@ test("downgradeUnavailableMedia keeps only as many media tasks as the run may ge
     { seq: 4, kind: "image" as const },
     { seq: 5, kind: "video" as const },
   ];
-  const all = { image: true, video: true };
+  const all = { image: true, video: true, audio: true, render: true };
 
   // The first ones in task order are kept, whatever their kind.
   const two = downgradeUnavailableMedia(tasks, all, 2);
@@ -331,10 +339,10 @@ test("downgradeUnavailableMedia keeps only as many media tasks as the run may ge
   // A limit of zero turns media off.
   const zero = downgradeUnavailableMedia(tasks, all, 0);
   assert.deepEqual(zero.downgraded, [1, 3, 4, 5]);
-  assert.deepEqual(countMediaTasks(zero.tasks), { image: 0, video: 0 });
+  assert.deepEqual(countMediaTasks(zero.tasks), { image: 0, video: 0, audio: 0, render: 0 });
 
   // A task without a model does not use up the limit.
-  const imagesOnly = downgradeUnavailableMedia(tasks, { image: true, video: false }, 2);
+  const imagesOnly = downgradeUnavailableMedia(tasks, { ...all, video: false }, 2);
   assert.deepEqual(imagesOnly.downgraded, [3, 5]);
   assert.deepEqual(imagesOnly.tasks.map((t) => t.kind), ["image", "text", "text", "image", "text"]);
 

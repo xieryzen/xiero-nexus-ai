@@ -32,7 +32,7 @@ export const POST = handle(async (req) => {
   const model = db.select({ id: models.id }).from(models).where(eq(models.id, body.managerModelRowId)).get();
   if (!model) throw Errors.badRequest("Selected manager model does not exist");
   if (modelIsMediaOnly(model.id)) {
-    throw Errors.badRequest("The manager model must be a chat model, not an image or video model.");
+    throw Errors.badRequest("The manager model must be a chat model, not a media or embedding model.");
   }
   if (body.teamId) {
     const team = db.select({ id: teams.id }).from(teams).where(eq(teams.id, body.teamId)).get();
@@ -40,36 +40,47 @@ export const POST = handle(async (req) => {
   }
 
   // Creative workflows: the models must be usable for that kind of media.
+  const LABEL = { image: "Image", video: "Video", audio: "Speech" } as const;
   for (const [kind, id] of [
     ["image", body.imageModelRowId],
     ["video", body.videoModelRowId],
+    ["audio", body.speechModelRowId],
   ] as const) {
     if (!id) continue;
     try {
       resolveMediaModel(id, kind);
     } catch (err) {
       throw Errors.badRequest(
-        `${kind === "image" ? "Image" : "Video"} model: ${err instanceof AppError ? err.message : "not usable"}`,
+        `${LABEL[kind]} model: ${err instanceof AppError ? err.message : "not usable"}`,
       );
     }
   }
   const maxMedia = body.maxMedia ?? DEFAULT_MAX_MEDIA;
+  const maxTasks = body.maxTasks ?? 12;
   if (body.workflowId) {
     const wf = db.select().from(workflows).where(eq(workflows.id, body.workflowId)).get();
     if (!wf) throw Errors.badRequest("Selected workflow does not exist");
     // A workflow's steps are fixed, so what it needs is known before it runs.
-    const need = countMediaTasks(
-      serializeWorkflow(wf).steps.map((step) => ({ kind: step.kind ?? "text" })),
-    );
+    const steps = serializeWorkflow(wf).steps;
+    const need = countMediaTasks(steps.map((step) => ({ kind: step.kind ?? "text" })));
     if (need.image > 0 && !body.imageModelRowId) {
       throw Errors.badRequest(`The workflow "${wf.name}" has image steps. Choose an image model.`);
     }
     if (need.video > 0 && !body.videoModelRowId) {
       throw Errors.badRequest(`The workflow "${wf.name}" has video steps. Choose a video model.`);
     }
-    if (need.image + need.video > maxMedia) {
+    if (need.audio > 0 && !body.speechModelRowId) {
+      throw Errors.badRequest(`The workflow "${wf.name}" has voice-over steps. Choose a speech model.`);
+    }
+    const generated = need.image + need.video + need.audio;
+    if (generated > maxMedia) {
       throw Errors.badRequest(
-        `The workflow "${wf.name}" generates ${need.image + need.video} images and videos, more than this project's media limit of ${maxMedia}.`,
+        `The workflow "${wf.name}" generates ${generated} images, videos and voice-overs, more than this project's media limit of ${maxMedia}.`,
+      );
+    }
+    if (steps.length > maxTasks) {
+      throw Errors.badRequest(
+        `The workflow "${wf.name}" has ${steps.length} steps, more than this project's task limit of ${maxTasks}.`,
       );
     }
   }
@@ -82,14 +93,16 @@ export const POST = handle(async (req) => {
       managerModelRowId: body.managerModelRowId,
       teamId: body.teamId ?? null,
       maxTokens: body.maxTokens ?? 200_000,
-      maxTasks: body.maxTasks ?? 12,
+      maxTasks,
       maxParallel: body.maxParallel ?? 3,
       requiresApproval: body.requiresApproval ?? false,
       hardQaGate: body.hardQaGate ?? false,
       workflowId: body.workflowId ?? null,
       imageModelRowId: body.imageModelRowId ?? null,
       videoModelRowId: body.videoModelRowId ?? null,
+      speechModelRowId: body.speechModelRowId ?? null,
       maxMedia,
+      memory: body.memory ?? false,
       createdBy: user.id,
     })
     .returning()

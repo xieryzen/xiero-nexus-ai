@@ -7,7 +7,10 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { AppError, Errors, sanitizeUpstreamError } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
+import type { ListedModel } from "@/lib/adapters/types";
+import { suggestModel } from "@/lib/discovery";
 import { discoverProviderModels } from "@/lib/gateway";
+import { setCapabilities } from "@/lib/models";
 
 export const dynamic = "force-dynamic";
 
@@ -28,14 +31,17 @@ export const POST = handle(async (req, { params }) => {
 
   const body = await parseBody(req, schema);
 
-  let discovered: string[];
+  let listed: ListedModel[];
   try {
-    discovered = await discoverProviderModels(provider);
+    listed = await discoverProviderModels(provider);
   } catch (err) {
     const message =
       err instanceof AppError ? err.message : sanitizeUpstreamError(err);
     return json({ ok: false, error: message });
   }
+  const discovered = listed.map((m) => m.id);
+  // What each model is for: from the provider's list, else guessed from its id.
+  const suggested = new Map(listed.map((m) => [m.id, suggestModel(m)] as const));
 
   const existing = new Set(
     db
@@ -48,14 +54,26 @@ export const POST = handle(async (req, { params }) => {
 
   let imported = 0;
   if (body.import?.length) {
-    const toImport = body.import.filter(
-      (id) => discovered.includes(id) && !existing.has(id),
+    const toImport = [...new Set(body.import)].filter(
+      (id) => suggested.has(id) && !existing.has(id),
     );
     db.transaction((tx) => {
       for (const modelId of toImport) {
-        tx.insert(models)
-          .values({ providerId: provider.id, modelId, source: "discovered" })
-          .run();
+        const suggestion = suggested.get(modelId)!;
+        const row = tx
+          .insert(models)
+          .values({
+            providerId: provider.id,
+            modelId,
+            displayName: suggestion.displayName ?? null,
+            contextWindow: suggestion.contextWindow ?? null,
+            source: "discovered",
+          })
+          .returning({ id: models.id })
+          .get();
+        // Unverified, like capabilities set by hand: they are a starting point.
+        setCapabilities(tx, row.id, suggestion.capabilities);
+        existing.add(modelId);
         imported++;
       }
     });
@@ -75,6 +93,9 @@ export const POST = handle(async (req, { params }) => {
   return json({
     ok: true,
     models: discovered,
+    suggested: Object.fromEntries(
+      [...suggested].map(([id, s]) => [id, { type: s.type, capabilities: s.capabilities }]),
+    ),
     existing: [...existing],
     imported,
   });
