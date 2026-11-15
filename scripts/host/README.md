@@ -9,7 +9,7 @@ not part of a release bundle and the app never runs them.
 | [`pterodactyl-install.sh`](pterodactyl-install.sh) | Put the app on a server that does not have it yet: the bundle, its `.env`, and the file the server starts. |
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
 | [`nginx-site.sh`](nginx-site.sh) | Give the app its public address: a site in the node's nginx with a certificate from Let's Encrypt, without touching the other sites. |
-| [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: models, agents, teams and workflows. |
+| [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: providers that take no key, models, agents, teams and workflows. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
 | [`over-ssh.sh`](over-ssh.sh) | Run one of them on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
@@ -326,8 +326,9 @@ repository's server is, and `workforce.sh` puts it into the running app, the
 way an administrator would by hand on its pages:
 
 ```bash
-sudo bash workforce.sh --server 1a2b3c4d --dry-run     # what the app has, what would be added
-sudo bash workforce.sh --server 1a2b3c4d --yes --test  # add it, then ask each chat model for one word
+sudo bash workforce.sh --server 1a2b3c4d --dry-run        # what the app has, what would be added
+sudo bash workforce.sh --server 1a2b3c4d --yes --test     # add it, then ask each chat model for one word
+sudo bash workforce.sh --server 1a2b3c4d --yes --try-run  # add it, then have the agents do a small project
 ```
 
 `workforce.sh` finds the port the server's app answers on and the app's
@@ -349,8 +350,14 @@ It adds what is missing and leaves the rest:
 - An agent, a team or a workflow is added when none of that name is there.
   One that is there and differs from the file is reported and left as it is;
   `--update` changes it to what the file says, under the ID it has.
-- A provider is never added (the program has no keys). The file can say how
-  long the app waits for its answer; that too is changed with `--update` only.
+- A provider that takes no key (`"authType": "none"`) is added when the app
+  does not have it, with the address of the file. One that takes a key is not
+  added: the program has no keys, and says that the provider is to be added
+  on the Providers page. The file can say how long the app waits for a
+  provider's answer; for a provider that is there already, that is changed
+  with `--update` only.
+- A model with `"enabled": false` is switched off, and not taken into the app
+  when it is not there: for a model that was tried and did not serve.
 - Nothing is ever deleted. What the file does not name is not touched.
 - A tool the server cannot run (`run_command` without a sandbox runner,
   `web_search` without a search service) is left out of an agent, and said.
@@ -363,6 +370,15 @@ providers bill**, small ones. They are the only way to know that a model can
 be used: a provider lists models that its key may not call. A failed test
 ends the run with 1 and says what the provider answered; the workforce stays.
 
+`--try-run` goes further, and takes minutes: it makes a small project with
+the goal of the file's `tryRun`, lets the model named there plan it and the
+agents do the tasks, and says for each task which model answered and what the
+models before it said. With `"everyAgent": true` a second project gives every
+agent of the file one small task, so that each is seen at work with its own
+first model and its tools. Both are deleted again (`--keep-try-run` keeps
+them). One word from a model says that it answers; whether a provider allows
+the many requests of a project is only seen in one.
+
 Without the node, against any app that can be reached:
 
 ```bash
@@ -373,12 +389,17 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
 
 ```json
 {
-  "providers": { "gemini": { "timeoutMs": 300000 } },
+  "providers": {
+    "gemini": { "timeoutMs": 300000 },
+    "OVHcloud AI Endpoints": { "adapter": "openai-compatible", "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+                               "authType": "none", "timeoutMs": 300000, "notes": "No key. 2 requests a minute for each model." }
+  },
   "models": {
     "writer": { "provider": "anthropic", "model": "claude-sonnet-5-5", "displayName": "Claude Sonnet 5.5",
                 "capabilities": ["text", "tool_calling", "vision"], "contextWindow": 1000000,
                 "inputPricePerMTok": 2, "outputPricePerMTok": 10 },
-    "spare":  { "provider": "gemini", "model": "gemini-4-hydrogen" },
+    "spare":  { "provider": "OVHcloud AI Endpoints", "model": "gpt-oss-120b", "inputPricePerMTok": 0, "outputPricePerMTok": 0 },
+    "slow":   { "provider": "OVHcloud AI Endpoints", "model": "Meta-Llama-3_3-70B-Instruct", "enabled": false },
     "pictures": { "provider": "gemini", "model": "gemini-nano-banana-2.1", "capabilities": ["image_generation"], "pricePerImage": 0.0336 }
   },
   "agents": [
@@ -390,7 +411,8 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   "workflows": [ { "name": "Post", "description": "...", "steps": [
     { "title": "Caption", "role": "Copywriter", "objective": "...", "acceptanceCriteria": "..." },
     { "title": "Picture", "role": "Copywriter", "kind": "image", "media": { "aspectRatio": "9:16" }, "dependsOn": [1], "objective": "..." }
-  ] } ]
+  ] } ],
+  "tryRun": { "goal": "A caption for a coffee cart, and three hashtags.", "manager": "spare", "maxTasks": 3, "everyAgent": true }
 }
 ```
 
@@ -399,14 +421,17 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   one of that kind. `timeoutMs` is how long the app waits for an answer
   (1,000 to 300,000). An agent's request is answered in one piece, so a model
   that thinks before it writes needs more than the 60 seconds a new provider
-  has.
+  has. With `adapter` and `baseUrl` (and optionally `authType`, `mediaApi`,
+  `notes`) the entry also says what the provider is, under the name it is to
+  have: enough to add one that takes no key.
 - **`models`**: a name of your choice for each model, used by the agents
   below. `provider` as above, `model` as the provider names it. Optional:
   `capabilities`, `displayName`, `contextWindow`, and the prices
   `inputPricePerMTok`, `outputPricePerMTok`, `pricePerImage`,
-  `pricePerSecond`, `pricePerMChars`. Give `capabilities` where the provider's
-  list does not say what a model is: Gemini lists its Nano Banana image
-  models like chat models, and Anthropic lists names only.
+  `pricePerSecond`, `pricePerMChars`, and `enabled` (`false` switches the
+  model off). Give `capabilities` where the provider's list does not say what
+  a model is: Gemini lists its Nano Banana image models like chat models, and
+  Anthropic lists names only.
 - **`agents`**: `name`, `role`, `primary` and, optionally, `fallback` (model
   names from above), `instructions` (text, or a list of lines), `tools`,
   `maxSteps` (1 to 40), `memory`, `temperature`. The AI Manager sees the
@@ -421,8 +446,35 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   (`aspectRatio`, `durationSeconds`, `voice`, `subtitles`, `imageFrom`, ...),
   as on the Workflows page. A new project allows 12 tasks and 10 generated
   files: a workflow within that runs without changing a project's limits.
+- **`tryRun`**: what `--try-run` does. `goal`, and `manager`: the model (a
+  name from above) that plans the goal and sums the tasks up. Optional:
+  `team` (the agents that may get a task; all of them otherwise), `maxTasks`
+  (3 unless given), and `everyAgent` (a second project with one task for
+  each agent of the file).
 
 What [`workforce.json`](workforce.json) holds is said in its `about`.
+
+### Providers that cost nothing
+
+The committed file uses three providers that take no key, and no model that
+is billed:
+
+| Provider | What it has | What it allows from one address |
+| --- | --- | --- |
+| [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | About 200 requests an hour, all models together |
+| [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
+| [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and a daily allowance |
+
+That is little: an agent with tools makes several requests for one task. The
+app waits and asks again when a provider answers "too many requests" (see
+`PROVIDER_RETRIES` in the main README), and an agent whose first model does
+not answer goes on with its second, so a project gets done, slowly. The
+providers list far more models than they give away: one word from each
+(`--test`) is how the ones in the file were found. Kilo Gateway and LLM7 may
+log what is sent to their free models and use it to improve models: nothing
+confidential belongs there. A free key of a provider (Google AI Studio, Groq,
+Cerebras, Mistral, OpenRouter) allows more than no key; such a provider is
+added on the Providers page, and its models can then be named in the file.
 
 ## Tidying up: `disk-report.sh`
 

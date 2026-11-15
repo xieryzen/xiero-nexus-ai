@@ -34,6 +34,9 @@
 #   --test-all           The same, for every chat model that is in the app.
 #   --test-media         Afterwards, one picture and one spoken sentence from the
 #                        image and speech models of the file, joined, then deleted.
+#   --try-run            Afterwards, a small project on the models of the file,
+#                        and a task for each agent where the file asks for it;
+#                        deleted again when it has ended.
 #   --inventory-only     Say what the app has, and stop.
 #
 # The password is read from the app's .env by workforce.py, or taken from
@@ -63,9 +66,9 @@ while [ "$#" -gt 0 ]; do
     --volumes) need_value "$@"; VOLUMES="$2"; shift 2 ;;
     --wings-config) need_value "$@"; WINGS_CONFIG="$2"; shift 2 ;;
     --file | --user | --only) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
-    --dry-run | --yes | --update | --test | --test-all | --test-media | --keep-test-media | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --dry-run | --yes | --update | --test | --test-all | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
     -h | --help)
-      sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;
