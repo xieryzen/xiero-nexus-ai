@@ -64,11 +64,9 @@ jobs:
       # Let's Encrypt are stand-ins. As a plain user and as root.
       - name: A site in nginx
         run: |
-          set -o pipefail
           command -v nginx > /dev/null 2>&1 || [ -x /usr/sbin/nginx ] || sudo apt-get install -y --no-install-recommends nginx
-          bash scripts/host/test/site.sh | tee "${RUNNER_TEMP}/site-test.txt"
-          echo "::notice title=A site in nginx::$(tail -n 1 "${RUNNER_TEMP}/site-test.txt")"
-          sudo -n env "PATH=$PATH" bash scripts/host/test/site.sh
+          bash scripts/host/test/site.sh
+          sudo -n env "PATH=$PATH" GITHUB_ACTIONS=true bash scripts/host/test/site.sh
 
   e2e:
     name: End-to-end checks

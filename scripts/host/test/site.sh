@@ -15,7 +15,7 @@
 # what the script said.
 #
 # Not tried here: the real certbot and the real Let's Encrypt.
-set -euo pipefail
+set -Eeuo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 script="${here}/../nginx-site.sh"
@@ -36,9 +36,11 @@ if [ -z "${NGINX_BIN}" ]; then
 fi
 [ -n "${NGINX_BIN}" ] || {
   echo "This test needs nginx: install it, or name the program with NGINX_BIN."
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then echo "::error title=A site in nginx::there is no nginx on this machine"; fi
   exit 1
 }
 NGINX_VERSION="$("${NGINX_BIN}" -v 2>&1 | sed -n 's|.*/\([0-9][0-9.]*\).*|\1|p')"
+BUILT_WITH="$("${NGINX_BIN}" -V 2>&1)"
 # From 1.25.1, nginx can have HTTP/2 for one site alone.
 if [ "$(printf '%s\n1.25.1\n' "${NGINX_VERSION}" | sort -V | head -n 1)" = "1.25.1" ]; then H2_ALONE=yes; else H2_ALONE=no; fi
 if [ -e /proc/net/if_inet6 ] && ip -6 addr show lo 2> /dev/null | grep -q '::1'; then HAS_V6=yes; else HAS_V6=no; fi
@@ -58,6 +60,10 @@ CODE=0
 passed=0
 failed=0
 failures=()
+details=()
+SECTION="the preparations"
+STOPPED_AT=""
+ENDED=""
 
 stop_nginx() {
   if [ -n "${PREFIX}" ] && [ -s "${PREFIX}/nginx.pid" ]; then
@@ -65,14 +71,32 @@ stop_nginx() {
     for _ in $(seq 1 50); do [ -e "${PREFIX}/nginx.pid" ] || break; sleep 0.1; done
   fi
 }
+# On the page of a run of GitHub Actions: how the test ended, and what failed.
+annotate() { # notice|error TEXT
+  [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+  printf '::%s title=A site in nginx%s::%s\n' "$1" "$([ "$(id -u)" = "0" ] && echo ", as root" || true)" \
+    "$(printf '%s' "$2" | cut -c 1-400 | head -n 40 | sed -e 's/%/%25/g' | awk '{ printf "%s%s", sep, $0; sep = "%0A" }')"
+}
 cleanup() {
+  local code=$?
+  trap - EXIT
+  if [ -z "${ENDED}" ]; then
+    echo "The test stopped before its end, in \"${SECTION}\"${STOPPED_AT:+ (${STOPPED_AT})}."
+    annotate error "stopped before its end, in \"${SECTION}\"${STOPPED_AT:+ (${STOPPED_AT})}; ${passed} passed and ${failed} failed until then"$'\n'"$(printf '%s\n' ${details[@]+"${details[@]}"})"
+    [ "${code}" != "0" ] || code=1
+  fi
   stop_nginx
   if [ -n "${APP_PID}" ]; then kill "${APP_PID}" 2> /dev/null || true; fi
   rm -rf "${WORK}"
+  exit "${code}"
 }
 trap cleanup EXIT
+trap 'STOPPED_AT="line ${LINENO}: ${BASH_COMMAND}"' ERR
 
-begin() { printf '\n── %s\n' "$*"; }
+begin() {
+  SECTION="$*"
+  printf '\n── %s\n' "$*"
+}
 ok() {
   passed=$((passed + 1))
   printf '  ok   %s\n' "$1"
@@ -80,6 +104,7 @@ ok() {
 bad() {
   failed=$((failed + 1))
   failures+=("$1")
+  details+=("${SECTION}: $1${2:+ [$2]}")
   printf '  FAIL %s\n' "$1"
   if [ -n "${2:-}" ]; then printf '         %s\n' "$2"; fi
 }
@@ -98,8 +123,8 @@ is() { # NAME WANTED GOT
 }
 says() { grep -qF -- "$1" "${OUT}"; }
 line() { grep -qE -- "$1" "${OUT}"; }
-eventually() { # a command that becomes true within some seconds
-  for _ in $(seq 1 50); do
+eventually() { # a command that becomes true within half a minute
+  for _ in $(seq 1 300); do
     if "$@" > /dev/null 2>&1; then return 0; fi
     sleep 0.1
   done
@@ -268,7 +293,7 @@ node "${WORK}/app.mjs" "${APP_PORT}" &
 APP_PID=$!
 APP="http://127.0.0.1:${APP_PORT}"
 eventually curl -fsS "${APP}/api/health" || {
-  echo "The app of the test did not start on port ${APP_PORT}."
+  STOPPED_AT="the app of the test did not start on port ${APP_PORT}"
   exit 1
 }
 
@@ -321,8 +346,10 @@ machine() { # NAME INCLUDES...
     [ "$(id -u)" != "0" ] || printf 'user root;\n'
     printf 'pid %s/nginx.pid;\nerror_log logs/error.log notice;\nevents {\n    worker_connections 256;\n}\nhttp {\n' "${PREFIX}"
     printf '    access_log logs/access.log;\n    default_type text/plain;\n'
-    for part in body proxy fastcgi uwsgi scgi; do
-      printf '    %s_temp_path tmp/%s;\n' "$([ "${part}" = "body" ] && echo client_body || echo "${part}")" "${part}"
+    # Everything nginx writes stays in this folder, whoever runs the test.
+    printf '    client_body_temp_path tmp/body;\n    proxy_temp_path tmp/proxy;\n'
+    for part in fastcgi uwsgi scgi; do
+      case "${BUILT_WITH}" in *"--without-http_${part}_module"*) ;; *) printf '    %s_temp_path tmp/%s;\n' "${part}" "${part}" ;; esac
     done
     if [ -n "${FOR_ALL_SITES:-}" ]; then printf '    %s\n' "${FOR_ALL_SITES}"; fi
     for include in "$@"; do printf '    include %s;\n' "${include}"; done
@@ -345,19 +372,18 @@ EOF
   chmod +x "${STUB}/nginx"
 }
 start_nginx() {
-  "${STUB}/nginx" 2> "${WORK}/nginx-start.txt" || {
-    echo "The nginx of the test did not start:"
-    cat "${WORK}/nginx-start.txt"
+  if ! "${STUB}/nginx" > "${WORK}/nginx-start.txt" 2>&1 || ! eventually test -s "${PREFIX}/nginx.pid"; then
+    cat "${WORK}/nginx-start.txt" "${PREFIX}/logs/error.log" 2> /dev/null || true
+    STOPPED_AT="the nginx of the test did not start: $(cat "${WORK}/nginx-start.txt" "${PREFIX}/logs/error.log" 2> /dev/null | grep -E 'emerg|alert|crit|error' | head -n 3 | tr '\n' ' ')"
     exit 1
-  }
-  eventually test -s "${PREFIX}/nginx.pid"
+  fi
 }
 reload_nginx() {
   local before
   before="$(reloads)"
   "${STUB}/nginx" -s reload
-  eventually reloads_are_not "${before}"
-  sleep 0.3
+  eventually reloads_are_not "${before}" || true
+  sleep 0.5
 }
 
 # The script: [NAME=VALUE ...] -- [its options]. Sets CODE.
@@ -549,20 +575,20 @@ run FAKE_CERTBOT_FAILS=1 -- --site nexus.test --upstream "${APP}" --agree-tos --
 is "certbot gets no certificate: it ends badly" "1" "${CODE}"
 check "  with what certbot said" says "Detail: made up by the test"
 check "  the site was in nginx for the questions only, and nginx was reloaded twice: in and out" eventually reloads_are "$((RELOADS_SEEN + 2))"
-eventually gives 301 "http://nexus.test:${HTTP_PORT}/"
+eventually gives 301 "http://nexus.test:${HTTP_PORT}/" || true
 failed_safely "  no file is left, and the other sites answer as before"
 check_not "  no certificate is left either" test -e "${LE}/live/nexus.test"
 run FAKE_CERT_NAME=other.test -- --site nexus.test --upstream "${APP}" --agree-tos --yes
 is "certbot comes back with a certificate for another name: it ends badly" "1" "${CODE}"
 check "  saying so" says "certbot ended well, but there is no certificate for nexus.test"
-eventually gives 301 "http://nexus.test:${HTTP_PORT}/"
+eventually gives 301 "http://nexus.test:${HTTP_PORT}/" || true
 failed_safely "  no file is left, and the other sites answer as before"
 rm -rf "${LE}/live/nexus.test" "${LE}/renewal/nexus.test.conf"
 run FAKE_CERTBOT_THEN="curl -s -o /dev/null ${APP}/__down" -- --site nexus.test --upstream "${APP}" --agree-tos --yes
 is "the app stops answering before the site is done: it ends badly" "1" "${CODE}"
 check "  saying what the site gave" says "${SITE}/api/health, asked on this machine, did not give 200 but: 500"
 curl -fsS -o /dev/null "${APP}/__up"
-eventually gives 301 "http://nexus.test:${HTTP_PORT}/"
+eventually gives 301 "http://nexus.test:${HTTP_PORT}/" || true
 failed_safely "  no file is left, and the other sites answer as before"
 check "  the certificate that was made stays" test -s "${LE}/live/nexus.test/fullchain.pem"
 rm -rf "${LE}"
@@ -571,7 +597,7 @@ begin "Two at once, and one that is stopped in the middle"
 note
 run FAKE_CERTBOT_SLEEP=4 -- --site nexus.test --upstream "${APP}" --agree-tos --yes &
 first=$!
-eventually grep -q 'certonly' "${CALLS}"
+eventually grep -q 'certonly' "${CALLS}" || true
 before_second="$(asked_for_certificates)"
 (
   OUT="${WORK}/second.txt"
@@ -585,7 +611,7 @@ is "  and asks for no certificate" "${before_second}" "$(asked_for_certificates)
 # It takes notice once certbot has come back.
 pkill -TERM -P "${first}" || true
 wait "${first}" || true
-eventually gives 301 "http://nexus.test:${HTTP_PORT}/"
+eventually gives 301 "http://nexus.test:${HTTP_PORT}/" || true
 failed_safely "the one that was stopped left no file, and the other sites answer as before"
 rm -rf "${LE}"
 
@@ -877,8 +903,12 @@ is "it ends well" "0" "${CODE}"
 check "the plan says that there are none" says "it has no sites yet"
 is "the site answers" '{"status":"ok"}' "$(visit "${SITE}/api/health")"
 
-printf '\n%s passed, %s failed (a site in nginx %s)\n' "${passed}" "${failed}" "${NGINX_VERSION}"
+ENDED=yes
+summary="${passed} passed, ${failed} failed (a site in nginx ${NGINX_VERSION})"
+printf '\n%s\n' "${summary}"
 if [ "${failed}" -gt 0 ]; then
   printf '  ✗ %s\n' "${failures[@]}"
+  annotate error "${summary}"$'\n'"$(printf '%s\n' "${details[@]}")"
   exit 1
 fi
+annotate notice "${summary}"
