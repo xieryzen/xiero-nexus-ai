@@ -38,17 +38,35 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
   server's files, what that server runs when it starts, and how the site's
   address is answered on the machine, without showing a setting's value.
   With `--try-image` it says what the server's image holds.
+- **The public address**, `scripts/host/nginx-site.sh`: a site in the node's
+  nginx for a name, with a certificate from Let's Encrypt (certbot), passed
+  on to the port the panel gave the server. It adds one file and leaves the
+  other sites as they are: it changes no file it did not write, reloads
+  nginx only with a configuration nginx accepts without a new kind of
+  warning, listens the way the sites that are there do, does not become the
+  site for names nginx does not know, and takes its file out again when a
+  step fails. The workflow and `over-ssh.sh` have the actions `site-plan`
+  and `site` for it, and after `site` the runner asks the site from the
+  outside with the certificate checked.
 - CI runs these against an SSH server on the runner itself, as a plain user
-  with a key and as root with a password and through sudo, and installs each
+  with a key and as root with a password and through sudo, installs each
   bundle on a made-up Pterodactyl host, started through `ts-node` the way the
-  common Node.js egg starts it. No test signs in to a real node.
+  common Node.js egg starts it, and sets a site up in a real nginx on the
+  runner, next to other sites, with stand-ins for certbot and Let's Encrypt.
+  No test signs in to a real node.
 
 ### Notes
 
 - The host scripts were used on one real node on 2026-11-15: an
-  installation, the check, the disk report, and one upgrade that installed
-  the same version again. Going back by itself after a failed start has
-  still only run against the stand-in for Wings.
+  installation, the check, the disk report, one upgrade that installed the
+  same version again, and the site in nginx with a certificate from Let's
+  Encrypt, which the runner then saw answer from the outside. Going back by
+  itself after a failed start has still only run against the stand-in for
+  Wings, and taking a site out of nginx again after a failed step only in
+  the test.
+- When the site does not answer from the outside after an upgrade, the
+  workflow's warning now says what was in the way (the name is not known, no
+  connection, a certificate that is not accepted).
 
 ## [1.5.0] - 2026-11-15
 

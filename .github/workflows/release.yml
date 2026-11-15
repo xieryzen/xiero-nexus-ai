@@ -58,6 +58,15 @@ jobs:
           command -v sshd > /dev/null 2>&1 || [ -x /usr/sbin/sshd ] || sudo apt-get install -y --no-install-recommends openssh-server
           REQUIRE_SSHD=1 bash scripts/host/test/over-ssh.sh
           sudo -n env "PATH=$PATH" REQUIRE_SSHD=1 bash scripts/host/test/over-ssh.sh
+      # The script that gives the app its public address runs against a real
+      # nginx: the runner's own program, started for the test in a temporary
+      # folder and on ports of its own, with other sites in it. certbot and
+      # Let's Encrypt are stand-ins. As a plain user and as root.
+      - name: A site in nginx
+        run: |
+          command -v nginx > /dev/null 2>&1 || [ -x /usr/sbin/nginx ] || sudo apt-get install -y --no-install-recommends nginx
+          bash scripts/host/test/site.sh
+          sudo -n env "PATH=$PATH" GITHUB_ACTIONS=true bash scripts/host/test/site.sh
 
   e2e:
     name: End-to-end checks

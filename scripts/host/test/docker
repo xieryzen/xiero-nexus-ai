@@ -26,6 +26,12 @@ case "${1:-}" in
           echo "${FAKE_IMAGE:-ghcr.io/ptero-eggs/yolks:nodejs_22}"
           exit 0
           ;;
+        *NetworkSettings.Ports*)
+          # The ports of the machine that are passed on to the server, when a test says which.
+          [ -n "${FAKE_DOCKER_PORTS:-}" ] || exit 1
+          printf '%s \n' "${FAKE_DOCKER_PORTS}"
+          exit 0
+          ;;
         *Config.Env*)
           printf '%s\n' \
             'STARTUP=if [[ -d .git ]] && [[ {{AUTO_UPDATE}} == "1" ]]; then git pull; fi; if [ -f /home/container/package.json ]; then /usr/local/bin/npm install; fi; if [[ "${MAIN_FILE}" == "*.js" ]]; then /usr/local/bin/node "/home/container/${MAIN_FILE}" ${NODE_ARGS}; else /usr/local/bin/ts-node --esm "/home/container/${MAIN_FILE}" ${NODE_ARGS} --as ${GIT_PASSWORD}; fi' \
@@ -35,7 +41,7 @@ case "${1:-}" in
             'GIT_PASSWORD=a-password-that-must-stay-hidden' \
             'ACCESS_TOKEN=a-token-that-must-stay-hidden' \
             'P_SERVER_UUID=0a11ce00-1111-4222-8333-444455556666' \
-            'SERVER_PORT=25565' \
+            "SERVER_PORT=${FAKE_SERVER_PORT:-25565}" \
             "NODE_VERSION=${FAKE_NODE_VERSION:-$(node -p 'process.versions.node' 2> /dev/null || echo 22.0.0)}" \
             ''
           exit 0

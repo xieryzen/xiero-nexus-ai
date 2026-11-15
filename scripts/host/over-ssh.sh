@@ -14,6 +14,10 @@
 #   install       the first installation on a server that has no bundle yet
 #                 (pterodactyl-install.sh --yes).
 #   disk-report   what takes the space (disk-report.sh). Changes nothing.
+#   site-plan     what giving the app its public address would do
+#                 (nginx-site.sh --dry-run). Changes nothing.
+#   site          the public address: a site in the node's nginx with a
+#                 certificate from Let's Encrypt (nginx-site.sh --yes).
 #   last-log      what the last run on the node said and how it ended.
 #
 # Anything after "--" is given to the host script as it is:
@@ -68,7 +72,7 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -92,12 +96,13 @@ case "${ACTION}" in
   plan | upgrade) REMOTE_SCRIPT="pterodactyl-upgrade.sh" ;;
   install-plan | install) REMOTE_SCRIPT="pterodactyl-install.sh" ;;
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
+  site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
   last-log) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, last-log." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, last-log." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -122,6 +127,11 @@ case "${ACTION}" in
     [ -z "${APP_URL}" ] || ARGS+=(--app-url "${APP_URL}")
     if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
     if [ "${ACTION}" = "install-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  site-plan | site)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    [ -z "${APP_URL}" ] || ARGS+=(--site "${APP_URL}")
+    if [ "${ACTION}" = "site-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
     ;;
 esac
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})
@@ -308,7 +318,7 @@ find "${dir}" -maxdepth 1 -name 'run.*' -mmin +1440 -exec rm -rf {} + 2> /dev/nu
 run="$(mktemp -d "${dir}/run.XXXXXX")"
 if ! base64 -d << 'PAYLOAD' | tar -xzf - -C "${run}"; then
 REMOTE
-  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh | base64
+  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh | base64
   cat << 'REMOTE'
 PAYLOAD
   echo "error: the scripts did not arrive whole on the node."

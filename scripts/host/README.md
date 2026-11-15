@@ -8,24 +8,26 @@ not part of a release bundle and the app never runs them.
 |---|---|
 | [`pterodactyl-install.sh`](pterodactyl-install.sh) | Put the app on a server that does not have it yet: the bundle, its `.env`, and the file the server starts. |
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
+| [`nginx-site.sh`](nginx-site.sh) | Give the app its public address: a site in the node's nginx with a certificate from Let's Encrypt, without touching the other sites. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
-| [`over-ssh.sh`](over-ssh.sh) | Run one of the three on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
+| [`over-ssh.sh`](over-ssh.sh) | Run one of them on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
 
 All of them are tested on a made-up Wings host (see [Tests](#tests)), written
 from the source of Wings 1.12; no test here talks to a real Wings. Outside
 the tests they have been used on one real node (Debian 13, Docker 29, the
-Node.js egg of ptero-eggs), in November 2026: an installation, the check, the
-disk report, and one upgrade, which installed the version that was there
-again. **Going back by itself after a new version does not come up has only
-run against the stand-in.** So do the dry run first and read the plan; the
-upgrade keeps a backup outside the server's files, and `--restore` puts it
-back.
+Node.js egg of ptero-eggs, nginx 1.26), in November 2026: an installation,
+the check, the disk report, one upgrade, which installed the version that was
+there again, and the site in nginx with its certificate. **Going back by
+itself after a new version does not come up has only run against the
+stand-in**, and so has taking a site out of nginx again after a step failed.
+So do the dry run first and read the plan; the upgrade keeps a backup outside
+the server's files, and `--restore` puts it back.
 
 Get them on the node:
 
 ```bash
-for name in pterodactyl-install.sh pterodactyl-upgrade.sh disk-report.sh node-check.sh; do
+for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh node-check.sh; do
   curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/${name}"
 done
 ```
@@ -201,6 +203,113 @@ it.
   to `xiero-tools/ffmpeg` in the server's files, where it counts towards the
   server's disk limit (80 to 170 MB, depending on the build).
 
+## The public address: `nginx-site.sh`
+
+The app listens on the port the panel gave the server. `nginx-site.sh` puts a
+name in front of it: a site in the **nginx of the node**, with a certificate
+from **Let's Encrypt**, so that `https://nexus.example.com` opens the app and
+no browser warns.
+
+```bash
+# 1. See what it would do. Nothing is changed.
+sudo bash nginx-site.sh --server 1a2b3c4d --site nexus.example.com --dry-run
+
+# 2. Do it.
+sudo bash nginx-site.sh --server 1a2b3c4d --site nexus.example.com
+```
+
+Before that: the name needs a DNS record with the node's address, and the
+node needs nginx (running) and certbot. The script installs neither. A node
+that serves the panel over HTTPS usually has both.
+
+What it does:
+
+1. Finds the port of the machine that leads to the server, and sees that the
+   app answers there.
+2. Looks at nginx: that it runs, that its configuration passes `nginx -t` as
+   it is, where it takes its sites from (`sites-enabled`, or `conf.d`), how
+   the sites that are there listen, and that none of them has this name.
+3. Sees that the name leads to this machine, shows the plan, and asks.
+4. Adds **one file** to nginx: at first the site on port 80 that answers
+   nothing but Let's Encrypt's questions. Tests the configuration, reloads.
+5. Asks certbot for the certificate (`certonly --webroot`), unless a good one
+   is there already.
+6. Writes the file anew: port 80 sends everyone on to https, and https
+   passes the requests on to the app. Tests, reloads.
+7. Asks `https://<name>/api/health` on the machine, with the certificate
+   checked, and wants a 200.
+
+**The other sites of that nginx are left as they are.** That is what most of
+the script is about:
+
+- It changes no file but its own, which says so in its first line, and it
+  refuses when a file it did not write has the name or stands in its place.
+- nginx is only reloaded with a configuration that `nginx -t` accepts
+  **without a new kind of warning**.
+- The site listens the way the others do: on the same addresses, and with
+  HTTP/2 as a word of `listen` where they have it so. Where they do not, and
+  nginx is 1.25.1 or newer, HTTP/2 is switched on for this site alone
+  (`http2 on;`).
+- It must not become the site nginx shows for **names it does not know**
+  (the first one nginx reads, where none says `default_server`). When its
+  file would be read first it gets a name that is read last; when that does
+  not help, the script stops. Before and after, it asks nginx for a name no
+  site has, and what that gets must stay the same.
+- **When a step fails, the file is taken out again** (or its earlier version
+  put back) and nginx reloaded: a certificate that was not given, a name that
+  another site answers first, an app that stopped answering.
+
+certbot renews the certificate from then on, and reloads nginx when it has
+(`--deploy-hook`). The plan says what renews certificates on the machine
+(`certbot.timer`, or a cron job) and warns when nothing does; at the end the
+script looks whether certbot has noted the reload with the certificate's
+renewal settings, and whether the site still answers Let's Encrypt's
+questions now that it is passed on to the app.
+
+What the app gets from nginx: the name that was asked for (`Host`,
+`X-Forwarded-Host`), `X-Forwarded-Proto`, and the visitor's address as nginx
+saw it (`X-Forwarded-For`, `X-Real-IP`; what a visitor sends under those
+names is not passed on, since the app's audit log and rate limits go by
+them). Answers that are written bit by bit, such as a chat, are passed on as
+they come. Uploads of up to 32 MB are let through (`--max-body`).
+
+| Option | |
+|---|---|
+| `--site <name>` | The public name. An address (`https://nexus.example.com`) is understood too. |
+| `--server <id>` | The server whose app the site shows: its UUID or the first 8 characters. |
+| `--upstream <url>` | Where the app answers on this machine, instead of `--server`: `http://127.0.0.1:25565`. |
+| `--max-body <size>` | The largest upload nginx lets through. Default `32m`. |
+| `--agree-tos`, `--email <address>` | For a **new** Let's Encrypt account, when certbot has none on the machine. Making one means agreeing to [their terms](https://letsencrypt.org/repository/), so the script does not do that unasked. |
+| `--skip-dns-check` | Go on although the name, as seen from the machine, does not lead to it. |
+| `--remove` | Take the site out of nginx again. The certificate stays (`certbot delete --cert-name <name>` removes it). |
+| `--dry-run`, `--yes` | Show the plan and stop; do not ask before starting. |
+| `--volumes <dir>`, `--wings-config <file>` | Where Wings keeps server files and its configuration, when not in the usual places. |
+
+Running it again writes the file anew, for another `--max-body` say, and
+keeps the certificate.
+
+Good to know:
+
+- The port the panel gave the server is as open to the outside as it was
+  before. Where no firewall closes it, the app also answers at
+  `http://<address>:<port>`, without the certificate. Nobody stays signed in
+  that way (the session cookie is HTTPS-only unless `COOKIE_SECURE=false`),
+  but a password typed there travels unprotected. When only nginx should
+  reach the app, close that port to the outside: in the firewall (for a port
+  Docker passes on, the rule belongs in the `DOCKER-USER` chain), or with an
+  allocation on `127.0.0.1` in the panel. This script does neither.
+- It works with nginx only, and with the layouts `sites-enabled` and
+  `conf.d`. With Apache, Caddy or a tunnel in front, set the site up there
+  and pass on the same things.
+- Its test runs it against a real nginx (see [Tests](#tests)), with stand-ins
+  for certbot and Let's Encrypt. On a real node it has been used **once**
+  (November 2026: nginx 1.26 laid out the Debian way, ten other sites,
+  certbot 4.0 with an account, `certbot.timer`): the first setup, which went
+  through. Taking a file out again after a failed step, a second run,
+  `--remove` and a new account have only happened in the test, and a renewal
+  by certbot's own timer has not happened anywhere yet: the first one is due
+  a month before the certificate ends.
+
 ## Tidying up: `disk-report.sh`
 
 ```bash
@@ -275,6 +384,10 @@ bash scripts/host/over-ssh.sh disk-report > report.txt
 # For a server that does not have the app yet:
 bash scripts/host/over-ssh.sh install-plan -- --move-aside   # changes nothing
 bash scripts/host/over-ssh.sh install -- --move-aside
+
+# The public address (DEPLOY_APP_URL=https://nexus.example.com):
+bash scripts/host/over-ssh.sh site-plan    # changes nothing
+bash scripts/host/over-ssh.sh site
 ```
 
 `check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
@@ -313,7 +426,7 @@ Options for the host script go after `--`, for example
 The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml)
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
-`install-plan`, `install`, `disk-report` or `last-log`.
+`install-plan`, `install`, `site-plan`, `site`, `disk-report` or `last-log`.
 
 It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 
@@ -325,7 +438,7 @@ It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 | `VPS_PORT` | The SSH port, when it is not 22. |
 | `VPS_HOST_KEY` | The node's host key, `ssh-ed25519 AAAA…`. Without it, each run accepts the key the node shows. |
 | `PTERODACTYL_SERVER` | The server's UUID or its first 8 characters. Can also be typed when a run is started. |
-| `APP_URL` | The public address of the site. Can also be typed. After an upgrade the runner asks `/api/health` there. |
+| `APP_URL` | The public address of the site. Can also be typed. After `upgrade`, `install` and `site` the runner asks `/api/health` there, as a visitor would: by the name, and with the certificate checked. |
 
 **The log of a workflow in a public repository can be read by anyone**, and
 what a node says about itself is nobody else's business. So:
@@ -370,6 +483,10 @@ bash scripts/host/test/report.sh
 # Running them from somewhere else (about a minute): starts an SSH server on
 # 127.0.0.1 for the time of the test and signs in to it.
 bash scripts/host/test/over-ssh.sh
+
+# The public address (about a minute): starts the machine's nginx program in
+# a temporary folder, on ports 8480 and 8443. NGINX_BIN names another one.
+bash scripts/host/test/site.sh
 ```
 
 `test/fake-wings.mjs` stands in for Wings and for the server's container: it
@@ -413,9 +530,29 @@ administrator, a stop that reaches the app once, `--start` of the upgrade
 script, and a server that does not come up. With `TS_NODE` it does all of
 that a second time with the server's file started through `ts-node --esm`.
 
-CI runs all four on every push: the report test, the SSH test as a plain
-user and as root, and for Node.js 20 and 22 the upgrade test from the
-released bundle of v1.4.0 to the bundle it has just built and the
+The test of `nginx-site.sh` is the one with nothing made up about nginx: it
+starts the real program with a configuration of its own, in a temporary
+folder and on ports of its own, with other sites in it the way a node with a
+panel has them, and looks at what a visitor gets. The app is a few lines of
+Node.js. certbot is a stand-in that does what certbot and Let's Encrypt do
+between them: it asks the site for a file it has put into the folder for
+that, and only then makes a certificate, signed by an authority made up for
+the test. It covers the dry run; everything the script refuses; each step
+failing, with nginx as it was afterwards, also when the script is stopped in
+the middle; two runs at once; what reaches the app (the name, https, the
+visitor's address whatever the visitor claims); an answer that arrives bit by
+bit; uploads; a second run; a certificate that ends soon; `--remove`; and for
+every case that the other sites, and a name no site has, get exactly what
+they got before: the same answer, the same certificate, the same protocol.
+It does so for nginx laid out the Debian way and with `conf.d`, for sites
+that listen on one address, with and without `default_server`, with HTTP/2
+either way, and where nginx would read the new file first. It has passed
+with nginx 1.24, 1.26, 1.28 and 1.30. **The real certbot and the real Let's
+Encrypt are not part of it.**
+
+CI runs all five on every push: the report test, the SSH test and the nginx
+test as a plain user and as root, and for Node.js 20 and 22 the upgrade test
+from the released bundle of v1.4.0 to the bundle it has just built and the
 installation test of that bundle, with `ts-node` 10.9 and TypeScript 6.0.
-That is still a made-up host and an SSH server on the runner itself: no test
-here signs in to a real node or talks to a real Wings.
+That is still a made-up host, an SSH server and an nginx on the runner
+itself: no test here signs in to a real node or talks to a real Wings.

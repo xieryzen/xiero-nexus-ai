@@ -163,6 +163,7 @@ EOF
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/pterodactyl-install.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/disk-report.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/node-check.sh"
+cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/nginx-site.sh"
 
 # An ssh that says which process it is, for the test that cuts a connection.
 REAL_SSH="$(command -v ssh)"
@@ -280,6 +281,11 @@ check "  " args_are --server 0a11ce00 --site https://site.example.com
 DEPLOY_SERVER=0a11ce00 remote disk-report || true
 check "disk-report: runs disk-report.sh with no options" said "count=0"
 check "  " said "ran=disk-report.sh"
+DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote site-plan || true
+check "site-plan: runs nginx-site.sh" said "ran=nginx-site.sh"
+check "  with the server, the site and --dry-run" args_are --server 0a11ce00 --site https://site.example.com --dry-run
+DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote site -- --max-body 64m || true
+check "site: --yes, and what came after \"--\"" args_are --server 0a11ce00 --site https://site.example.com --yes --max-body 64m
 DEPLOY_ENV=$'MY_SETTING=a value with spaces\n\nSTAND_IN_EXIT=0' remote plan || true
 check "DEPLOY_ENV reaches the script" said "MY_SETTING=[a value with spaces]"
 check "the script has nothing to read" said "stdin=0"
@@ -543,10 +549,19 @@ code=0
 workflow "{\"inputs\":{\"action\":\"upgrade\",\"app_url\":\"http://127.0.0.1:1\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "a site that does not answer afterwards: the run still ends as the upgrade did" 0 "${code}"
 check "  with a warning" logged "::warning title=The site::"
+check "  that says what was in the way" logged "(it said 000: nothing took the connection)"
 code=0
 workflow "{\"inputs\":{\"action\":\"install\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "an installation that ends well" 0 "${code}"
 check "  the site is asked afterwards too" logged "::notice title=The site::answers at /api/health"
+code=0
+workflow "{\"inputs\":{\"action\":\"site\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "giving the site its address ends well" 0 "${code}"
+check "  the site is asked afterwards too" logged "::notice title=The site::answers at /api/health"
+code=0
+workflow "{\"inputs\":{\"action\":\"site-plan\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "the plan for it ends well" 0 "${code}"
+check_not "  and does not ask the site: nothing was changed" logged "title=The site"
 code=0
 DEPLOY_ENV="STAND_IN_EXIT=3" workflow "{\"inputs\":{\"action\":\"upgrade\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "an upgrade that fails: the run fails with its code" 3 "${code}"
