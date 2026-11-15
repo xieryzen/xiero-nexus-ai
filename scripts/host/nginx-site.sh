@@ -43,6 +43,8 @@ LE_DIR="${XIERO_LETSENCRYPT_DIR:-/etc/letsencrypt}"
 WEBROOT="${XIERO_ACME_WEBROOT:-/var/www/xiero-nexus-acme}"
 # A name no site has: what it gets is what nginx shows for names it does not know.
 NO_SUCH_NAME="xiero-nexus-check.invalid"
+# How long nginx is given to take a configuration it was told to take, in seconds.
+RELOAD_WAIT="${XIERO_NGINX_RELOAD_WAIT:-30}"
 
 SERVER=""
 SITE=""
@@ -99,6 +101,9 @@ certificate from Let's Encrypt. Run as root on the machine that runs Wings.
 Environment:
   XIERO_NGINX_HTTP_PORT, XIERO_NGINX_HTTPS_PORT
                        The ports of the site, when they are not 80 and 443.
+  XIERO_NGINX_RELOAD_WAIT
+                       How many seconds nginx is given to take a configuration
+                       (default 30).
   XIERO_LETSENCRYPT_DIR  certbot's folder (default /etc/letsencrypt).
   XIERO_ACME_WEBROOT   The folder Let's Encrypt's questions are answered from
                        (default /var/www/xiero-nexus-acme).
@@ -142,6 +147,7 @@ if [ -n "${UPSTREAM}" ]; then
   [[ "${UPSTREAM}" =~ ^http://(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}$ ]] || die "--upstream is an address such as http://127.0.0.1:25565."
 fi
 [[ "${HTTP_PORT}" =~ ^[0-9]{1,5}$ ]] && [[ "${HTTPS_PORT}" =~ ^[0-9]{1,5}$ ]] || die "XIERO_NGINX_HTTP_PORT and XIERO_NGINX_HTTPS_PORT are port numbers."
+[[ "${RELOAD_WAIT}" =~ ^[0-9]{1,4}$ ]] || die "XIERO_NGINX_RELOAD_WAIT is a number of seconds."
 case "${EMAIL}" in *[[:space:]\'\"\\]*) die "--email is an e-mail address." ;; esac
 
 for tool in curl awk sed grep find mktemp date openssl sort comm readlink timeout; do
@@ -444,7 +450,7 @@ reload_nginx() {
     sleep 2
     return 0
   fi
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 $((RELOAD_WAIT * 5 + 1))); do
     left=""
     for pid in ${before}; do
       if takes_requests "${pid}"; then left="${pid}"; fi
@@ -452,7 +458,7 @@ reload_nginx() {
     [ -n "${left}" ] || return 0
     sleep 0.2
   done
-  echo "nginx was told to take the configuration, but half a minute later it still answers with the processes it had: it did not take it. Its error log says why." > "${WORK}/reload.txt"
+  echo "nginx was told to take the configuration, but ${RELOAD_WAIT} seconds later it still answers with the processes it had: it did not take it. Its error log says why." > "${WORK}/reload.txt"
   return 1
 }
 # nginx as it was before this run: the file gone again, or its earlier version back.
@@ -930,11 +936,13 @@ apply() { # WHAT, for the message
     say "Say which site is the one for unknown names: \"default_server\" on its listen lines."
     return 1
   fi
+  # From here on nginx may have the file, also when it is not seen to take it:
+  # putting things back then tells it once more.
+  RELOADED=true
   if ! reload_nginx; then
     say "nginx could not be reloaded: $(tr '\n' ' ' < "${WORK}/reload.txt" | cut -c 1-300)"
     return 1
   fi
-  RELOADED=true
 }
 # The same as before the change, for the names of other sites and of none.
 others_untouched() {
@@ -1021,7 +1029,16 @@ others_untouched || die "the site was not set up."
 PHASE="done"
 
 step "$(url_of https "") answers"
-say "The app's /api/health gives 200 there, and the certificate is accepted: it is for ${DOMAIN} and runs until $(cert_until)."
+# The certificate that was accepted is the one nginx shows. That it is the
+# one in the file is looked at too: nginx 1.27.4 and newer keep what they
+# have when a file was overwritten in place and still carries the same time.
+SHOWN="$(name_gets https "${DOMAIN}")"
+if [ -n "${SHOWN}" ] && [ "${SHOWN}" = "$(openssl x509 -noout -fingerprint -sha256 -in "${CERT}" 2> /dev/null || true)" ]; then
+  say "The app's /api/health gives 200 there, and the certificate is accepted: it is for ${DOMAIN} and runs until $(cert_until)."
+else
+  say "The app's /api/health gives 200 there, and the certificate nginx shows is accepted."
+  warn "that certificate is not the one in ${CERT}: nginx kept the one it had, as nginx 1.27.4 and newer do when a file was overwritten in place and still carries the time it had. To have nginx take the one in the file, which runs until $(cert_until):  touch ${CERT} ${KEY} && ${NGINX} -s reload"
+fi
 PLAIN="$(status_of "$(url_of http /)" --resolve "$(at_this_machine "${HTTP_PORT}")")"
 if [ "${PLAIN}" = "301" ]; then say "$(url_of http "") sends everyone on to https."; else warn "$(url_of http /) gives ${PLAIN} instead of sending on to https."; fi
 if [ ! -f "${RENEWAL_CONF}" ]; then
