@@ -1,0 +1,214 @@
+# Scripts for the machine that hosts the app
+
+Two scripts for whoever runs Xiero Nexus AI on a **Pterodactyl** server and
+has root on the machine that runs **Wings** (the node). They are run there,
+over SSH; they are not part of a release bundle and the app never runs them.
+
+| Script | What it is for |
+|---|---|
+| [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
+| [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
+
+Both were tested on a made-up Wings host (see [Tests](#tests)), written from
+the source of Wings 1.12. **Neither has been run against a real Wings yet.**
+The upgrade script is built for that: it has a dry run, asks before it
+starts, keeps a backup outside the server's files, and puts the old version
+back when the new one does not answer.
+
+Get them on the node:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/pterodactyl-upgrade.sh
+curl -fsSLO https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/disk-report.sh
+```
+
+## Upgrading: `pterodactyl-upgrade.sh`
+
+```bash
+# 1. See what it would do. Nothing is changed.
+sudo bash pterodactyl-upgrade.sh --server 1a2b3c4d --dry-run
+
+# 2. Do it.
+sudo bash pterodactyl-upgrade.sh --server 1a2b3c4d
+```
+
+`--server` takes the server's UUID or its first 8 characters, which is the
+short ID in the panel's address (`…/server/1a2b3c4d`). It can be left out when
+only one server on the machine has the app.
+
+What happens, in this order:
+
+1. It finds the server's files (`/var/lib/pterodactyl/volumes/<uuid>`, or
+   where the Wings configuration says) and the bundle installed there.
+2. It downloads the bundle of the newest stable release for the Node.js
+   version the installed bundle was built for, and checks it against the
+   release's `SHA256SUMS.txt`.
+3. It shows the plan and asks.
+4. It stops the server through Wings, the way the panel does. A server that
+   has not stopped by itself after a minute has its process ended. (Wings does
+   the same after ten minutes.)
+5. It copies the database, `.env` and the old program files to
+   `/root/xiero-nexus-backups/<uuid>/<time>-v<old version>/`, which only root
+   can read.
+6. It puts the new program files in place. **`.env`, `data/` and every file
+   that is not part of a bundle are left alone.**
+7. It starts the server and waits until `/api/health` answers.
+8. If the new version does not answer within two minutes, it shows the last
+   lines of the server's console, puts the old program files and the database
+   back, and starts the old version again.
+
+At the end it prints where the backup is and the command that goes back to
+it.
+
+### Options
+
+| Option | |
+|---|---|
+| `--version 1.5.0` | Install that version instead of the newest. |
+| `--zip <file>` | Install a bundle you already have instead of downloading one. |
+| `--app-url https://nexus.example.com` | Set `APP_URL` in the server's `.env`: the public address of the site, used in webhook links and in the links the API returns. |
+| `--set KEY=VALUE` | Set any other line of `.env`. Can be repeated. `SECRET_ENCRYPTION_KEY` cannot be changed this way. |
+| `--ffmpeg <file>` | Copy this ffmpeg program into the server's files and point `FFMPEG_PATH` at it, for a server image without ffmpeg. See below. |
+| `--with-media` | Also copy the generated images and videos to the backup. An upgrade does not change them, and copying can take long. |
+| `--backup-dir <dir>` | Keep backups somewhere else. |
+| `--restore <folder>` | Do not upgrade: put the program files and the database of that backup folder back. |
+| `--dry-run` | Show the plan and stop. |
+| `--yes` | Do not ask. |
+| `--power manual` | Do not talk to Wings. You stop the server in the panel first, and start it afterwards. |
+| `--leave-stopped` | Do not start the server afterwards. |
+| `--no-rollback` | Leave the new version in place even when it does not answer. |
+| `--check-url <url>` | Where the app answers on this machine, when that cannot be found out. |
+
+`--help` lists the rest.
+
+### Good to know
+
+- **The site is down while it runs**: a minute or so, and up to two when the
+  running version is slow to stop.
+- **Runs that are in progress are not lost** when the installed version is
+  1.5.0 or newer: the app picks them up again after the restart. A project
+  that 1.4 was running is ended with the message "The server stopped while
+  this project was running. Run it again."
+- **Going back.** `--restore <backup folder>` puts back the program files
+  and the database as they were at the time of the backup. Everything done in
+  the app after that is lost, apart from generated media files, which are not
+  touched. A version cannot simply be replaced by an older one: the database
+  of a newer version may be too new for it, which is why `--restore` puts the
+  database back as well.
+- **Backups are kept** until you delete them. Each is the size of the
+  program files (about 30 MB) plus the database.
+- **The token of the node.** To stop and start the server, the script reads
+  the node's token from `/etc/pterodactyl/config.yml` and asks Wings on the
+  same machine. The token is not printed and is not passed on a command line.
+  If the configuration names a variable instead of holding the token, run the
+  script with `WINGS_TOKEN=<the token>` in front, or use `--power manual`.
+- **When the check cannot be made.** The script asks the app at the address
+  and port the panel assigned to the server. If the running version does not
+  answer there before the upgrade either (a firewall, an unusual network
+  setup), the script says so in the plan, and afterwards it cannot tell a
+  broken version from an unreachable one: it then leaves the new version in
+  place and tells you to open the site. Name the address that does answer
+  with `--check-url`.
+- **A server that is suspended** in the panel is upgraded and left stopped:
+  Wings does not start it.
+- **ffmpeg.** Joining clips into one video needs ffmpeg inside the server's
+  container. The script says at the end whether the server's image has it;
+  the `yolks` Node.js images do. If not, download a static build
+  of ffmpeg for Linux x64, and pass the program with `--ffmpeg`: it is copied
+  to `xiero-tools/ffmpeg` in the server's files, where it counts towards the
+  server's disk limit (80 to 170 MB, depending on the build).
+
+## Tidying up: `disk-report.sh`
+
+```bash
+sudo bash disk-report.sh > report.txt
+```
+
+**It only reads.** It deletes nothing, changes nothing, writes no file of its
+own and stops no service. Measuring a large disk takes a few minutes; progress
+is shown on the terminal and the report goes to the file.
+
+The report has: how full each disk is; the largest folders; what Pterodactyl
+keeps (server files, backups, logs, the largest servers, folders of servers
+that Wings no longer has); what Docker keeps (images, stopped containers,
+volumes that nothing uses, large container logs); logs; packages; temporary
+files; home folders; the database server's files; single files of 500 MB and
+more; space held by deleted files; memory.
+
+Servers appear by the first 8 characters of their ID, never by name, and no
+password, key, token or address is printed, so the report can be shown to
+someone who helps. It does contain folder and file names of the machine:
+read it before you pass it on.
+
+### Reading it
+
+The report says what is there. What can go is a decision; these are the
+usual candidates, from harmless to "look first":
+
+| In the report | What it usually is | Clearing it |
+|---|---|---|
+| Downloaded packages | Package files that are installed already | `apt-get clean` |
+| Packages nothing needs any more | Old kernels and libraries | `apt-get autoremove --purge` (read the list it shows before you confirm) |
+| Journal | The system's own log | `journalctl --vacuum-size=200M` |
+| Large files in `/var/log` | Logs that are not rotated | Find out which program writes it; set up rotation rather than deleting once |
+| Large container logs | Console output Docker keeps for a container | For a Pterodactyl server, starting it again empties it. For another container: recreate it, and set a `max-size` log option in `/etc/docker/daemon.json` so that the log cannot grow back |
+| Images without a name, images no container uses | Old versions of server images | `docker image prune` removes the unnamed ones; with `-a` also every image no container uses, which is then downloaded again when a server needs it |
+| Stopped containers, "Others" | Containers of things that no longer run | Look at each name. `docker rm <name>` removes one |
+| Old backups | Backups of servers, kept on the node | Delete them **in the panel**, on the server's Backups page, so that the panel's list stays right |
+| Folders of servers that Wings does not have | Files of servers that were deleted while the node was offline, or of a failed transfer | **Check each ID in the panel first.** A server that is being installed, transferred or restored can look like this too |
+| Deleted files still held open | A program keeps writing to a file that was deleted | Restart that program |
+
+And what **not** to do:
+
+- **Never run `docker volume prune` or `docker system prune --volumes`** on
+  the word of the report alone. A volume that no container uses right now can
+  hold the panel's database or a site's uploads; the report lists such
+  volumes so that each can be looked at.
+- **Do not delete anything inside `/var/lib/pterodactyl/volumes/<id>` by
+  hand** for a server that exists. Those are a customer's files. Use the
+  panel's file manager, or delete the server in the panel.
+- **Do not delete files in `/var/lib/docker` by hand.** Docker keeps track of
+  them; remove things with `docker` commands.
+- **Do not delete MySQL / MariaDB files by hand**, binary logs included. Use
+  `PURGE BINARY LOGS` in the database.
+
+`REPORT_ROOT=/mnt/disk` looks at the folders of another disk instead of `/`,
+and `TOP=30` makes the lists longer.
+
+## Tests
+
+Both scripts have tests that run them on a made-up Wings host in a temporary
+folder:
+
+```bash
+# The upgrade: two real bundles, an old one and a new one (about 4 minutes).
+OLD_ZIP=old.zip NEW_ZIP=new.zip bash scripts/host/test/run.sh
+
+# The report (about half a minute).
+bash scripts/host/test/report.sh
+```
+
+`test/fake-wings.mjs` stands in for Wings and for the server's container: it
+answers the requests the scripts make the way Wings does, and "runs" a server
+by starting the bundle in its folder as a plain process. It follows Wings in
+the things that matter to the upgrade: a power request is answered at once
+and carried out later, one at a time; a server still reports "offline" while
+its start is being prepared; and a server whose process ends by itself is
+started once more. `test/docker` stands in for the `docker` command.
+
+The upgrade test covers, among others: a dry run; the upgrade with the old
+database, accounts and `.env` kept; going back to a backup; a new version
+that changes the database and then does not start; a server that does not
+stop; a restart asked for in the panel a moment before; a slow start; a
+stopped and a suspended server; a wrong token; a download that does not match
+its checksum; and, as root, who owns the files afterwards. The report test
+also checks that making the report changed no file and sent Wings and Docker
+nothing but questions.
+
+`SHOW=1` prints what the script said at each step. As root, the upgrade test
+also checks the owner of the files:
+`sudo env "PATH=$PATH" OLD_ZIP=… NEW_ZIP=… bash scripts/host/test/run.sh`.
+
+CI runs both on every push: the report test, and the upgrade test from the
+released bundle of v1.4.0 to the bundle it has just built, for Node.js 20 and
+22. That is still a made-up host: nothing here has run against a real Wings.
