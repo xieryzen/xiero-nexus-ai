@@ -5,6 +5,30 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+### Added
+
+- **Deploying from GitHub Actions.** The workflow *Deploy to a Pterodactyl
+  node*, started by hand, runs the host scripts on the node over SSH: a look
+  at the node, the plan of an upgrade, the upgrade, or the disk report. It
+  signs in with the repository's secrets `VPS_HOST`, `VPS_USER` and
+  `VPS_PASSWORD` or `VPS_SSH_KEY`. The log of a public repository can be read
+  by anyone, so what the node says is not printed there; it stays on the
+  node, and can come back sealed for the holder of a key. See
+  [scripts/host](scripts/host#from-github-actions).
+- `scripts/host/over-ssh.sh` does the same from any machine. The script it
+  starts on the node does not depend on the connection: when that is lost in
+  the middle, an upgrade still finishes or goes back by itself, and
+  `last-log` shows how it ended. The node's host key can be given, so that
+  nobody else can answer in its place.
+- `scripts/host/node-check.sh`: a read-only look at a node before an upgrade.
+  It says whether Wings and Docker are there, which servers hold the app, and
+  what is in one server's files, without showing a setting's value.
+- CI runs these against an SSH server on the runner itself, as a plain user
+  with a key and as root with a password and through sudo. No test signs in
+  to a real node.
+
 ## [1.5.0] - 2026-11-15
 
 Runs that go on in the background, tools and memory for agents, a knowledge

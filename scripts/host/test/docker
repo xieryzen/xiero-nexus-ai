@@ -10,8 +10,15 @@ case "${1:-}" in
   info)
     if [ "${2:-}" = "--format" ]; then echo "${FAKE_DOCKER_ROOT:-/var/lib/docker}"; fi
     ;;
+  version) echo "27.3.1" ;;
   inspect)
     if [ "${2:-}" = "-f" ]; then
+      case "${3}" in
+        *Config.Image*)
+          echo "${FAKE_IMAGE:-ghcr.io/parkervcp/yolks:nodejs_22}"
+          exit 0
+          ;;
+      esac
       state="$(curl -fsS "${control}/__state/${4}" 2> /dev/null)" || exit 1
       case "${3}" in
         *StartedAt*) printf '%s\n' "${state}" | sed -n 's/.*"startedAt":"\([^"]*\)".*/\1/p' ;;

@@ -9,7 +9,8 @@ name: Build and release
 #
 # No job calls a real provider or a real Pterodactyl: the end-to-end checks
 # talk to the mock provider in scripts/e2e, and the host scripts are tried on
-# a made-up Wings host (scripts/host/test).
+# a made-up Wings host and over SSH to the runner itself (scripts/host/test).
+# The workflow that does reach a real node is deploy.yml, started by hand.
 
 on:
   push:
@@ -49,6 +50,14 @@ jobs:
         run: shellcheck -x -S warning scripts/*.sh scripts/host/*.sh scripts/host/test/*.sh scripts/host/test/docker
       - name: Disk report on a made-up host
         run: bash scripts/host/test/report.sh
+      # The scripts that run the host scripts from somewhere else sign in to
+      # an SSH server on this runner: with a key as a plain user, and as root
+      # also with a password and through sudo, the way the Deploy workflow does.
+      - name: Host scripts over SSH
+        run: |
+          command -v sshd > /dev/null 2>&1 || [ -x /usr/sbin/sshd ] || sudo apt-get install -y --no-install-recommends openssh-server
+          REQUIRE_SSHD=1 bash scripts/host/test/over-ssh.sh
+          sudo -n env "PATH=$PATH" REQUIRE_SSHD=1 bash scripts/host/test/over-ssh.sh
 
   e2e:
     name: End-to-end checks

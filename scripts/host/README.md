@@ -1,19 +1,21 @@
 # Scripts for the machine that hosts the app
 
-Two scripts for whoever runs Xiero Nexus AI on a **Pterodactyl** server and
-has root on the machine that runs **Wings** (the node). They are run there,
-over SSH; they are not part of a release bundle and the app never runs them.
+Scripts for whoever runs Xiero Nexus AI on a **Pterodactyl** server and has
+root on the machine that runs **Wings** (the node). They run there; they are
+not part of a release bundle and the app never runs them.
 
 | Script | What it is for |
 |---|---|
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
+| [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
+| [`over-ssh.sh`](over-ssh.sh) | Run one of the three on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
 
-Both were tested on a made-up Wings host (see [Tests](#tests)), written from
-the source of Wings 1.12. **Neither has been run against a real Wings yet.**
-The upgrade script is built for that: it has a dry run, asks before it
-starts, keeps a backup outside the server's files, and puts the old version
-back when the new one does not answer.
+The first two were tested on a made-up Wings host (see [Tests](#tests)),
+written from the source of Wings 1.12. **Neither has been run against a real
+Wings by this repository's tests.** The upgrade script is built for that: it
+has a dry run, asks before it starts, keeps a backup outside the server's
+files, and puts the old version back when the new one does not answer.
 
 Get them on the node:
 
@@ -175,9 +177,89 @@ And what **not** to do:
 `REPORT_ROOT=/mnt/disk` looks at the folders of another disk instead of `/`,
 and `TOP=30` makes the lists longer.
 
+## From somewhere else: `over-ssh.sh`
+
+When you are not signed in to the node, `over-ssh.sh` signs in for you, sends
+the scripts of this folder along and runs one of them there:
+
+```bash
+export DEPLOY_HOST=node.example.com DEPLOY_SERVER=1a2b3c4d
+read -rs DEPLOY_PASSWORD && export DEPLOY_PASSWORD   # or DEPLOY_SSH_KEY, or your own ssh keys
+
+bash scripts/host/over-ssh.sh check        # what is on the node; changes nothing
+bash scripts/host/over-ssh.sh plan         # what an upgrade would do; changes nothing
+bash scripts/host/over-ssh.sh upgrade      # the upgrade, without asking again
+bash scripts/host/over-ssh.sh disk-report > report.txt
+```
+
+Options for the host script go after `--`, for example
+`over-ssh.sh upgrade -- --with-media`. All settings come from the environment
+(`over-ssh.sh --help` lists them), so that no password is on a command line.
+
+- **The script does not depend on the connection.** It runs on the node in a
+  session of its own. If the connection is lost in the middle, an upgrade
+  still finishes there, or goes back by itself; `over-ssh.sh last-log` shows
+  what it said and how it ended.
+- **What each run said is kept on the node**, in `~/xiero-nexus-remote/logs`
+  of the user that signed in, readable by that user only. The newest 20 are
+  kept.
+- **The node's host key.** Give it as `DEPLOY_HOST_KEY` (`ssh-ed25519 AAAA…`)
+  and nobody else can answer in the node's place. Without it, the key the
+  node shows is accepted and printed with its fingerprint, to be compared on
+  the node (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`) and set from
+  then on.
+- **Root, or sudo.** Sign in as root, or as a user who may use `sudo` without
+  a password; the scripts themselves run as root either way.
+- Signing in with a password needs OpenSSH 8.4 or newer on the machine that
+  runs `over-ssh.sh`. A key is the better choice: a password that works from
+  anywhere is worth more to whoever finds it.
+
+### From GitHub Actions
+
+The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml)
+does the same from a runner. It only starts by hand: **Actions**, the
+workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
+`disk-report` or `last-log`.
+
+It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
+
+| Secret | |
+|---|---|
+| `VPS_HOST` | Host name or address of the node. |
+| `VPS_USER` | Who to sign in as: `root` (the default), or a user with sudo without a password. |
+| `VPS_PASSWORD` or `VPS_SSH_KEY` | That user's password, or a private key. |
+| `VPS_PORT` | The SSH port, when it is not 22. |
+| `VPS_HOST_KEY` | The node's host key, `ssh-ed25519 AAAA…`. Without it, each run accepts the key the node shows. |
+| `PTERODACTYL_SERVER` | The server's UUID or its first 8 characters. Can also be typed when a run is started. |
+| `APP_URL` | The public address of the site. Can also be typed. After an upgrade the runner asks `/api/health` there. |
+
+**The log of a workflow in a public repository can be read by anyone**, and
+what a node says about itself is nobody else's business. So:
+
+- What is typed when a run is started (server, address, host key) is hidden
+  in the log, as secrets are.
+- What the node says is **not printed**, unless the repository is private or
+  `show_output` is ticked. The run's page says how the script ended; the
+  output stays on the node, in `~/xiero-nexus-remote/logs`.
+- To read it without signing in to the node, start the run with an
+  `output_key`. The output is then sealed for the holder of that key and
+  stored as an object of the repository that no branch contains:
+
+  ```bash
+  bash scripts/host/sealed-output.sh keygen ~/.xiero-deploy    # once; prints the output_key
+  bash scripts/host/sealed-output.sh read ~/.xiero-deploy/key.pem <run id>
+  ```
+
+  `key.pem` is the private key. Keep it outside the repository.
+
+Anyone who may push to the repository can start this workflow and so act as
+root on the node. Give that right to people you would give the password to. A
+key that is only used here, which you can take off the node again
+(`~/.ssh/authorized_keys`), is better than the password of root.
+
 ## Tests
 
-Both scripts have tests that run them on a made-up Wings host in a temporary
+The scripts have tests that run them on a made-up Wings host in a temporary
 folder:
 
 ```bash
@@ -186,6 +268,10 @@ OLD_ZIP=old.zip NEW_ZIP=new.zip bash scripts/host/test/run.sh
 
 # The report (about half a minute).
 bash scripts/host/test/report.sh
+
+# Running them from somewhere else (about a minute): starts an SSH server on
+# 127.0.0.1 for the time of the test and signs in to it.
+bash scripts/host/test/over-ssh.sh
 ```
 
 `test/fake-wings.mjs` stands in for Wings and for the server's container: it
@@ -209,6 +295,19 @@ nothing but questions.
 also checks the owner of the files:
 `sudo env "PATH=$PATH" OLD_ZIP=… NEW_ZIP=… bash scripts/host/test/run.sh`.
 
-CI runs both on every push: the report test, and the upgrade test from the
-released bundle of v1.4.0 to the bundle it has just built, for Node.js 20 and
-22. That is still a made-up host: nothing here has run against a real Wings.
+The test of `over-ssh.sh` mostly uses stand-ins for the host scripts that say
+what they were given: which options, which settings, nothing to read. It
+covers signing in with a key, a host key that is given, missing or wrong, the
+exit codes, where the output goes, a connection that is cut in the middle,
+the logs on the node, sealing and opening an output, and what the workflow's
+script lets into the log. `node-check.sh` and `disk-report.sh` also run for
+real over SSH, on made-up folders. As root
+(`sudo env "PATH=$PATH" bash scripts/host/test/over-ssh.sh`) it makes a user
+for the time of the test to sign in with a password, as the workflow does,
+and to run through `sudo`.
+
+CI runs all three on every push: the report test, the SSH test as a plain
+user and as root, and the upgrade test from the released bundle of v1.4.0 to
+the bundle it has just built, for Node.js 20 and 22. That is still a made-up
+host and an SSH server on the runner itself: no test here signs in to a real
+node or talks to a real Wings.

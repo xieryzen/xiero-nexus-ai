@@ -702,7 +702,11 @@ To upgrade, whoever has root on the node can use
 [`scripts/host/pterodactyl-upgrade.sh`](scripts/host): it stops the server,
 backs up the database and the program files, installs the new release, starts
 it, and goes back by itself when the new version does not answer. The same
-folder has a read-only disk report for tidying up a node.
+folder has a read-only disk report for tidying up a node, and a way to run
+both without signing in to the node yourself: `over-ssh.sh` from another
+machine, or the workflow **Deploy to a Pterodactyl node** from GitHub Actions,
+which is started by hand and signs in with secrets of the repository
+([how](scripts/host#from-somewhere-else-over-sshsh)).
 
 ## Security model
 
@@ -799,7 +803,7 @@ drizzle/                   # generated SQL migrations
 sandbox-runner/            # reference external code-execution runner (Docker)
 scripts/                   # release tooling: package, smoke-test, publish, download
 scripts/e2e/               # mock provider and end-to-end checks
-scripts/host/              # for a Pterodactyl node: upgrade script, disk report, and their tests
+scripts/host/              # for a Pterodactyl node: upgrade script, disk report, running them over SSH, and their tests
 .github/workflows/         # CI: check, end-to-end, bundle, publish releases
 tests/                     # node:test unit tests
 ```
