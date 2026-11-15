@@ -40,9 +40,9 @@ summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$*" >> "${
 
 ACTION="$(input action)"
 case "${ACTION}" in
-  check | plan | upgrade | install-plan | install | disk-report | last-log) ;;
+  check | plan | upgrade | install-plan | install | disk-report | site-plan | site | last-log) ;;
   *)
-    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, last-log."
+    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, last-log."
     exit 1
     ;;
 esac
@@ -127,18 +127,35 @@ if [ "${lines}" -gt 0 ]; then
   fi
 fi
 
-# After an upgrade or an installation: does the site answer from the outside?
+# After an upgrade, an installation, or giving the site its address: does the
+# site answer from the outside? This machine is a visitor like any other: it
+# takes the name from DNS and accepts the certificates a browser accepts.
 site_says=""
-if { [ "${ACTION}" = "upgrade" ] || [ "${ACTION}" = "install" ]; } && [ "${code}" = "0" ] && [ -n "${APP_URL}" ]; then
+if { [ "${ACTION}" = "upgrade" ] || [ "${ACTION}" = "install" ] || [ "${ACTION}" = "site" ]; } && [ "${code}" = "0" ] && [ -n "${APP_URL}" ]; then
+  why=0
   for _ in 1 2 3 4 5 6; do
-    site_says="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${APP_URL}/api/health" 2> /dev/null || true)"
+    why=0
+    site_says="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${APP_URL}/api/health" 2> /dev/null)" || why=$?
     [ "${site_says}" = "200" ] && break
     sleep "${DEPLOY_SITE_PAUSE:-5}"
   done
   if [ "${site_says}" = "200" ]; then
-    notice "The site" "answers at /api/health from the outside."
+    case "${APP_URL}" in
+      https://*) notice "The site" "answers at /api/health from the outside, with a certificate that is accepted." ;;
+      *) notice "The site" "answers at /api/health from the outside." ;;
+    esac
   else
-    printf '::warning title=The site::%s\n' "The ${ACTION} ended well on the node, but /api/health did not answer 200 from the outside (it said ${site_says:-nothing}). Look at the site and at what stands in front of it."
+    # What curl could not do, in words that do not name the site.
+    case "${why}" in
+      0) reason="" ;;
+      6) reason=": its name is not known to DNS" ;;
+      7) reason=": nothing took the connection" ;;
+      28) reason=": no answer in time" ;;
+      35) reason=": no secure connection could be made" ;;
+      51 | 60) reason=": its certificate is not accepted (it is for another name, or not from an authority browsers know)" ;;
+      *) reason=": curl ended with code ${why}" ;;
+    esac
+    printf '::warning title=The site::%s\n' "\"${ACTION}\" ended well on the node, but /api/health did not answer 200 from the outside (it said ${site_says:-nothing}${reason}). Look at the site and at what stands in front of it."
   fi
 fi
 

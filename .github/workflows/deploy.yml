@@ -11,6 +11,11 @@ name: Deploy to a Pterodactyl node
 #   install-plan  what a first installation would do; changes nothing
 #   install       the first installation, on a server that has no bundle yet
 #   disk-report   what takes the space on the node; changes nothing
+#   site-plan     what giving the app its public address would do; changes
+#                 nothing
+#   site          the public address: a site in the node's nginx for the name
+#                 in "app_url", with a certificate from Let's Encrypt. The
+#                 other sites of that nginx are left as they are.
 #   last-log      what the last run on the node said and how it ended
 #
 # Secrets (Settings, Secrets and variables, Actions):
@@ -44,7 +49,7 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, install-plan, install, disk-report, last-log]
+        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, last-log]
         default: plan
         required: true
       server:
