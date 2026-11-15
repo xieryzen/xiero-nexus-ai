@@ -272,6 +272,8 @@ if have docker; then
   if [ -z "${image}" ]; then
     row "Container" "none: the server has not been started since it was made, or Docker does not answer this user"
   else
+    built="$(docker image inspect -f '{{.Created}}' "${image}" 2> /dev/null | cut -c 1-10 || true)"
+    [ -z "${built}" ] || image="${image} (built ${built})"
     if [ "$(docker inspect -f '{{.State.Running}}' "${UUID}" 2> /dev/null || true)" = "true" ]; then
       row "Container" "running, image ${image}"
       inside="$(timeout 20 docker exec "${UUID}" sh -c 'printf "Node.js %s" "$(node -v 2> /dev/null || echo "not found")"; if command -v ffmpeg > /dev/null 2>&1; then printf ", ffmpeg installed"; else printf ", no ffmpeg"; fi; if [ -e /etc/alpine-release ]; then printf ", Alpine (the published bundles do not run on it)"; fi' 2> /dev/null || true)"
@@ -312,7 +314,7 @@ if have docker; then
       # A container of its own, for a moment: no network, none of the server's
       # files, little memory, and gone afterwards. It says what the image
       # holds, and tries what the common Node.js egg does with a main file.
-      tried="$(timeout 90 docker run --rm --pull never --network none --memory 512m --pids-limit 200 --entrypoint /bin/sh "${image}" -c '
+      tried="$(timeout 90 docker run --rm --pull never --network none --memory 512m --pids-limit 200 --entrypoint /bin/sh "${image%% *}" -c '
         echo "Node.js $(node -v 2> /dev/null || echo "not found"), npm $(npm -v 2> /dev/null || echo "not found")"
         if [ -e /etc/alpine-release ]; then echo "Alpine $(cat /etc/alpine-release)"; else echo "$(sed -n "s/^PRETTY_NAME=//p" /etc/os-release 2> /dev/null | tr -d \")"; fi
         if command -v ffmpeg > /dev/null 2>&1; then echo "$(ffmpeg -version 2> /dev/null | head -n 1 | cut -d " " -f 1-3)"; else echo "no ffmpeg"; fi

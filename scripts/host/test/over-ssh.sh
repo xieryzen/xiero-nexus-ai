@@ -160,6 +160,7 @@ if [ -n "${STAND_IN_SLEEP:-}" ]; then sleep "${STAND_IN_SLEEP}"; fi
 echo "the end"
 exit "${STAND_IN_EXIT:-0}"
 EOF
+cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/pterodactyl-install.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/disk-report.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/node-check.sh"
 
@@ -268,6 +269,11 @@ DEPLOY_VERSION=v1.5.0 remote upgrade || true
 check "upgrade: a version, with or without the v" args_are --version 1.5.0 --yes
 remote upgrade -- --with-media --set "NOTE=it's a \"test\" of \$HOME; rm -rf /" --stop-timeout 120 || true
 check "options after \"--\" arrive as they are, quotes and all" args_are --yes --with-media --set "NOTE=it's a \"test\" of \$HOME; rm -rf /" --stop-timeout 120
+DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote install-plan -- --move-aside || true
+check "install-plan: runs pterodactyl-install.sh" said "ran=pterodactyl-install.sh"
+check "  with the server, the address, --dry-run and what came after \"--\"" args_are --server 0a11ce00 --app-url https://site.example.com --dry-run --move-aside
+DEPLOY_SERVER=0a11ce00 DEPLOY_VERSION=1.5.0 remote install || true
+check "install: --yes" args_are --server 0a11ce00 --version 1.5.0 --yes
 DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote check || true
 check "check: runs node-check.sh with the server only" said "ran=node-check.sh"
 check "  " args_are --server 0a11ce00
@@ -372,12 +378,13 @@ check "names the installed version, its commit and Node.js" said "version 1.4.0,
 check "says which names .env sets" said "sets: APP_URL SECRET_ENCRYPTION_KEY"
 check_not "  and none of its values" said "never-show-this-value"
 check_not "  nor the old address" said "old.example.com"
-check "says which image the server runs in" said "ghcr.io/parkervcp/yolks:nodejs_22"
-check "says what the server runs when it starts" said "/usr/local/bin/node /home/container/{{MAIN_FILE}}"
+check "says which image the server runs in" said "ghcr.io/ptero-eggs/yolks:nodejs_22"
+check "says what the server runs when it starts" said '/usr/local/bin/ts-node --esm "/home/container/${MAIN_FILE}"'
 check "  and the settings that command names" said "MAIN_FILE=index.js"
-check_not "  without the value of one that looks like a secret" said "a-token-that-must-stay-hidden"
-check "  of the other settings only that they exist" said "also set, values not shown: P_SERVER_UUID SERVER_PORT"
-check_not "  not what they are" said "25565"
+check "  one that looks like a secret only as being set" said "GIT_PASSWORD=(set, not shown)"
+check_not "  without its value" said "a-password-that-must-stay-hidden"
+check "  of the other settings only that they exist" said "also set, values not shown: ACCESS_TOKEN P_SERVER_UUID SERVER_PORT NODE_VERSION"
+check_not "  not what they are" said "a-token-that-must-stay-hidden"
 check "says who owns the server's files" said "owned by $(id -un)"
 check "says that there are no backups yet" said "none yet"
 check "says when the releases cannot be reached" said "cannot be reached"
@@ -386,7 +393,7 @@ code=0
 DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=0b0b0b0b DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases" remote check -- "${node_options[@]}" || code=$?
 expect_exit "a server without the app: still ends well" 0 "${code}"
 check "  says that it holds no bundle" said "none: no folder here has"
-check_not "without --try-image no container is started" said "ts-node --esm"
+check_not "without --try-image no container is started" said "runs a JavaScript file"
 DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=0a11ce00 DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases"$'\n'"FAKE_DOCKER_LOG=${WORK}/docker.asked" remote check -- "${node_options[@]}" --try-image || true
 check "with --try-image: says what the image holds" said "Node.js v22.0.0, npm 10.0.0"
 check "  and whether its ts-node runs a main file" said "ts-node --esm runs a JavaScript file"
@@ -536,6 +543,10 @@ code=0
 workflow "{\"inputs\":{\"action\":\"upgrade\",\"app_url\":\"http://127.0.0.1:1\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "a site that does not answer afterwards: the run still ends as the upgrade did" 0 "${code}"
 check "  with a warning" logged "::warning title=The site::"
+code=0
+workflow "{\"inputs\":{\"action\":\"install\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "an installation that ends well" 0 "${code}"
+check "  the site is asked afterwards too" logged "::notice title=The site::answers at /api/health"
 code=0
 DEPLOY_ENV="STAND_IN_EXIT=3" workflow "{\"inputs\":{\"action\":\"upgrade\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "an upgrade that fails: the run fails with its code" 3 "${code}"

@@ -107,6 +107,13 @@ jobs:
           OLD_ZIP="${RUNNER_TEMP}/previous/${asset}" NEW_ZIP="dist/${asset}" bash scripts/host/test/run.sh
         env:
           GH_TOKEN: ${{ github.token }}
+      # The server is set up as the common Node.js egg leaves one, and started
+      # as that egg starts it: its main file through "ts-node --esm". ts-node 10
+      # does not work with TypeScript 7, so an older one is put next to it.
+      - name: First installation of this bundle on a made-up Pterodactyl host
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "${RUNNER_TEMP}/ts-node" ts-node@10.9.2 typescript@6.0.3
+          NEW_ZIP="dist/xiero-nexus-ai-linux-x64-node${{ matrix.node }}.zip" TS_NODE="${RUNNER_TEMP}/ts-node/node_modules/.bin/ts-node" bash scripts/host/test/install.sh
       - uses: actions/upload-artifact@v7
         with:
           name: bundle-node${{ matrix.node }}
