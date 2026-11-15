@@ -373,6 +373,12 @@ check "says which names .env sets" said "sets: APP_URL SECRET_ENCRYPTION_KEY"
 check_not "  and none of its values" said "never-show-this-value"
 check_not "  nor the old address" said "old.example.com"
 check "says which image the server runs in" said "ghcr.io/parkervcp/yolks:nodejs_22"
+check "says what the server runs when it starts" said "/usr/local/bin/node /home/container/{{MAIN_FILE}}"
+check "  and the settings that command names" said "MAIN_FILE=index.js"
+check_not "  without the value of one that looks like a secret" said "a-token-that-must-stay-hidden"
+check "  of the other settings only that they exist" said "also set, values not shown: P_SERVER_UUID SERVER_PORT"
+check_not "  not what they are" said "25565"
+check "says who owns the server's files" said "owned by $(id -un)"
 check "says that there are no backups yet" said "none yet"
 check "says when the releases cannot be reached" said "cannot be reached"
 check_not "names nothing of the other server's files" said "world.dat"
@@ -380,6 +386,15 @@ code=0
 DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=0b0b0b0b DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases" remote check -- "${node_options[@]}" || code=$?
 expect_exit "a server without the app: still ends well" 0 "${code}"
 check "  says that it holds no bundle" said "none: no folder here has"
+# A server that holds the app as source code, cloned and never run.
+source_server="${WORK}/host/volumes/50c0de00-1111-4222-8333-444455556666"
+mkdir -p "${source_server}/src" "${source_server}/node_modules"
+printf '{\n  "name": "xiero-nexus-ai",\n  "version": "1.3.1",\n  "private": true\n}\n' > "${source_server}/package.json"
+code=0
+DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=50c0de00 DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases" remote check -- "${node_options[@]}" || code=$?
+expect_exit "a server with the source code instead of a bundle: ends well" 0 "${code}"
+check "  says that it is source code, and of which version" said "version 1.3.1 in ${source_server}"
+check "  and that it has not run there" said "there is no database and no key to keep"
 code=0
 DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=ffffffff DEPLOY_ENV="XIERO_RELEASES_URL=http://127.0.0.1:1/releases" remote check -- "${node_options[@]}" || code=$?
 expect_exit "a server that is not there: 1" 1 "${code}"

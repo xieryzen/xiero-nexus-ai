@@ -18,6 +18,17 @@ case "${1:-}" in
           echo "${FAKE_IMAGE:-ghcr.io/parkervcp/yolks:nodejs_22}"
           exit 0
           ;;
+        *Config.Env*)
+          printf '%s\n' \
+            'STARTUP=if [[ -d .git ]] && [[ {{AUTO_UPDATE}} == "1" ]]; then git pull; fi; /usr/local/bin/node /home/container/{{MAIN_FILE}} --token ${ACCESS_TOKEN}' \
+            "MAIN_FILE=${FAKE_MAIN_FILE:-index.js}" \
+            'AUTO_UPDATE=0' \
+            'ACCESS_TOKEN=a-token-that-must-stay-hidden' \
+            'P_SERVER_UUID=0a11ce00-1111-4222-8333-444455556666' \
+            'SERVER_PORT=25565' \
+            ''
+          exit 0
+          ;;
       esac
       state="$(curl -fsS "${control}/__state/${4}" 2> /dev/null)" || exit 1
       case "${3}" in

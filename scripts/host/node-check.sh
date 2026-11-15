@@ -99,7 +99,10 @@ elif [ -e "${WINGS_CONFIG}" ]; then
 else
   row "Wings" "no configuration at ${WINGS_CONFIG}: is this the machine that runs Wings?"
 fi
-if have wings; then more "$(wings --version 2> /dev/null | head -n 1 || true)"; fi
+if have wings; then
+  wings_says="$(wings --version 2> /dev/null | head -n 1 || true)"
+  [ -z "${wings_says}" ] || more "${wings_says}"
+fi
 if have systemctl; then
   service="$(systemctl is-active wings 2> /dev/null || true)"
   [ -z "${service}" ] || more "service: ${service}"
@@ -191,7 +194,7 @@ UUID="${matches[0]}"
 VOLUME="${VOLUMES}/${UUID}"
 
 head_line "Server ${UUID}"
-row "Files" "${VOLUME} ($(human "$(size_kb "${VOLUME}")"))"
+row "Files" "${VOLUME} ($(human "$(size_kb "${VOLUME}")")), owned by $(stat -c '%U:%G (%u:%g)' "${VOLUME}" 2> /dev/null)"
 
 names=()
 for entry in "${VOLUME}"/* "${VOLUME}"/.[!.]* "${VOLUME}"/..?*; do
@@ -239,6 +242,19 @@ if [ -n "${APP_DIR}" ]; then
 elif grep -qs '"name": *"xiero-nexus-ai"' "${VOLUME}/package.json" "${VOLUME}"/*/package.json 2> /dev/null; then
   row "Bundle" "none. The app is here as source code (a package.json of xiero-nexus-ai),"
   more "which the upgrade script does not replace. See RELEASING.md, \"Install a release\"."
+  source_dir="$(dirname "$(grep -ls '"name": *"xiero-nexus-ai"' "${VOLUME}/package.json" "${VOLUME}"/*/package.json 2> /dev/null | head -n 1)")"
+  source_version="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "${source_dir}/package.json" 2> /dev/null | head -n 1)"
+  row "Source" "version ${source_version:-unknown} in ${source_dir}"
+  for name in .env data .next; do
+    if [ -e "${source_dir}/${name}" ]; then
+      more "${name} is there$([ -d "${source_dir}/${name}" ] && echo " ($(human "$(size_kb "${source_dir}/${name}")"))")"
+    else
+      more "${name} is not there"
+    fi
+  done
+  if [ ! -e "${source_dir}/data" ] && [ ! -e "${source_dir}/.env" ]; then
+    more "So it has not run here: there is no database and no key to keep."
+  fi
 else
   row "Bundle" "none: no folder here has the VERSION, start.js and server.js of a release bundle"
 fi
@@ -258,6 +274,32 @@ if have docker; then
     case "${image}" in
       *pterodactyl/yolks:nodejs_*) more "This image is built on Alpine, where the published bundles do not run. See RELEASING.md, \"On Pterodactyl\"." ;;
     esac
+    # What the server runs when it starts, as the panel gave it to Wings for
+    # this container. Of the settings the command names, those that look like
+    # a secret are not shown; of all others, only that they exist.
+    container_env="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "${UUID}" 2> /dev/null || true)"
+    startup="$(printf '%s\n' "${container_env}" | sed -n 's/^STARTUP=//p' | head -n 1)"
+    if [ -n "${startup}" ]; then
+      row "Startup" "${startup}"
+      named=" "
+      for name in $(printf '%s\n' "${startup}" | grep -oE '\{\{[A-Za-z_][A-Za-z0-9_]*\}\}|\$\{?[A-Za-z_][A-Za-z0-9_]*' | tr -d '{}$' | sort -u); do
+        printf '%s\n' "${container_env}" | grep -q "^${name}=" || continue
+        named="${named}${name} "
+        value="$(printf '%s\n' "${container_env}" | sed -n "s/^${name}=//p" | head -n 1)"
+        case "${name}" in
+          *TOKEN* | *PASS* | *SECRET* | *KEY* | *AUTH* | *CREDENTIAL*) [ -z "${value}" ] || value="(set, not shown)" ;;
+        esac
+        more "${name}=${value}"
+      done
+      others=""
+      while IFS= read -r line; do
+        name="${line%%=*}"
+        case "${name}" in "" | STARTUP) continue ;; esac
+        case "${named}" in *" ${name} "*) continue ;; esac
+        others="${others}${name} "
+      done <<< "${container_env}"
+      [ -z "${others}" ] || more "also set, values not shown: ${others% }"
+    fi
   fi
 fi
 
