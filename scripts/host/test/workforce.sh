@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Tests of workforce.py and workforce.sh, and of workforce.json itself, against
 # the app: the built app (npm run build) is started on a database of its own,
-# with the mock providers of the end-to-end tests in place of Anthropic and
-# Gemini, and the programs sign in to it the way they sign in on a node.
+# with the mock providers of the end-to-end tests in place of the real ones,
+# and the programs sign in to it the way they sign in on a node.
 #
 #   npm run build && bash scripts/host/test/workforce.sh
 #
-# The file that is checked is the committed workforce.json, with the names of
-# its models changed to the ones the mock has: every agent, team and workflow
-# of it goes through the app's own checks, and both workflows are run to the
-# end in a project with the limits a new project has.
+# The file that is checked is the committed workforce.json, with the addresses
+# of its providers changed to the mock's and the names of its models to the
+# ones the mock has: every provider, agent, team and workflow of it goes
+# through the app's own checks, both workflows are run to the end in a project
+# with the limits a new project has, and its "tryRun" is run. The mock's model
+# "chat-busy" answers "too many requests" every other time, as a free tier
+# does, and is the one that plans and sums up here: the app has to ask again.
 #
 # SHOW=1 prints what was said each time. APP_PORT, MOCK_PORT and CDN_PORT
 # choose other ports. Needs node, python3, curl; joining clips is checked
@@ -141,34 +144,42 @@ run() { # [NAME=VALUE...] -- OPTIONS
 # ── The file: the committed one, on the models of the mock ───────────────────
 
 FILE="${WORK}/workforce.json"
-python3 - "${host}/workforce.json" "${FILE}" << 'PYTHON_END'
+python3 - "${host}/workforce.json" "${FILE}" "${MOCK}" << 'PYTHON_END'
 import json, sys
 
 real = json.load(open(sys.argv[1], encoding="utf-8"))
+mock = sys.argv[3]
 models = real["models"]
 kind = lambda slot: models[slot].get("capabilities") or []
-chat = dict((slot, m) for slot, m in models.items() if m["model"].startswith("claude-") or (
-    "image_generation" not in kind(slot) and "tts" not in m["model"]))
-# Two Claude models and one Gemini model are what the mock has: the others take the place of one of these.
-stand_in = {}
-claude = [slot for slot, m in chat.items() if m["provider"] == "anthropic"]
-gemini = [slot for slot, m in chat.items() if m["provider"] == "gemini"]
+# A provider the file describes takes no key: the mock has one such gateway, and each of them is at its address.
+keyless = [name for name, p in real["providers"].items() if p.get("baseUrl")]
+for name in keyless:
+    real["providers"][name]["baseUrl"] = mock + "/free/v1"
+planner = real["tryRun"]["manager"]
 agents_use = [a[key] for a in real["agents"] for key in ("primary", "fallback") if a.get(key)]
-claude.sort(key=lambda slot: -agents_use.count(slot))
-gemini.sort(key=lambda slot: -agents_use.count(slot))
-local = {}
-for slot, name in zip(claude[:2], ["claude-mock-opus", "claude-mock-haiku"]):
-    local[slot] = dict(models[slot], model=name, displayName="Mock of " + models[slot]["model"])
-for slot in claude[2:]:
-    stand_in[slot] = claude[0]
-local[gemini[0]] = dict(models[gemini[0]], model="gemini-mock-flash")
-for slot in gemini[1:]:
-    stand_in[slot] = gemini[0]
-for slot, m in models.items():
-    if "image_generation" in kind(slot):
-        local[slot] = dict(m, model="gemini-mock-flash-image")
-    elif "tts" in m["model"]:
-        local[slot] = dict(m, model="gemini-mock-flash-preview-tts")
+local, stand_in = {}, {}
+for provider in sorted(set(m["provider"] for m in models.values())):
+    slots = [slot for slot, m in models.items() if m["provider"] == provider]
+    off = [slot for slot in slots if models[slot].get("enabled") is False]
+    image = [slot for slot in slots if slot not in off and "image_generation" in kind(slot)]
+    speech = [slot for slot in slots if slot not in off and ("speech_generation" in kind(slot) or "tts" in models[slot]["model"])]
+    chat = [slot for slot in slots if slot not in off + image + speech]
+    chat.sort(key=lambda slot: -agents_use.count(slot))
+    free = provider in keyless
+    for slot in off:
+        local[slot] = dict(models[slot], model="chat-slow" if free else "gemini-mock-pro")
+    for slot in image:
+        local[slot] = dict(models[slot], model="img-ok" if free else "gemini-mock-flash-image")
+    for slot in speech:
+        local[slot] = dict(models[slot], model="tts-1" if free else "gemini-mock-flash-preview-tts")
+    # The model that plans is the one that is busy every other time; the others of a provider are one model of the mock.
+    rest = [slot for slot in chat if not (free and slot == planner)]
+    if free and planner in chat:
+        local[planner] = dict(models[planner], model="chat-busy")
+    for slot in rest[:1]:
+        local[slot] = dict(models[slot], model="chat-mini" if free else "gemini-mock-flash")
+    for slot in rest[1:]:
+        stand_in[slot] = rest[0]
 real["models"] = local
 for agent in real["agents"]:
     for key in ("primary", "fallback"):
@@ -176,11 +187,24 @@ for agent in real["agents"]:
             agent[key] = stand_in.get(agent[key], agent[key])
 json.dump(real, open(sys.argv[2], "w", encoding="utf-8"), indent=1)
 PYTHON_END
-count_of() { python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))[sys.argv[2]]))' "${FILE}" "$1"; }
-AGENTS="$(count_of agents)"
-TEAMS="$(count_of teams)"
-WORKFLOWS="$(count_of workflows)"
-MODELS="$(count_of models)"
+# Numbers and names out of that file: a Python expression over "d", the file.
+of_file() {
+  python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print(eval(sys.argv[2]))' "${FILE}" "$1"
+}
+AGENTS="$(of_file 'len(d["agents"])')"
+TEAMS="$(of_file 'len(d["teams"])')"
+WORKFLOWS="$(of_file 'len(d["workflows"])')"
+# The models the program takes into the app: those of the file that are not switched off.
+MODELS="$(of_file 'sum(1 for m in d["models"].values() if m.get("enabled") is not False)')"
+KEYLESS="$(of_file 'sum(1 for p in d["providers"].values() if p.get("baseUrl"))')"
+# The model that plans, the image model and the voice of the file, each as "provider/model".
+PLANNER="$(of_file '"/".join([d["models"][d["tryRun"]["manager"]][k] for k in ("provider", "model")])')"
+IMAGE="$(of_file '["/".join([m["provider"], m["model"]]) for m in d["models"].values() if "image_generation" in (m.get("capabilities") or [])][0]')"
+VOICE="$(of_file '["/".join([m["provider"], m["model"]]) for m in d["models"].values() if "tts" in m["model"]][0]')"
+# A provider that takes no key and has a model the file switches off.
+OFF_AT="$(of_file '[m["provider"] for m in d["models"].values() if m.get("enabled") is False and m["model"] == "chat-slow"][0]')"
 
 # ── The app and the providers ────────────────────────────────────────────────
 
@@ -190,7 +214,7 @@ PIDS+=("$!")
 (cd "${root}" && exec env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DATABASE_PATH="${WORK}/nexus.db" MEDIA_PATH="${WORK}/media" \
   SECRET_ENCRYPTION_KEY="$(head -c 32 /dev/urandom | base64)" APP_URL="https://nexus.example.test" COOKIE_SECURE="" \
   ALLOW_PRIVATE_PROVIDER_HOSTS=127.0.0.1 BOOTSTRAP_ADMIN_EMAIL="boss@example.test" BOOTSTRAP_ADMIN_USERNAME="boss" BOOTSTRAP_ADMIN_PASSWORD="${PASS}" \
-  SANDBOX_URL="" SEARCH_PROVIDER="" FFMPEG_PATH="${FFMPEG:-${WORK}/no-ffmpeg-here}" RUN_CONCURRENCY="" NEXUS_WORKER="" \
+  SANDBOX_URL="" SEARCH_PROVIDER="" FFMPEG_PATH="${FFMPEG:-${WORK}/no-ffmpeg-here}" RUN_CONCURRENCY="" NEXUS_WORKER="" PROVIDER_RETRIES="" \
   node node_modules/next/dist/bin/next start -p "${APP_PORT}" -H 127.0.0.1) > "${WORK}/app.log" 2>&1 &
 PIDS+=("$!")
 for _ in $(seq 1 240); do
@@ -246,7 +270,10 @@ is "a dry run ends well" "0" "${CODE}"
 check "it says what it would add" line '\+ Agent "Manager" \(Project Manager\): add it'
 check "and that nothing was changed" says "Dry run: nothing was changed."
 check "and that no model was tried" says "no model was tried"
-check "a provider that differs is reported and left alone" line 'Provider "Claude" differs from the file .*--update changes it'
+check "a provider that differs is reported and left alone" line 'Provider "Gemini" differs from the file .*--update changes it'
+check "a provider that takes no key would be added" line '\+ Provider "Kilo Gateway": add it \(openai-compatible, .*/free/v1, no key\)'
+check "and its models taken in after that" line '^ +Model "[a-z0-9-]+": take chat-mini of Kilo Gateway into the app, once that provider is added'
+is "no provider was added" "2" "$(ask /api/providers 'len(d["providers"])')"
 is "nothing was changed" "0 agents, 0 teams, 0 workflows, 0 models" "$(counts)"
 is "no model was asked anything" "0" "$(db "select count(*) from usage_records")"
 is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
@@ -260,21 +287,27 @@ run -- --user boss --file "${FILE}" --yes --test ${MEDIA[@]+"${MEDIA[@]}"}
 is "it ends well" "0" "${CODE}"
 is "the app has what the file says" "${AGENTS} agents, ${TEAMS} teams, ${WORKFLOWS} workflows, ${MODELS} models" "$(counts)"
 check "it read that back" says "everything the file asks for is there"
-check "every chat model said its word" line 'ok +Mock of claude-[a-z0-9-]+ \("claude-[a-z]+"\) said "ok"'
+check "every chat model said its word" line 'ok +chat-mini \("[a-z0-9-]+"\) said "ok"'
+check "one that says \"too many requests\" is asked again by the app, and answers" line 'ok +chat-busy \("[a-z0-9-]+"\) said "ok" in [1-9]'
 check_not "no check failed" says "FAILED"
-is "a Claude model has the capabilities of the file" "streaming structured_output text tool_calling vision" \
-  "$(ask /api/models '" ".join(sorted(c["capability"] for m in d["models"] if m["modelId"] == "claude-mock-opus" for c in m["capabilities"]))')"
-is "and its price" "True" "$(ask /api/models 'all(m["inputPricePerMTok"] and m["outputPricePerMTok"] and m["contextWindow"] == 1000000 for m in d["models"] if m["modelId"].startswith("claude-"))')"
+is "the providers that take no key were added" "${KEYLESS} none none none" \
+  "$(ask /api/providers 'str(sum(1 for p in d["providers"] if p["authType"] == "none")) + " " + " ".join(p["authType"] for p in d["providers"] if p["name"] in ("Kilo Gateway", "OVHcloud AI Endpoints", "LLM7"))')"
+is "with the address, the wait and the notes of the file" "True" \
+  "$(ask /api/providers 'all(p["baseUrl"].endswith("/free/v1") and p["timeoutMs"] == 300000 and "no key" in (p["notes"] or "") for p in d["providers"] if p["authType"] == "none")')"
+is "and without a key" "0" "$(ask /api/providers 'sum(1 for p in d["providers"] if p["authType"] == "none" and (p.get("credential") or {}).get("configured"))')"
+is "a free model costs nothing in the app" "True" \
+  "$(ask /api/models 'all(m["inputPricePerMTok"] == 0 and m["outputPricePerMTok"] == 0 for m in d["models"] if m["modelId"] in ("chat-mini", "chat-busy"))')"
 is "the image model makes images only" "image_generation" \
-  "$(ask /api/models '" ".join(sorted(c["capability"] for m in d["models"] if m["modelId"] == "gemini-mock-flash-image" for c in m["capabilities"]))')"
-is "every agent has a model with each provider" "${AGENTS}" \
+  "$(ask /api/models '" ".join(sorted(c["capability"] for m in d["models"] if m["modelId"] == "img-ok" for c in m["capabilities"]))')"
+is "a model the file switches off is not taken in" "0" "$(ask /api/models 'sum(1 for m in d["models"] if m["modelId"] in ("chat-slow", "gemini-mock-pro"))')"
+is "the two models of every agent are with two providers" "${AGENTS}" \
   "$(api GET /api/models > "${WORK}/models.json"; api GET /api/providers > "${WORK}/providers.json"; api GET /api/agents | python3 -c 'import json, sys
 agents = json.load(sys.stdin)["agents"]
 models = dict((m["id"], m["providerId"]) for m in json.load(open(sys.argv[1]))["models"])
 print(sum(1 for a in agents if a["primaryModelRowId"] and a["fallbackModelRowId"] and models[a["primaryModelRowId"]] != models[a["fallbackModelRowId"]]))' "${WORK}/models.json")"
 is "a tool that this server cannot run is left out" "0" "$(ask /api/agents 'sum(1 for a in d["agents"] for t in a["tools"] if t in ("run_command", "web_search"))')"
 is "the first 160 characters of every agent say what it is for" "${AGENTS}" "$(ask /api/agents 'sum(1 for a in d["agents"] if len(a["instructions"].split(chr(10))[0]) <= 160 and a["instructions"].split(chr(10))[0].endswith("."))')"
-is "the providers were left as they were" "60000 60000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"])')"
+is "the providers that were there were left as they were" "60000 60000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"] if p["authType"] != "none")')"
 if [ -n "${FFMPEG}" ]; then
   check "a picture and a sentence were made and joined" says "joined into one video"
   is "and deleted again" "0" "$(ask /api/media 'len(d["assets"])')"
@@ -307,12 +340,37 @@ is "with --update it ends well" "0" "${CODE}"
 check "it says what it changes" line 'done +Agent "QA": change it to what the file says'
 check_not "the agent is as the file says again" test "$(ask /api/agents '[a["instructions"] for a in d["agents"] if a["name"] == "QA"][0]')" = "Changed by hand."
 is "under the ID it had" "${QA_ID}" "$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "QA"][0]')"
-is "the providers are waited for as long as the file says" "300000 300000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"])')"
-is "and still have their keys" "True" "$(ask /api/providers 'all(p.get("credential") for p in d["providers"])')"
+is "the provider the file names is waited for as long as the file says" "300000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"] if p["name"] == "Gemini")')"
+is "the one it does not name is as it was" "60000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"] if p["name"] == "Claude")')"
+is "and both still have their keys" "True" "$(ask /api/providers 'all(p["credential"]["configured"] for p in d["providers"] if p["authType"] != "none")')"
 is "an agent the file does not name is still there" "1" "$(ask /api/agents 'sum(1 for a in d["agents"] if a["name"] == "Intern")')"
 run -- --user boss --file "${FILE}" --yes --update --test-all
 is "every chat model of the app answers, through the providers as they are now" "0" "${CODE}"
 check_not "nothing is left to change" line '^  \+ '
+
+section "A model the file switches off, and a provider that takes a key"
+OFF_ID="$(ask /api/providers "[p['id'] for p in d['providers'] if p['name'] == '${OFF_AT}'][0]")"
+api POST "/api/providers/${OFF_ID}/models/discover" '{"import":["chat-slow"]}' > /dev/null
+is "a model the file switches off was taken into the app by hand" "True" "$(ask /api/models "[m['enabled'] for m in d['models'] if m['modelId'] == 'chat-slow' and m['providerId'] == '${OFF_ID}'][0]")"
+run -- --user boss --file "${FILE}" --yes
+is "the program ends well" "0" "${CODE}"
+check "and says that it switches the model off" line 'done +Model "[a-z0-9-]+" \(chat-slow of .*\): switch it off'
+is "it is switched off, and still there" "False" "$(ask /api/models "[m['enabled'] for m in d['models'] if m['modelId'] == 'chat-slow' and m['providerId'] == '${OFF_ID}'][0]")"
+run -- --user boss --file "${FILE}" --yes
+check "a second time there is nothing to do" says "Nothing to do: the app has everything the file asks for."
+python3 - "${FILE}" "${WORK}/keyed.json" "${MOCK}" << 'PYTHON_END'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["providers"]["Paid Gateway"] = {"adapter": "openai-compatible", "baseUrl": sys.argv[3] + "/openai/v1", "notes": "Takes a key."}
+d["models"]["paid-chat"] = {"provider": "Paid Gateway", "model": "chat-mini"}
+json.dump(d, open(sys.argv[2], "w"))
+PYTHON_END
+before="$(ask /api/providers 'len(d["providers"])')"
+run -- --user boss --file "${WORK}/keyed.json" --yes
+is "a provider that takes a key is not added: the program ends with 1" "1" "${CODE}"
+check "it says that the key is to be entered on the Providers page" line 'Paid Gateway.*Providers page'
+is "and no provider was added" "${before}" "$(ask /api/providers 'len(d["providers"])')"
+check_not "nothing of the rest was changed either" line '^  done '
 
 section "Only a part of the file"
 python3 - "${FILE}" "${WORK}/more.json" << 'PYTHON_END'
@@ -334,20 +392,24 @@ is "both are there" "$((AGENTS + 2)) agents, $((TEAMS + 1)) teams" "$(ask /api/a
 
 section "The workflows of the file, run in a project with the limits of a new one"
 project() { # WORKFLOW TEAM [image and speech models]
-  python3 - "${WORK}" "$1" "$2" "${3:-}" << 'PYTHON_END'
+  python3 - "${WORK}" "$1" "$2" "${3:-}" "${PLANNER}" "${IMAGE}" "${VOICE}" << 'PYTHON_END'
 import json, sys
-work, workflow, team, media = sys.argv[1:5]
-models = dict((m["modelId"], m["id"]) for m in json.load(open(work + "/models.json"))["models"])
+work, workflow, team, media, planner, image, voice = sys.argv[1:8]
+providers = dict((p["id"], p["name"]) for p in json.load(open(work + "/providers.json"))["providers"])
+# By "provider/model": the mock's models have the same names with every provider.
+models = dict(((providers[m["providerId"]] + "/" + m["modelId"]).lower(), m["id"]) for m in json.load(open(work + "/models.json"))["models"])
+planner, image, voice = planner.lower(), image.lower(), voice.lower()
 teams = dict((t["name"], t["id"]) for t in json.load(open(work + "/teams.json"))["teams"])
 flows = dict((w["name"], w["id"]) for w in json.load(open(work + "/workflows.json"))["workflows"])
-body = {"title": workflow, "goal": "A small coffee cart is the best start of the day.", "managerModelRowId": models["gemini-mock-flash"],
+body = {"title": workflow, "goal": "A small coffee cart is the best start of the day.", "managerModelRowId": models[planner],
         "workflowId": flows[workflow], "teamId": teams[team]}
 if media:
-    body.update(imageModelRowId=models["gemini-mock-flash-image"], speechModelRowId=models["gemini-mock-flash-preview-tts"])
+    body.update(imageModelRowId=models[image], speechModelRowId=models[voice])
 print(json.dumps(body))
 PYTHON_END
 }
 api GET /api/models > "${WORK}/models.json"
+api GET /api/providers > "${WORK}/providers.json"
 api GET /api/teams > "${WORK}/teams.json"
 api GET /api/workflows > "${WORK}/workflows.json"
 # How a run ended: the project's status, how many of its tasks succeeded, and who did each.
@@ -383,6 +445,43 @@ result="$(ended "${DELIVERY}")"
 is "the software is delivered: every step succeeds" "succeeded; 10 of 10 tasks succeeded" "${result%;*}"
 check "each step is done by the agent it names" \
   grep -qE 'Product brief: CEO, Delivery plan: Manager, UX and UI design: Designer, API and data design: Backend, Backend implementation: Backend, Frontend implementation: Frontend, Test plan and automated tests: Tester, Security review: Security Engineer, QA review: QA, Release plan: DevOps' <<< "${result}"
+
+# ── The try-run of the file ──────────────────────────────────────────────────
+
+section "The try-run of the file: a planned goal, then a task for every agent"
+left() { printf '%s projects, %s workflows' "$(ask /api/projects 'len(d["projects"])')" "$(ask /api/workflows 'len(d["workflows"])')"; }
+before="$(left)"
+errors="$(db "select count(*) from usage_records where status = 'error'")"
+run -- --user boss --file "${FILE}" --yes --try-run
+is "it ends well" "0" "${CODE}"
+check_not "nothing failed" says "FAILED"
+check "the goal is planned by the model the file names for it" line 'Planned +by chat-busy: [0-9]+ tasks?;'
+check "the tasks of the plan are done" line 'ok +1\. ".*", by .*: succeeded on '
+check "every agent of the file gets a task" line "Given +one task to each of ${AGENTS} agents"
+is "and does it on its own first model" \
+  "$(of_file '"; ".join("%s on %s (%s)" % (a["name"], d["models"][a["primary"]]["model"], d["models"][a["primary"]]["provider"]) for a in d["agents"])')" \
+  "$(sed -n '/^A small task for every agent/,$p' "${OUT}" | sed -n 's/^  ok  *[0-9]*\. \(.*\): succeeded on \([^(]*([^)]*)\).*/\1 on \2/p' | paste -sd ';' | sed 's/;/; /g')"
+is "what each of them said is shown" "${AGENTS}" "$(grep -c '^ *it said: ' "${OUT}")"
+is "both projects are summed up by the model that plans" "2" "$(grep -c 'summed up by chat-busy, beginning: ' "${OUT}")"
+is "and reviewed" "2" "$(grep -cE '^  Review +VERDICT: pass' "${OUT}")"
+is "that model said \"too many requests\" every other time, and no request failed for it" "${errors}" "$(db "select count(*) from usage_records where status = 'error'")"
+is "the projects and the workflow of the check are deleted again" "${before}" "$(left)"
+check "and the program says so" line 'Tidied +the project and its workflow were deleted again'
+run -- --user boss --file "${FILE}" --yes --try-run --keep-try-run
+is "with --keep-try-run it ends well" "0" "${CODE}"
+check "and says where they are" line 'Kept +the project "Workforce check: every agent" is on the Projects page, and its workflow on the Workflows page'
+is "they are kept" "$((${before%% *} + 2)) projects, $((WORKFLOWS + 1)) workflows" "$(left)"
+python3 - "${FILE}" "${WORK}/no-try.json" << 'PYTHON_END'
+import json, sys
+d = json.load(open(sys.argv[1]))
+del d["tryRun"]
+json.dump(d, open(sys.argv[2], "w"))
+PYTHON_END
+run -- --user boss --file "${WORK}/no-try.json" --yes --try-run
+is "a file without a try-run ends well" "0" "${CODE}"
+check "and says that there is none" says 'the file has no "tryRun"'
+run -- --user boss --file "${FILE}" --dry-run --try-run
+check "a dry run starts no project" says "no project was run"
 
 # ── On a node ────────────────────────────────────────────────────────────────
 

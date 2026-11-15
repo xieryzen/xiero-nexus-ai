@@ -37,6 +37,14 @@
 #                        ffmpeg, and delete what was made. The provider bills
 #                        the picture and the sentence.
 #   --keep-test-media    Keep what --test-media made in the library.
+#   --try-run            Afterwards, one small project ("tryRun" in the file):
+#                        its model plans the goal, the agents do the tasks, and
+#                        the project is deleted again. With "everyAgent" in the
+#                        file, a second project gives each agent of the file
+#                        one small task, so that every agent is seen at work
+#                        with its own model and tools. It takes minutes, and
+#                        each of its requests is one the provider counts.
+#   --keep-try-run       Keep what --try-run made on the Projects page.
 #   --inventory-only     Say what the app has, and stop. No file is needed.
 #
 # The password is taken from the environment (NEXUS_PASSWORD) or from the
@@ -55,6 +63,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -73,6 +82,9 @@ TOOLS = [
     "run_command", "fetch_url", "http_request", "web_search",
 ]
 KINDS = ["text", "image", "video", "audio", "render"]
+ADAPTERS = ["openai-compatible", "anthropic", "gemini", "custom-http"]
+# A gateway lists hundreds of models; the inventory names this many of a kind.
+LISTED_AT_MOST = 60
 PRICES = ["inputPricePerMTok", "outputPricePerMTok", "pricePerImage", "pricePerSecond", "pricePerMChars"]
 MODEL_FIELDS = ["displayName", "contextWindow"] + PRICES
 MEDIA_KEYS = {
@@ -176,7 +188,7 @@ def read_definition(path):
         raise Wrong("%s cannot be read: %s." % (path, err.strerror or err))
     except ValueError as err:
         raise Wrong("%s is not JSON: %s." % (path, err))
-    only_keys(raw, ["about", "providers", "models", "agents", "teams", "workflows"], "The file")
+    only_keys(raw, ["about", "providers", "models", "agents", "teams", "workflows", "tryRun"], "The file")
     for key in ("agents", "teams", "workflows"):
         if not isinstance(raw.get(key, []), list):
             raise Wrong('"%s" is a list.' % key)
@@ -187,10 +199,31 @@ def read_definition(path):
         raise Wrong('"providers" is an object: the name or the kind of a provider, and its settings.')
     for name, item in raw_providers.items():
         where = 'Provider "%s"' % name
-        only_keys(item, ["timeoutMs"], where)
-        providers[name] = {}
+        only_keys(item, ["timeoutMs", "priority", "adapter", "baseUrl", "authType", "mediaApi", "notes"], where)
+        settings = {}
         if "timeoutMs" in item:
-            providers[name]["timeoutMs"] = number_of(item["timeoutMs"], where + ": timeoutMs", 1000, 300000, True)
+            settings["timeoutMs"] = number_of(item["timeoutMs"], where + ": timeoutMs", 1000, 300000, True)
+        if "priority" in item:
+            settings["priority"] = number_of(item["priority"], where + ": priority", 1, 1000, True)
+        describes = None
+        if "adapter" in item or "baseUrl" in item:
+            # Enough to add the provider when the app does not have it.
+            if item.get("adapter") not in ADAPTERS:
+                raise Wrong("%s: adapter is one of %s." % (where, ", ".join(ADAPTERS)))
+            address = text_of(item.get("baseUrl"), where + ": baseUrl", 500, 1).rstrip("/")
+            if not re.match(r"^https?://[^\s/]+", address):
+                raise Wrong("%s: baseUrl is an address such as https://api.example.com/v1." % where)
+            if item.get("authType", "bearer") not in ("bearer", "header", "none"):
+                raise Wrong("%s: authType is bearer, header or none." % where)
+            if item.get("mediaApi", "auto") not in ("auto", "openai", "openrouter", "xai"):
+                raise Wrong("%s: mediaApi is auto, openai, openrouter or xai." % where)
+            describes = {"name": text_of(name, where + ": its name", 80, 1), "adapter": item["adapter"], "baseUrl": address,
+                         "authType": item.get("authType", "bearer")}
+            if "mediaApi" in item:
+                describes["mediaApi"] = item["mediaApi"]
+            if item.get("notes"):
+                describes["notes"] = text_of(item["notes"], where + ": notes", 1000)
+        providers[name] = {"settings": settings, "describes": describes}
 
     models = {}
     raw_models = raw.get("models", {})
@@ -198,9 +231,12 @@ def read_definition(path):
         raise Wrong('"models" is an object: a name of your choice for each model.')
     for slot, item in raw_models.items():
         where = 'Model "%s"' % slot
-        only_keys(item, ["provider", "model", "capabilities"] + MODEL_FIELDS, where)
+        only_keys(item, ["provider", "model", "capabilities", "enabled"] + MODEL_FIELDS, where)
+        if not isinstance(item.get("enabled", True), bool):
+            raise Wrong("%s: enabled is true or false." % where)
         model = {
             "slot": slot,
+            "enabled": item.get("enabled", True),
             "provider": text_of(item.get("provider"), where + ": provider", 120, 1),
             "model": text_of(item.get("model"), where + ": model", 200, 1),
             "capabilities": names_of(item.get("capabilities", []), where + ": capabilities", CAPABILITIES),
@@ -215,11 +251,15 @@ def read_definition(path):
                 model["fields"][price] = number_of(item[price], "%s: %s" % (where, price), 0, 100000)
         models[slot] = model
 
+    off = [slot for slot, model in models.items() if not model["enabled"]]
+
     def slot_of(value, where, needed):
         if value is None and not needed:
             return None
         if not isinstance(value, str) or value not in models:
             raise Wrong("%s names a model of this file: one of %s." % (where, ", ".join(models) or "(the file has none)"))
+        if value in off:
+            raise Wrong('%s names the model "%s", which the file switches off.' % (where, value))
         return value
 
     agents = []
@@ -321,7 +361,27 @@ def read_definition(path):
             "steps": steps,
         })
 
-    return {"providers": providers, "models": models, "agents": agents, "teams": teams, "workflows": workflows}
+    try_run = None
+    if "tryRun" in raw:
+        item = raw["tryRun"]
+        only_keys(item, ["goal", "manager", "team", "maxTasks", "everyAgent"], "tryRun")
+        if not isinstance(item.get("everyAgent", False), bool):
+            raise Wrong("tryRun: everyAgent is true or false.")
+        try_run = {
+            "goal": text_of(item.get("goal"), "tryRun: goal", 8000, 1),
+            "manager": text_of(item.get("manager"), "tryRun: manager", 80, 1),
+            "team": text_of(item.get("team", ""), "tryRun: team", 80),
+            "maxTasks": number_of(item.get("maxTasks", 3), "tryRun: maxTasks", 1, 40, True),
+            "everyAgent": item.get("everyAgent", False),
+        }
+        if try_run["everyAgent"] and len(agents) > 40:
+            raise Wrong("tryRun: everyAgent gives each agent a task, and a project takes 40 tasks; the file has %d agents." % len(agents))
+        if try_run["manager"] not in models or try_run["manager"] in off:
+            raise Wrong('tryRun: manager names a model of this file that is not switched off; "%s" is none.' % try_run["manager"])
+        if try_run["team"] and try_run["team"].lower() not in [t["name"].lower() for t in teams]:
+            raise Wrong('tryRun: team names a team of this file; "%s" is none.' % try_run["team"])
+
+    return {"providers": providers, "models": models, "agents": agents, "teams": teams, "workflows": workflows, "tryRun": try_run}
 
 
 def read_env_file(path):
@@ -400,6 +460,36 @@ class App:
         except ValueError:
             parsed = None
         return response.getcode(), parsed
+
+    def follow(self, path, body=None, timeout=1800):
+        """A request that is answered with what happens, as it happens (server-sent events), to its end."""
+        headers = {"accept": "text/event-stream", "user-agent": AGENT, "content-type": "application/json"}
+        if self.cookie:
+            headers["cookie"] = self.cookie
+        request = urllib.request.Request(self.url + path, data=json.dumps(body or {}).encode("utf-8"), method="POST", headers=headers)
+        try:
+            response = self.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as err:
+            try:
+                return err.code, json.loads(err.read().decode("utf-8")), []
+            except (ValueError, OSError):
+                return err.code, None, []
+        except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as err:
+            raise Stop(4, "the app does not answer at %s%s (%s)." % (self.url, path, getattr(err, "reason", err)))
+        events = []
+        try:
+            for raw in response:
+                line = raw.decode("utf-8", "replace").strip()
+                if line.startswith("data:"):
+                    try:
+                        event = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    if isinstance(event, dict):
+                        events.append(event)
+        except (socket.timeout, ConnectionError, OSError):
+            pass  # The run goes on in the app whether or not it is followed; how it ended is read from the project.
+        return response.getcode(), None, events
 
     def get(self, path, key):
         status, data = self.call("GET", path)
@@ -557,12 +647,19 @@ def show_inventory(state, me):
         row("Providers", "none. Add one on the Providers page, with its API key.")
     for provider in state.providers:
         credential = provider.get("credential")
+        stored = credential.get("configured") if isinstance(credential, dict) else bool(credential)
+        key = "takes no key" if provider.get("authType") == "none" else "a key is stored" if stored else "no key is stored"
         say("  %s (%s), %s" % (provider.get("name"), provider.get("adapter"), provider.get("baseUrl")))
-        more("%s; %s; %s%s" % (provider.get("status"), "a key is stored" if credential else "no key is stored", tested_text(provider),
+        more("%s; %s; %s%s" % (provider.get("status"), key, tested_text(provider),
                                "; waits up to %g s for an answer" % (provider["timeoutMs"] / 1000.0) if provider.get("timeoutMs") else ""))
         rows = sorted(state.models_of(provider), key=lambda m: m.get("modelId", ""))
-        width = max([len(m.get("modelId", "")) for m in rows] + [10])
-        for model in rows:
+        shown_rows = rows
+        if len(rows) > LISTED_AT_MOST:
+            # A gateway's whole list was taken in: what was used or set first.
+            used = [m for m in rows if m.get("lastTestedAt") or not m.get("enabled", True) or any(m.get(p) is not None for p in PRICES)]
+            shown_rows = (used + [m for m in rows if m not in used])[:LISTED_AT_MOST]
+        width = max([len(m.get("modelId", "")) for m in shown_rows] + [10])
+        for model in shown_rows:
             caps = model.get("capabilities") or []
             shown = " ".join(c.get("capability", "?") + ("*" if c.get("verified") else "") for c in caps) or "(no capability set)"
             more("%-*s  %-9s %s" % (width, model.get("modelId"), kind_of(caps_of(model)), shown))
@@ -571,6 +668,8 @@ def show_inventory(state, me):
                 "context %s" % ("{:,}".format(model["contextWindow"]) if model.get("contextWindow") else "not set"),
                 price_text(model), tested_text(model),
                 "" if model.get("enabled", True) else "; SWITCHED OFF"), indent=10)
+        if len(rows) > len(shown_rows):
+            more("... and %d more models of this provider are in the app: those that were tried or have a price are the ones shown." % (len(rows) - len(shown_rows)))
         if not rows:
             more("No model of this provider is in the app.")
         listing = state.listed(provider)
@@ -585,7 +684,12 @@ def show_inventory(state, me):
             for name in rest:
                 groups.setdefault((listing["suggested"].get(name) or {}).get("type", "chat"), []).append(name)
             for kind in sorted(groups):
-                more("not in the app, %s: %s" % (kind, ", ".join(groups[kind])), indent=10)
+                names = groups[kind]
+                if len(names) > LISTED_AT_MOST:
+                    # Of a long list, what costs nothing is what is looked for most.
+                    names = [n for n in names if "free" in n.lower()] + [n for n in names if "free" not in n.lower()]
+                more("not in the app, %s: %s%s" % (kind, ", ".join(names[:LISTED_AT_MOST]),
+                     "" if len(names) <= LISTED_AT_MOST else ", and %d more" % (len(names) - LISTED_AT_MOST)), indent=10)
     if state.models:
         more("(* after a capability: a request has shown that the model has it.)")
 
@@ -665,15 +769,36 @@ def api(app, method, path, body, timeout=60):
     return data
 
 
+def keyless(definition, name):
+    """What the file says of a provider that this program can add: one that takes no key."""
+    described = (definition["providers"].get(name) or {}).get("describes")
+    return described if described and described["authType"] == "none" else None
+
+
 def plan_providers(state, definition, options, plan):
-    """A provider is always there already (this program has no keys to add one with), so --update decides."""
+    """A provider that takes no key is added. One that is there is changed with --update only."""
     for name, wanted in definition["providers"].items():
         provider, problem = find_provider(state, name)
+        described = wanted["describes"]
         if not provider:
-            plan.problems.append('Provider "%s": %s' % (name, problem))
+            if not described:
+                plan.problems.append('Provider "%s": %s' % (name, problem))
+            elif described["authType"] != "none":
+                plan.notes.append('Provider "%s" is not in the app and takes a key, which this program does not have: add it on the Providers page (%s, %s).' % (
+                    name, described["adapter"], described["baseUrl"]))
+            else:
+                body = dict(described, **wanted["settings"])
+
+                def add(body=body):
+                    api(state.app, "POST", "/api/providers", body)
+
+                plan.changes.append(Change("providers", 'Provider "%s": add it (%s, %s, no key).' % (name, described["adapter"], described["baseUrl"]), add))
             continue
         label = 'provider "%s"' % provider.get("name")
-        patch = dict((key, value) for key, value in wanted.items() if provider.get(key) != value)
+        if described and (provider.get("baseUrl") or "").rstrip("/") != described["baseUrl"]:
+            plan.notes.append('%s%s has the address %s in the app and %s in the file. Left as it is.' % (
+                label[0].upper(), label[1:], provider.get("baseUrl"), described["baseUrl"]))
+        patch = dict((key, value) for key, value in wanted["settings"].items() if provider.get(key) != value)
         if not patch:
             plan.same.append(label)
             continue
@@ -681,6 +806,8 @@ def plan_providers(state, definition, options, plan):
         if "timeoutMs" in patch:
             said.append("wait up to %g s for an answer instead of %s" % (
                 patch["timeoutMs"] / 1000.0, "%g s" % (provider["timeoutMs"] / 1000.0) if provider.get("timeoutMs") else "an unknown time"))
+        if "priority" in patch:
+            said.append("priority %s instead of %s" % (patch["priority"], provider.get("priority")))
         if not options.update:
             plan.notes.append("%s%s differs from the file (the file says: %s). It is left as it is; --update changes it." % (
                 label[0].upper(), label[1:], "; ".join(said)))
@@ -698,6 +825,22 @@ def plan_models(state, definition, options, plan):
     imports = {}
     for slot, wanted in definition["models"].items():
         provider, problem = find_provider(state, wanted["provider"])
+        if not wanted["enabled"]:
+            rows = [m for m in state.models_of(provider) if m.get("modelId") == wanted["model"]] if provider else []
+            if rows and rows[0].get("enabled", True):
+                def switch_off(model=rows[0]):
+                    api(state.app, "PATCH", "/api/models/%s" % model["id"], {"enabled": False})
+
+                plan.changes.append(Change("models", 'Model "%s" (%s of %s): switch it off.' % (slot, wanted["model"], provider.get("name")), switch_off))
+            else:
+                plan.same.append('model "%s" (%s, %s)' % (slot, wanted["model"], "switched off" if rows else "not in the app"))
+            continue
+        if not provider and keyless(definition, wanted["provider"]):
+            # Its provider is added first; what the provider lists is known after that.
+            slots[slot] = {"id": None, "capabilities": list(wanted["capabilities"]) or ["text"], "label": wanted["model"], "provider": None}
+            plan.changes.append(Change("models", 'Model "%s": take %s of %s into the app, once that provider is added.' % (
+                slot, wanted["model"], wanted["provider"]), None))
+            continue
         if not provider:
             plan.problems.append('Model "%s": %s' % (slot, problem))
             continue
@@ -1008,6 +1151,8 @@ def test_chat(state, definition, slots, everything=False):
     for model_id, label in wanted:
         if model_id in done:
             continue
+        if done:
+            time.sleep(1.5)  # a free provider takes one request a second
         done.add(model_id)
         started = time.time()
         status, data = state.app.call("POST", "/api/models/%s/test" % model_id, {}, timeout=300)
@@ -1041,7 +1186,7 @@ def test_media(state, definition, slots, keep):
             tried = True
             started = time.time()
             status, data = state.app.call("POST", "/api/media/images", {
-                "modelRowId": found["id"], "aspectRatio": "9:16",
+                "modelRowId": found["id"], "aspectRatio": "1:1",
                 "prompt": "A paper lantern glowing on a wooden table at dusk, soft warm light, shallow depth of field, no text.",
             }, timeout=400)
             assets = (data or {}).get("assets") if isinstance(data, dict) else None
@@ -1080,7 +1225,7 @@ def test_media(state, definition, slots, keep):
             row("Not joined", "the server has no usable ffmpeg, so the picture and the sentence were not joined into a video.")
         else:
             status, data = state.app.call("POST", "/api/media/render", {
-                "clipIds": [picture], "narrationIds": [sentence], "aspectRatio": "9:16",
+                "clipIds": [picture], "narrationIds": [sentence], "aspectRatio": "9:16", "fit": "cover",
                 "subtitles": bool(state.render.get("subtitles")), "title": "Workforce check",
             })
             asset = (data or {}).get("asset") if isinstance(data, dict) else None
@@ -1114,6 +1259,158 @@ def test_media(state, definition, slots, keep):
     return failed
 
 
+EVERY_AGENT = (
+    "This is a check that you can work. The goal of the project: %(goal)s\n\n"
+    "Write one sentence that says what you would do first for this goal, in your role. "
+    "If you have a tool that writes files, save the sentence as %(file)s with it. "
+    "Then give the sentence as your answer, and nothing else."
+)
+
+
+def try_run(state, definition, slots, keep):
+    """Small projects done by the models of the file. Returns how many things failed."""
+    spec = definition.get("tryRun")
+    if not spec:
+        head("A small project, to see the agents at work")
+        row("Nothing", 'the file has no "tryRun": a goal, and the model that plans it.')
+        return 0
+    manager = slots.get(spec["manager"])
+    if not manager or not manager["id"]:
+        head("A small project, to see the agents at work")
+        row("FAILED", 'the model "%s", which is to plan it, is not in the app.' % spec["manager"])
+        return 1
+    head("A small project, planned by the manager model")
+    failed = try_project(state, definition, spec, manager, keep, every_agent=False)
+    if spec["everyAgent"]:
+        head("A small task for every agent of the file")
+        failed += try_project(state, definition, spec, manager, keep, every_agent=True)
+    return failed
+
+
+def try_project(state, definition, spec, manager, keep, every_agent):
+    """One project, run to its end and deleted again. Returns how many things failed."""
+    title = "Workforce check: every agent" if every_agent else "Workforce check: a planned goal"
+    body = {"title": title, "goal": spec["goal"], "managerModelRowId": manager["id"], "maxTasks": spec["maxTasks"], "maxParallel": 1}
+    workflow = None
+    if every_agent:
+        # One step for each agent of the file, by its name: no model has to plan, and every agent is seen at work.
+        names = [a["name"] for a in definition["agents"] if len(one_named(state.agents, a["name"])) == 1]
+        if not names:
+            row("FAILED", "none of the agents of the file is in the app.")
+            return 1
+        steps = [{"title": name, "role": name, "dependsOn": [], "acceptanceCriteria": "One sentence, in the answer.",
+                  "objective": EVERY_AGENT % {"goal": spec["goal"], "file": "notes/%s.md" % "".join(c if c.isalnum() else "-" for c in name.lower())}}
+                 for name in names]
+        status, data = state.app.call("POST", "/api/workflows", {
+            "name": title, "description": "Made by workforce.py --try-run, and deleted when the check ends.", "steps": steps})
+        workflow = (data or {}).get("workflow") if isinstance(data, dict) else None
+        if status != 201 or not workflow:
+            row("FAILED", "the workflow of the check could not be made%s" % (reason_of(data) or ": the app answered %s" % status))
+            return 1
+        body.update(workflowId=workflow["id"], maxTasks=len(steps), maxParallel=2)
+    elif spec["team"]:
+        teams = one_named(state.teams, spec["team"])
+        if len(teams) != 1:
+            row("FAILED", 'the app has %d teams named "%s".' % (len(teams), spec["team"]))
+            return 1
+        body["teamId"] = teams[0]["id"]
+    project = None
+    failed = 0
+    started = time.time()
+    try:
+        status, data = state.app.call("POST", "/api/projects", body)
+        project = (data or {}).get("project") if isinstance(data, dict) else None
+        if status != 201 or not project:
+            row("FAILED", "the project could not be made%s" % (reason_of(data) or ": the app answered %s" % status))
+            return 1
+        # The answer is what happens in the run, as it happens, to its end.
+        status, data, events = state.app.follow("/api/projects/%s/run" % project["id"])
+        if status != 200:
+            row("FAILED", "the run did not start%s" % (reason_of(data) or ": the app answered %s" % status))
+            return 1
+        deadline = time.time() + 600
+        while True:
+            status, data = state.app.call("GET", "/api/projects/%s" % project["id"])
+            now = (data or {}).get("project") if isinstance(data, dict) else None
+            if not now or now.get("status") not in ("queued", "planning", "running") or time.time() > deadline:
+                break
+            time.sleep(3)
+        if not now:
+            row("FAILED", "the project could not be read back: the app answered %s" % status)
+            return 1
+        agents = dict((a["id"], a.get("name", "?")) for a in state.agents)
+        tasks = now.get("tasks") or []
+        took = "%.0f s in all; %s tokens used by the tasks" % (time.time() - started, now.get("tokensUsed", "?"))
+        if every_agent:
+            row("Given", "one task to each of %s, two at a time; %s" % (plural(len(tasks), "agent"), took))
+        else:
+            row("Planned", "by %s: %s; %s" % (manager["label"], plural(len(tasks), "task"), took))
+        attempts = attempts_of(state, project["id"])
+        for task in tasks:
+            good = task.get("status") == "succeeded"
+            failed += 0 if good else 1
+            answered = [a for a in attempts or [] if a.get("seq") == task.get("seq") and a.get("status") == "ok"]
+            who = agents.get(task.get("agentId"), "no agent")
+            row("ok" if good else "FAILED", "%s. %s: %s%s%s%s" % (
+                task.get("seq"), who if every_agent else '"%s", by %s' % (short(task.get("title") or "", 70), who), task.get("status"),
+                " on %s (%s)" % (answered[-1].get("model") or "a model that is gone", answered[-1].get("provider") or "?") if good and answered else "",
+                "; %s" % plural(task.get("attempts") or 0, "attempt") if (task.get("attempts") or 0) != 1 else "",
+                "; %s, %s" % (plural(task.get("steps") or 0, "model call"), plural(task.get("toolCalls") or 0, "tool call")) if task.get("steps") else ""))
+            if not good and task.get("error"):
+                more(short(task["error"], 600), indent=15)
+            elif good and every_agent:
+                more("it said: %s" % short(task.get("artifact") or "", 200), indent=15)
+        said_by(state, attempts, events)
+        ended = now.get("status")
+        if ended in ("succeeded", "review") and tasks:
+            summary = (now.get("finalDeliverable") or "").replace("\n", " ")
+            if summary.startswith("(Synthesis step failed"):
+                failed += 1
+                row("FAILED", "the tasks were not summed up: %s did not answer. %s" % (manager["label"], short(summary, 400)))
+            else:
+                row("ok", 'the project ended as "%s"; summed up by %s, beginning: %s' % (ended, manager["label"], short(summary, 200)))
+            verdict = [line for line in (now.get("reviewNotes") or "").splitlines() if "VERDICT" in line.upper()]
+            row("Review", verdict[-1].strip() if verdict else "there was none: no model of the reviewer answered")
+        else:
+            failed += 1
+            row("FAILED", 'the project ended as "%s"%s' % (ended, ": " + short(now["error"], 600) if now.get("error") else ""))
+    finally:
+        if keep and project:
+            row("Kept", 'the project "%s" is on the Projects page%s (--keep-try-run).' % (title, ", and its workflow on the Workflows page" if workflow else ""))
+        else:
+            gone = []
+            if project:
+                gone.append(("project", state.app.call("DELETE", "/api/projects/%s" % project["id"])[0]))
+            if workflow:
+                gone.append(("workflow", state.app.call("DELETE", "/api/workflows/%s" % workflow["id"])[0]))
+            left = ["the %s (the app answered %s)" % (what, status) for what, status in gone if status != 200]
+            what = "project and its workflow were" if project and workflow else "project was" if project else "workflow was"
+            row("Tidied", "the %s deleted again." % what if not left else '"%s" could not be deleted: %s.' % (title, ", ".join(left)))
+    return failed
+
+
+def attempts_of(state, project_id):
+    """Every attempt of the run's tasks, where the app tells (1.6 and newer): a task shows only its last error."""
+    status, data = state.app.call("GET", "/api/projects/%s/attempts" % project_id)
+    return (data or {}).get("attempts") if status == 200 and isinstance(data, dict) else None
+
+
+def said_by(state, attempts, events):
+    """What the models that did not answer said."""
+    wrong = [a for a in attempts or [] if a.get("status") != "ok"]
+    if wrong:
+        row("Not answered", "%s; the task went on with the agent's next model:" % plural(len(wrong), "attempt"))
+        for a in wrong:
+            more("task %s, attempt %s: %s (%s) after %.0f s: %s" % (
+                a.get("seq"), a.get("attempt"), a.get("model") or "a model that is gone", a.get("provider") or "?",
+                (a.get("latencyMs") or 0) / 1000.0, short(a.get("error") or "no reason given", 300)), indent=15)
+    elif attempts is None:
+        row("Attempts", "this version of the app does not tell which model answered a task, or what the others said (1.6 does).")
+    for event in events:
+        if event.get("type") == "error":
+            row("Said", "the run: %s" % short(str(event.get("message") or ""), 400))
+
+
 # ── Go ───────────────────────────────────────────────────────────────────────
 
 
@@ -1134,6 +1431,8 @@ def options_from(argv):
     parser.add_argument("--only", default="")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--test-all", action="store_true")
+    parser.add_argument("--try-run", action="store_true")
+    parser.add_argument("--keep-try-run", action="store_true")
     parser.add_argument("--test-media", action="store_true")
     parser.add_argument("--keep-test-media", action="store_true")
     parser.add_argument("--inventory-only", action="store_true")
@@ -1212,7 +1511,7 @@ def run(argv):
             head("Nothing to do: the app has everything the file asks for%s." % (" in these parts" if options.only else ""))
         elif options.dry_run:
             head("Dry run: nothing was changed. %s would be made%s." % (
-                plural(len(todo), "change"), ", and no model was tried" if options.test or options.test_all or options.test_media else ""))
+                plural(len(todo), "change"), not_tried(options, ", and %s")))
             return 0
         else:
             if not options.yes:
@@ -1268,19 +1567,31 @@ def run(argv):
                 plural(len(state.workflows), "workflow"), " in these parts" if options.only else ""))
 
         if options.dry_run:
-            if options.test or options.test_all or options.test_media:
-                say("Dry run: no model was tried.")
+            if not_tried(options, "%s"):
+                say("Dry run: %s." % not_tried(options, "%s"))
             return 0
         if options.test or options.test_all:
             failed += test_chat(state, definition, plan.slots, options.test_all)
         if options.test_media:
             failed += test_media(state, definition, plan.slots, options.keep_test_media)
+        if options.try_run:
+            failed += try_run(state, definition, plan.slots, options.keep_try_run)
         if failed:
             head("%s failed. The workforce itself is as the file says." % plural(failed, "check"))
             return 1
         return 0
     finally:
         sign_out(app)
+
+
+def not_tried(options, text):
+    """What a dry run leaves out of the checks that were asked for."""
+    tests = options.test or options.test_all or options.test_media
+    if tests and options.try_run:
+        return text % "no model was tried and no project was run"
+    if options.try_run:
+        return text % "no project was run"
+    return text % "no model was tried" if tests else ""
 
 
 def main():

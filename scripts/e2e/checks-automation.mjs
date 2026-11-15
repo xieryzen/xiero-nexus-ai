@@ -585,6 +585,11 @@ export async function automation(ctx) {
     eq("each call is recorded with its result", trace.data?.calls?.map((c) => [c.name, c.isError]), [["fetch_url", true], ["http_request", true]]);
     check("  a credential the agent sent in a header is not kept", trace.data?.calls?.[1]?.arguments?.includes("(not kept)") && !trace.data.calls[1].arguments.includes("secret-token-value"), trace.data?.calls?.[1]?.arguments);
     eq("  another user cannot read it", (await bob.get(`/api/projects/${projectId}/tasks/${taskIds[3]}/tool-calls`)).status, 403);
+    const attempts = (await admin.get(`/api/projects/${projectId}/attempts`)).data?.attempts ?? [];
+    eq("each task's attempt is recorded, in the order of the tasks", attempts.map((a) => [a.seq, a.attempt, a.status]), [1, 2, 3, 4, 5, 6, 7].map((seq) => [seq, 1, "ok"]));
+    check("  with the agent, the model and the provider that was asked", attempts.every((a) => a.agent === "Toolsmith" && a.model && a.modelId && a.provider && a.error === null), attempts[0]);
+    eq("  and how many model calls and tool calls it took", attempts.map((a) => a.toolCalls), [5, 2, 3, 2, 1, 2, 7]);
+    eq("  another user cannot read them", (await bob.get(`/api/projects/${projectId}/attempts`)).status, 403);
 
     begin("Agent memory: notes stay with the person whose project they are from");
     const notes = await admin.get(`/api/agents/${state.agents.Toolsmith}/memories`);
@@ -614,6 +619,40 @@ export async function automation(ctx) {
     const fbTask = taskOf(fbRun.events, 1);
     check("the task is done without tools instead of failing", fbTask?.status === "succeeded" && /OUTPUT of "Tool: files"/.test(fbTask.artifact ?? "") && !fbTask.toolCalls, [fbTask?.status, fbTask?.artifact]);
     check("  and the run says so while it happens", fbRun.events.some((e) => e.type === "progress" && /did not accept tools/.test(e.message)), fbRun.events.filter((e) => e.type === "progress"));
+    const fbAttempts = (await admin.get(`/api/projects/${fb}/attempts`)).data?.attempts ?? [];
+    eq("  both attempts are recorded: the one that failed, and the one that answered", fbAttempts.map((a) => [a.attempt, a.status, a.modelId]), [[1, "error", "chat-notools"], [2, "ok", "chat-notools"]]);
+    check("  the first with what the provider said", typeof fbAttempts[0]?.error === "string" && fbAttempts[0].error.length > 0 && fbAttempts[1]?.error === null, fbAttempts.map((a) => a.error));
+
+    begin("Agent tools: a model that is limited keeps the agent its tools");
+    await model("chat-limited", openai, "chat-limited", ["text"]);
+    await agent("Limited", "Limitedworker", { primaryModelRowId: state.models["chat-limited"], fallbackModelRowId: ids.models.chat, tools: ["list_files", "write_file"] });
+    const ltWf = await workflow("Limited", [{ title: "Tool: files", objective: "Uses tools.", role: "Limitedworker" }]);
+    const lt = await project(admin, { title: "Limited", workflowId: ltWf, managerModelRowId: ids.models.chat });
+    const ltRun = await runProject(admin, lt);
+    const ltTask = taskOf(ltRun.events, 1);
+    const ltAttempts = (await admin.get(`/api/projects/${lt}/attempts`)).data?.attempts ?? [];
+    eq("\"too many requests\" is not taken for a refusal of tools: the next model is asked, with them", ltAttempts.map((a) => [a.attempt, a.status, a.modelId, a.toolCalls > 0]), [[1, "error", "chat-limited", false], [2, "ok", "chat-mini", true]]);
+    check("  the task is done with its tools", ltTask?.status === "succeeded" && ltTask.toolCalls > 0, [ltTask?.status, ltTask?.toolCalls]);
+    check("  and the run does not say that tools were turned down", !ltRun.events.some((e) => e.type === "progress" && /did not accept tools/.test(e.message)), ltRun.events.filter((e) => e.type === "progress"));
+    check("  what the provider said is kept with the attempt", /Provider responded 429: .*Rate limit reached/.test(ltAttempts[0]?.error ?? ""), ltAttempts[0]?.error);
+
+    begin("Projects: a reviewer whose first model does not answer");
+    await model("chat-down", openai, "chat-down", ["text"]);
+    await agent("Maker", "Maker");
+    await agent("Checker", "Quality checker", { primaryModelRowId: state.models["chat-down"], fallbackModelRowId: ids.models.chat });
+    const reviewed = await admin.post("/api/teams", { name: "Reviewed", agentIds: [state.agents.Maker, state.agents.Checker] });
+    const reviewedWf = await workflow("Reviewed", [{ title: "Make", objective: "Make it.", role: "Maker" }]);
+    const reviewedProject = await project(admin, { title: "Reviewed", workflowId: reviewedWf, teamId: reviewed.data?.team?.id });
+    await mockReset();
+    const reviewedRun = await runProject(admin, reviewedProject);
+    const reviewAsked = (await mockLog())
+      .filter((l) => l.path.endsWith("/chat/completions") && /QA\/Security reviewer/.test(String(l.body?.messages?.[0]?.content ?? "")))
+      .map((l) => l.body?.model);
+    eq("the review is asked of its first model, then of its second", reviewAsked, ["chat-down", "chat-mini"]);
+    check("  and is written", /VERDICT: pass/.test(reviewedRun.events.find((e) => e.type === "review")?.notes ?? ""), reviewedRun.events.filter((e) => e.type === "review"));
+    eq("  the project ends as done", (await admin.get(`/api/projects/${reviewedProject}`)).data?.project?.status, "succeeded");
+    // Taken out again: the projects below have no reviewer among their agents, and are reviewed by their manager model.
+    eq("  (that reviewer is deleted again)", (await admin.del(`/api/agents/${state.agents.Checker}`)).status, 200);
   }
 
   // ─── Runs in the background ────────────────────────────────────────────────

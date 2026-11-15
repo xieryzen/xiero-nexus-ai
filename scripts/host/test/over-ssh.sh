@@ -545,7 +545,7 @@ code=0
 workflow "{\"inputs\":{\"action\":\"plan\",\"output_key\":\"${public}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "with an output key" 0 "${code}"
 check "the output is stored sealed" test -s "${WORK}/gh.stored.json"
-check "  a notice names the stored object" logged "::notice title=Sealed output::0123456789abcdef0123456789abcdef01234567"
+check "  a notice names the stored object" logged "::notice title=Sealed output::0.1.2.3.4.5.6.7.8.9.a.b.c.d.e.f.0.1.2.3.4.5.6.7.8.9.a.b.c.d.e.f.0.1.2.3.4.5.6.7"
 check_not "  what is stored shows nothing of the output" grep -qF "the end" "${WORK}/gh.stored.json"
 check "  the key opens it: the node's output, to the byte" cmp -s "${WORK}/runner/node-output.txt" <(jq -r .content "${WORK}/gh.stored.json" | bash "${seal}" open "${WORK}/keys/key.pem")
 check_not "  the log still shows nothing of it" logged "the end"

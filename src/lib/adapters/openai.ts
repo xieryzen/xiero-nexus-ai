@@ -1,6 +1,6 @@
 import "server-only";
 import { AppError, sanitizeUpstreamError } from "../errors";
-import { safeFetch } from "../http-client";
+import { providerFetch } from "../http-client";
 import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, pcmFormatFromMime } from "../media/files";
 import { readBodyCapped } from "../media/http";
 import {
@@ -131,7 +131,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   canDiscoverModels: true,
 
   async listModels(ctx): Promise<ListedModel[]> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/models`,
       { method: "GET", headers: headers(ctx) },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
@@ -141,7 +141,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   },
 
   async testConnection(ctx): Promise<void> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/models`,
       { method: "GET", headers: headers(ctx) },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
@@ -151,7 +151,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   },
 
   async chat(ctx, req: ChatRequest): Promise<ChatResult> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/chat/completions`,
       {
         method: "POST",
@@ -165,7 +165,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   },
 
   async chatStream(ctx, req, onDelta): Promise<ChatResult> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/chat/completions`,
       {
         method: "POST",
@@ -215,7 +215,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     let promptTokens: number | undefined;
     for (let i = 0; i < req.input.length; i += EMBED_BATCH) {
       const batch = req.input.slice(i, i + EMBED_BATCH);
-      const res = await safeFetch(
+      const res = await providerFetch(
         `${base(ctx)}/embeddings`,
         {
           method: "POST",
@@ -235,7 +235,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   },
 
   async generateSpeech(ctx, req, opts): Promise<SpeechResult> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/audio/speech`,
       { method: "POST", headers: headers(ctx), body: JSON.stringify(buildSpeechBody(req)) },
       { timeoutMs: opts.timeoutMs, allowHosts: ctx.allowHosts },
@@ -266,7 +266,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
 
   async generateImages(ctx, req, opts) {
     const wire = buildImageRequest(resolveMediaApi(ctx.mediaApi, ctx.baseUrl), req);
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}${wire.path}`,
       { method: "POST", headers: headers(ctx), body: JSON.stringify(wire.body) },
       { timeoutMs: opts.timeoutMs, allowHosts: ctx.allowHosts },
@@ -280,7 +280,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
 
   async startVideo(ctx, req): Promise<ParsedVideoJob> {
     const wire = buildVideoRequest(resolveMediaApi(ctx.mediaApi, ctx.baseUrl), req);
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}${wire.path}`,
       { method: "POST", headers: headers(ctx), body: JSON.stringify(wire.body) },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
@@ -293,7 +293,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     if (!isValidJobId(jobId)) {
       throw new AppError(502, "upstream_not_found", "The stored video job id is not valid");
     }
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}${videoStatusPath(jobId)}`,
       { method: "GET", headers: authHeaders(ctx) },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },

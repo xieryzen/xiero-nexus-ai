@@ -5,10 +5,34 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.6.0-rc.1] - 2026-11-15
+
+Providers that cost nothing, and what it takes to work with them: the app
+waits and asks again when a provider says "too many requests", an agent keeps
+its tools when that happens, a review is still written when the reviewer's
+first model is busy, and every attempt of a task can be read afterwards. Also
+in this release: the scripts that install, upgrade and set up the app on a
+Pterodactyl node, by hand or from GitHub Actions. The new parts of the app
+were tested against the local mock of the providers' APIs; what was done on a
+real server is said under Notes.
 
 ### Added
 
+- **Waiting for a provider that says "not now".** A request to a model
+  provider that is answered with 429 (too many requests) is sent again: after
+  the wait the provider asks for, or after 3, 10, 25 and 45 seconds when it
+  names none, up to four times and two and a half minutes in all. A provider
+  that says it is busy (503, or 529 at Anthropic) is asked again twice. A
+  model that was waited for in vain, because its quota for the day is used
+  up, is not waited for again for five minutes, then for longer, until it
+  answers. `PROVIDER_RETRIES` sets how often a request is sent again (0 to
+  8; 0 turns it off). Until now one such answer ended the attempt, and a
+  tier that allows two requests a minute ended a project with it.
+- **Every attempt of a task.** `GET /api/projects/{id}/attempts` lists, for
+  the tasks of a project's last run, each model that was asked: the agent,
+  the model and its provider, how long it took, the model calls and tool
+  calls, and what the provider said when it failed. A task itself shows only
+  its last error.
 - **Deploying from GitHub Actions.** The workflow *Deploy to a Pterodactyl
   node*, started by hand, runs the host scripts on the node over SSH: a look
   at the node, the plan of an upgrade, the upgrade, or the disk report. It
@@ -51,24 +75,49 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 - **The workforce from a file**, `scripts/host/workforce.sh` with
   `workforce.py` and `workforce.json`: signs in to the running app as its
   administrator and adds the models, agents, teams and workflows the file
-  names, through the app's own API. What is there under the same name is
-  reported and changed only with `--update`; nothing is deleted. `--test`,
-  `--test-all` and `--test-media` try the models with one small request
-  each, which is the only way to learn that a key may call a model its
-  provider lists. The workflow and `over-ssh.sh` have the actions
-  `workforce-plan` and `workforce` for it. The committed file holds eleven
-  agents on Claude and Gemini, two teams, and the workflows "Software
-  delivery" and "Short Reels" (a vertical video of four pictures under their
-  voice-overs, for providers without a video model). See
-  [scripts/host](scripts/host#the-workforce-workforcesh-and-workforcejson).
+  names, through the app's own API. A provider that takes no key is added
+  too; one that takes a key is not, since the program has none. What is
+  there under the same name is reported and changed only with `--update`;
+  nothing is deleted, and a model the file marks so is switched off.
+  `--test`, `--test-all` and `--test-media` try the models with one small
+  request each, which is the only way to learn that a model its provider
+  lists can be called. `--try-run` has the agents do a small project, and
+  with `everyAgent` gives each of them a task of its own; it says which
+  model answered each task and what the others said. The workflow and
+  `over-ssh.sh` have the actions `workforce-plan` and `workforce` for it.
+- **A workforce that costs nothing**, in the committed `workforce.json`:
+  eleven agents, two teams, and the workflows "Software delivery" and "Short
+  Reels" (a vertical video of four pictures under their voice-overs, for
+  providers without a video model), on the free models of three providers
+  that take no key (Kilo Gateway, OVHcloud AI Endpoints, LLM7). The voice,
+  and the second model of two agents, are Gemini's, on a key without
+  billing. Each agent has its second model with another provider than its
+  first. What these providers allow is little, and what is sent to two of
+  them may be logged: see
+  [scripts/host](scripts/host#providers-that-cost-nothing).
 - CI runs these against an SSH server on the runner itself, as a plain user
   with a key and as root with a password and through sudo, installs each
   bundle on a made-up Pterodactyl host, started through `ts-node` the way the
   common Node.js egg starts it, and sets a site up in a real nginx on the
   runner, next to other sites, with stand-ins for certbot and Let's Encrypt.
   It also puts the committed `workforce.json` into the app it built, with
-  the mock providers, and runs both workflows in a project. No test signs in
-  to a real node or asks a real provider.
+  the mock providers, runs both workflows in a project, and does the file's
+  try-run with a model that says "too many requests" every other time. No
+  test signs in to a real node or asks a real provider.
+
+### Changed
+
+- **An agent keeps its tools when its model is limited or busy.** A first
+  request that failed was taken to mean that the model takes no tools, and
+  the same model was asked again without them. That is now done only when
+  the request was refused (400, 404, 422). After "too many requests", a busy
+  or broken provider, or no answer in time, the agent's next model is asked,
+  with the tools.
+- **A review is asked of the reviewer's next model** when its first does not
+  answer, and then of the project's manager model, the way a task is. Before,
+  a reviewer whose first model was busy left the project without a review.
+- Only requests to model providers are sent again. Web pages an agent reads,
+  webhooks, the sandbox runner and Git hosts are asked once, as before.
 
 ### Notes
 
@@ -82,6 +131,39 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 - When the site does not answer from the outside after an upgrade, the
   workflow's warning now says what was in the way (the name is not known, no
   connection, a certificate that is not accepted).
+- Free models were tried on one real server on 2026-11-15, which ran 1.5.0,
+  with an earlier arrangement of the agents than the one in the file. The
+  three providers were added; the models of the file were asked for one
+  word, and all answered but one, the first model of two agents, which said
+  "busy" the last time and had answered before; the image model made a
+  picture, which was joined with a spoken sentence; and a project that gave
+  each of the eleven agents one small task ended with all eleven done, most
+  of them with a tool call. A project that a model planned did not end well
+  there: requests of its tasks, its summary and its review were answered
+  with "too many requests", and 1.5 does not wait.
+- That waiting is what this release adds, and at the time of this release
+  candidate it **has run against the mock only**, not against a provider.
+  The candidate is there to see it at work on that server, with the file as
+  it is here.
+- The free models change. Of the models these providers listed as free on
+  that day, three did not serve (limited by their provider, or minutes for
+  one word); the picture models of LLM7 answer "missing API key"; the free
+  English voice of OVHcloud wants another audio format than the app asks
+  for.
+
+### Upgrading
+
+- Nothing has to be configured, and the database is not changed: 1.5 can
+  open it again.
+- A request that a provider keeps answering with "too many requests" now
+  fails after the waits, up to two and a half minutes later than before; the
+  requests to that model in the next minutes fail at once, as before.
+  `PROVIDER_RETRIES=0` in `.env` gives the old behaviour throughout.
+- `scripts/host/workforce.json` now describes a workforce on free providers.
+  On a server that got the earlier file (agents on Claude and Gemini), the
+  `workforce` action with `--update` moves the agents to the free models;
+  without `--update` it adds the providers and models and reports the agents
+  as different.
 
 ## [1.5.0] - 2026-11-15
 

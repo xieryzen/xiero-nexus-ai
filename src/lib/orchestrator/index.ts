@@ -62,6 +62,7 @@ import {
   countMediaTasks,
   dependencyContext,
   downgradeUnavailableMedia,
+  mayBeAboutTools,
   parsePlan,
   parseVerdict,
   renderInputs,
@@ -1060,8 +1061,14 @@ export async function executeRun(runId: string): Promise<void> {
               lastError = e instanceof AppError ? e.message : sanitizeUpstreamError(e);
               if (!spent) usage("error", 0, 0, e instanceof AppError ? e.code : "error");
               db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, latencyMs: Date.now() - started, steps: callSteps || null, toolCallCount: callTools || null, error: lastError }).run();
-              // Only a refusal on the very first request is taken to be about the tools.
-              const refusedTools = mode === "tools" && callSteps <= 1 && callTools === 0 && !isCancelled();
+              // Only a refusal on the very first request is taken to be about the
+              // tools, and not one that says the provider is limited, busy or down.
+              const refusedTools =
+                mode === "tools" &&
+                callSteps <= 1 &&
+                callTools === 0 &&
+                !isCancelled() &&
+                (!(e instanceof AppError) || mayBeAboutTools(e));
               if (!refusedTools) break;
               emit({ type: "progress", seq, message: "The model did not accept tools; answering without them" });
               attempt++;
@@ -1323,42 +1330,52 @@ export async function executeRun(runId: string): Promise<void> {
       const reviewer = workforce.find(
         (a) => /qa|quality|security|review|test/i.test(a.role) && buildCandidates(a, project, routable).length > 0,
       );
-      const reviewModelId = reviewer ? buildCandidates(reviewer, project, routable)[0]! : project.managerModelRowId;
-      if (reviewModelId) {
-        try {
-          const reviewModel = resolveChatModel(reviewModelId);
-          const execSummary = latestExecSummary(workspace.id);
-          const reviewMessages: ChatMessage[] = [
-            {
-              role: "system",
-              content:
-                "You are a QA/Security reviewer. For each task, assess whether its deliverable meets the " +
-                "acceptance criteria, and flag correctness, security, and missing-requirement concerns. Be " +
-                "concise and specific. Where sandbox execution output is provided, ground your judgment in it. " +
-                (mediaTasks.length > 0
-                  ? "A deliverable that starts with 'Generated image', 'Generated video', 'Generated voice-over' " +
-                    "or 'Joined video' is media you cannot see or hear: review its prompt against the criteria, " +
-                    "say that the media itself was not reviewed, and do not count that against the task. "
-                  : "") +
-                "End with a line exactly 'VERDICT: pass', 'VERDICT: concerns', or 'VERDICT: fail'.",
-            },
-            {
-              role: "user",
-              content:
-                succeededTasks
-                  .map(
-                    (t) =>
-                      `## ${t.seq}. ${t.title}\nAcceptance criteria: ${t.acceptanceCriteria ?? "(none)"}\nDeliverable:\n${(t.artifact ?? "").slice(0, 2000)}`,
-                  )
-                  .join("\n\n") + (execSummary ? `\n\n### Sandbox execution results\n${execSummary}` : ""),
-            },
-          ];
-          const started = Date.now();
-          const r = await invoke(reviewModel, reviewMessages, 0.2);
-          recordManager(r, reviewModel, started);
-          reviewNotes = r.content;
-        } catch {
-          reviewNotes = "";
+      // The reviewer's models in turn, as for a task: its first, its second,
+      // then the manager's. A review is still wanted when the first is busy.
+      const reviewModelIds = reviewer
+        ? buildCandidates(reviewer, project, routable)
+        : project.managerModelRowId
+          ? [project.managerModelRowId]
+          : [];
+      if (reviewModelIds.length > 0) {
+        const execSummary = latestExecSummary(workspace.id);
+        const reviewMessages: ChatMessage[] = [
+          {
+            role: "system",
+            content:
+              "You are a QA/Security reviewer. For each task, assess whether its deliverable meets the " +
+              "acceptance criteria, and flag correctness, security, and missing-requirement concerns. Be " +
+              "concise and specific. Where sandbox execution output is provided, ground your judgment in it. " +
+              (mediaTasks.length > 0
+                ? "A deliverable that starts with 'Generated image', 'Generated video', 'Generated voice-over' " +
+                  "or 'Joined video' is media you cannot see or hear: review its prompt against the criteria, " +
+                  "say that the media itself was not reviewed, and do not count that against the task. "
+                : "") +
+              "End with a line exactly 'VERDICT: pass', 'VERDICT: concerns', or 'VERDICT: fail'.",
+          },
+          {
+            role: "user",
+            content:
+              succeededTasks
+                .map(
+                  (t) =>
+                    `## ${t.seq}. ${t.title}\nAcceptance criteria: ${t.acceptanceCriteria ?? "(none)"}\nDeliverable:\n${(t.artifact ?? "").slice(0, 2000)}`,
+                )
+                .join("\n\n") + (execSummary ? `\n\n### Sandbox execution results\n${execSummary}` : ""),
+          },
+        ];
+        for (const reviewModelId of reviewModelIds) {
+          if (isCancelled()) break;
+          try {
+            const reviewModel = resolveChatModel(reviewModelId);
+            const started = Date.now();
+            const r = await invoke(reviewModel, reviewMessages, 0.2);
+            recordManager(r, reviewModel, started);
+            reviewNotes = r.content;
+            if (reviewNotes.trim()) break;
+          } catch {
+            reviewNotes = "";
+          }
         }
       }
     }

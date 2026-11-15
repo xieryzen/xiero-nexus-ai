@@ -163,6 +163,19 @@ export function parseVerdict(text: string): Verdict | null {
   return m ? (m[1]!.toLowerCase() as Verdict) : null;
 }
 
+/**
+ * Could the failure of an agent's first request be about its tools? A model
+ * that takes none refuses the request (400, 404, 422). A provider that is
+ * limited, busy, broken or out of reach says nothing about tools: asking the
+ * same model again without them would take the agent's tools away for
+ * nothing, so the agent's next model is asked instead.
+ */
+export function mayBeAboutTools(error: { code?: string; message: string }): boolean {
+  if (error.code === "timeout" || error.code === "network_error") return false;
+  const status = Number(/^Provider responded (\d{3})\b/.exec(error.message)?.[1] ?? 0);
+  return !(status === 408 || status === 429 || status >= 500);
+}
+
 /** Topological order of task seqs (Kahn); falls back to seq order on a cycle. */
 export function topoOrder(tasks: { seq: number; dependsOn: number[] }[]): number[] {
   const indeg = new Map<number, number>();
