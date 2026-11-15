@@ -74,7 +74,7 @@ stop_nginx() {
 # On the page of a run of GitHub Actions: how the test ended, and what failed.
 annotate() { # notice|error TEXT
   [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
-  printf '::%s title=A site in nginx%s::%s\n' "$1" "$([ "$(id -u)" = "0" ] && echo ", as root" || true)" \
+  printf '::%s title=A site in nginx%s::%s\n' "$1" "$([ "$(id -u)" = "0" ] && echo " (as root)" || true)" \
     "$(printf '%s' "$2" | cut -c 1-400 | head -n 40 | sed -e 's/%/%25/g' | awk '{ printf "%s%s", sep, $0; sep = "%0A" }')"
 }
 cleanup() {
@@ -244,7 +244,21 @@ if [ -n "${hook}" ]; then sh -c "${hook}"; fi
 if [ -n "${FAKE_CERTBOT_THEN:-}" ]; then sh -c "${FAKE_CERTBOT_THEN}"; fi
 echo "Successfully received certificate."
 EOF
-chmod +x "${STUB}/getent" "${STUB}/certbot"
+
+# What renews certificates on the machine: a timer, when a test says so.
+cat > "${STUB}/systemctl" << 'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "is-active" ]; then
+  for unit in "$@"; do
+    if [ "${unit}" = "${FAKE_TIMER:-none}" ]; then exit 0; fi
+  done
+  exit 3
+fi
+exit 1
+EOF
+chmod +x "${STUB}/getent" "${STUB}/certbot" "${STUB}/systemctl"
+# A machine that has a cron job for certbot of its own says so in the plan.
+if grep -qsE '^[^#]*certbot.*renew' /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/root /var/spool/cron/root 2> /dev/null; then HAS_CRON_JOB=yes; else HAS_CRON_JOB=no; fi
 
 # The app: /api/health, what a request looked like when it arrived, an answer
 # that is written bit by bit, and an upload.
@@ -472,7 +486,11 @@ check "  that it would listen the way the others do" says "It has: listen ${HTTP
 if [ "${HAS_V6}" = "yes" ]; then check "    on IPv6 too, as they do" says "listen [::]:${HTTPS_PORT} ssl;"; fi
 check "  that there is no certificate yet" says "Certificate none yet: certbot 4.0.0 asks Let's Encrypt for one"
 check "  with a new account, as it was agreed to" says "with a new account without an e-mail address, agreeing to Let's Encrypt's terms (--agree-tos)"
-check "  that nothing renews certificates on this machine by itself" says "nothing was found on this machine that renews certificates by itself"
+if [ "${HAS_CRON_JOB}" = "no" ]; then
+  check "  that nothing renews certificates on this machine by itself" says "nothing was found on this machine that renews certificates by itself"
+fi
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --agree-tos --dry-run
+check "  or what does" says "Renewal     certbot.timer renews certificates on this machine; nginx is reloaded when this one was"
 check "  how large an upload may be" says "Uploads     up to 32m"
 check "no file of nginx was changed" unchanged
 check "nginx was not reloaded" not_reloaded
@@ -595,9 +613,13 @@ rm -rf "${LE}"
 
 begin "Two at once, and one that is stopped in the middle"
 note
-run FAKE_CERTBOT_SLEEP=4 -- --site nexus.test --upstream "${APP}" --agree-tos --yes &
+# The first one is held up inside certbot, with its file in nginx; the second
+# starts once it is there.
+asked_before="$(asked_for_certificates)"
+asked_again() { [ "$(asked_for_certificates)" -gt "${asked_before}" ]; }
+run FAKE_CERTBOT_SLEEP=8 -- --site nexus.test --upstream "${APP}" --agree-tos --yes &
 first=$!
-eventually grep -q 'certonly' "${CALLS}" || true
+check "the first one gets as far as asking for the certificate" eventually asked_again
 before_second="$(asked_for_certificates)"
 (
   OUT="${WORK}/second.txt"
@@ -627,6 +649,9 @@ check "it says that the site answers" says "==> ${SITE} answers"
 check "  that the certificate is accepted, and until when it runs" line "the certificate is accepted: it is for nexus.test and runs until 20[0-9]{2}-[0-9]{2}-[0-9]{2}"
 check "  that plain http is sent on" says "http://nexus.test:${HTTP_PORT} sends everyone on to https."
 check "  and how to take it out again" says "sudo bash nginx-site.sh --site nexus.test --remove"
+if [ "${HAS_CRON_JOB}" = "no" ]; then
+  check "  and warns that nothing renews the certificate by itself" says "warning: nothing on this machine renews certificates by itself."
+fi
 FILE="${PREFIX}/sites-available/nexus.test.conf"
 check "the file is where sites are kept" test -f "${FILE}"
 check "  switched on by a link, as the others are" test "$(readlink "${PREFIX}/sites-enabled/nexus.test.conf")" = "${FILE}"
@@ -706,6 +731,27 @@ is "a change that nginx refuses ends badly" "1" "${CODE}"
 check "  and the earlier version of the file is back" says "nginx is as it was before: the earlier version of ${FILE} is back."
 check "  to the letter" unchanged
 is "  with the site still answering" "200" "$(status "${SITE}/api/health")"
+
+begin "Who renews the certificate, and whether nginx is reloaded then"
+note
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --max-body 8m --yes
+is "it ends well" "0" "${CODE}"
+check "it names what renews it, and that certbot has noted to reload nginx" says "Renewal: certbot.timer renews it, and certbot has noted to reload nginx when it was."
+cp "${LE}/renewal/nexus.test.conf" "${WORK}/renewal.kept"
+grep -v '^renew_hook' "${WORK}/renewal.kept" > "${LE}/renewal/nexus.test.conf"
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --max-body 8m --dry-run
+check "a certificate certbot would renew without reloading nginx: the plan says so" says "certbot is NOT told to reload nginx when this"
+check "  and how to tell it" says "certbot reconfigure --cert-name nexus.test --deploy-hook \"${STUB}/nginx -s reload\""
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --max-body 8m --yes
+is "  the run ends well" "0" "${CODE}"
+check "  with a warning" says "warning: certbot.timer renews the certificate, but certbot did not note that nginx is to be reloaded afterwards."
+rm "${LE}/renewal/nexus.test.conf"
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --max-body 8m --dry-run
+check "a certificate that is not certbot's: the plan says that nobody renews it" says "but this one is not certbot's"
+run FAKE_TIMER=certbot.timer -- --site nexus.test --upstream "${APP}" --max-body 8m --yes
+check "  and the run warns" says "warning: certbot has no renewal settings for this certificate"
+cp "${WORK}/renewal.kept" "${LE}/renewal/nexus.test.conf"
+check "none of this changed a file of nginx" unchanged
 
 begin "A certificate that ends soon"
 certificate nexus.test "${WORK}/short" 12

@@ -140,7 +140,10 @@ as `admin`.)
 
 Before you open it, decide how people reach it:
 
-- **Over HTTPS** (behind a reverse proxy or tunnel): nothing to change.
+- **Over HTTPS** (behind a reverse proxy or tunnel): nothing to change. With
+  root on a node that has nginx,
+  [`scripts/host/nginx-site.sh`](scripts/host/README.md#the-public-address-nginx-sitesh)
+  sets that up: the site for a name, with a certificate from Let's Encrypt.
 - **Over plain `http://server-ip:port`**: add `COOKIE_SECURE=false` to `.env`.
   Without it the sign-in page explains that sign-in is turned off, because
   browsers drop HTTPS-only cookies on plain HTTP. On plain HTTP, passwords and
@@ -327,6 +330,6 @@ The scripts need bash, `zip` and `unzip`; on Windows use WSL.
 | `scripts/bundle-start.js` | Becomes `start.js` in the bundle |
 | `scripts/smoke-test-bundle.sh` | Starts a bundle, signs in to it, and stops it |
 | `scripts/e2e/` | The mock provider and the end-to-end checks (`npm run test:e2e`) |
-| `scripts/host/` | For a Pterodactyl node: the upgrade script, the disk report, and their tests |
+| `scripts/host/` | For a Pterodactyl node: installing, upgrading, the site in nginx, the disk report, and their tests |
 | `scripts/publish-release.sh` | Creates the GitHub releases |
 | `scripts/get-release.mjs` | Downloads a release by channel or version |

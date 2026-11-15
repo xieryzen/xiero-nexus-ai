@@ -165,6 +165,35 @@ HALF=""       # a file that is being written, not yet in its place
 PROBLEMS=()
 problem() { PROBLEMS+=("$*"); }
 
+# However this ends: when files of nginx were being changed, nginx is put
+# back to what it had (put_back, further down), and nothing of this script's
+# own is left lying about.
+# shellcheck disable=SC2329  # called by the trap below
+on_exit() {
+  local code=$?
+  trap - EXIT
+  set +e
+  [ -z "${HALF}" ] || rm -f "${HALF}"
+  if [ "${PHASE}" = "changing" ]; then
+    say ""
+    if put_back; then
+      if [ -n "${BEFORE}" ]; then
+        say "nginx is as it was before: the earlier version of ${ORIG_FILE} is back."
+      else
+        say "nginx is as it was before: ${FILE} is taken out again."
+      fi
+    else
+      warn "the file was taken back, but nginx's configuration does not pass its test now. nginx was not reloaded and goes on with what it had. Run nginx -t."
+    fi
+  fi
+  rm -rf "${WORK}"
+  exit "${code}"
+}
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ── Small helpers ────────────────────────────────────────────────────────────
 
 # A value from the Wings configuration, such as "system.data".
@@ -379,7 +408,7 @@ elif command -v pgrep > /dev/null 2>&1 && ! pgrep -x nginx > /dev/null 2>&1; the
   NGINX_RUNS=false
 fi
 [ "${NGINX_RUNS}" = true ] || problem "nginx is installed, but it is not running${PID_FILE:+ (${PID_FILE} names no process that is there)}. This script adds a site to a running nginx; it does not start one."
-# shellcheck disable=SC2329  # also called by the trap below
+# shellcheck disable=SC2329  # also called by the trap at the top
 takes_requests() { # PID: a process of this nginx that still takes new requests
   local title
   [ "$(awk '/^PPid:/ { print $2 }' "/proc/$1/status" 2> /dev/null || true)" = "${MASTER}" ] || return 1
@@ -390,7 +419,7 @@ takes_requests() { # PID: a process of this nginx that still takes new requests
     *) return 1 ;;
   esac
 }
-# shellcheck disable=SC2329  # also called by the trap below
+# shellcheck disable=SC2329  # also called by the trap at the top
 workers() {
   local pid
   [ -n "${MASTER}" ] || return 0
@@ -405,7 +434,7 @@ workers() {
 # new processes for it and has the old ones take requests for a moment
 # longer. Only when none of the old ones does any more is what the site
 # answers the answer of the new configuration.
-# shellcheck disable=SC2329  # also called by the trap below
+# shellcheck disable=SC2329  # also called by the trap at the top
 reload_nginx() {
   local before pid left
   before="$(workers)"
@@ -427,7 +456,7 @@ reload_nginx() {
   return 1
 }
 # nginx as it was before this run: the file gone again, or its earlier version back.
-# shellcheck disable=SC2329  # called by the trap below
+# shellcheck disable=SC2329  # called by the trap at the top
 put_back() {
   rm -f "${FILE}"
   [ -z "${LINK}" ] || rm -f "${LINK}"
@@ -441,31 +470,6 @@ put_back() {
   fi
   return 1
 }
-# shellcheck disable=SC2329  # called by the trap below
-on_exit() {
-  local code=$?
-  trap - EXIT
-  set +e
-  [ -z "${HALF}" ] || rm -f "${HALF}"
-  if [ "${PHASE}" = "changing" ]; then
-    say ""
-    if put_back; then
-      if [ -n "${BEFORE}" ]; then
-        say "nginx is as it was before: the earlier version of ${ORIG_FILE} is back."
-      else
-        say "nginx is as it was before: ${FILE} is taken out again."
-      fi
-    else
-      warn "the file was taken back, but nginx's configuration does not pass its test now. nginx was not reloaded and goes on with what it had. Run nginx -t."
-    fi
-  fi
-  rm -rf "${WORK}"
-  exit "${code}"
-}
-trap on_exit EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 # ── --remove ─────────────────────────────────────────────────────────────────
 
@@ -719,6 +723,12 @@ if [ "${CERT_GOOD}" != true ]; then
     problem "certbot has no Let's Encrypt account on this machine yet. Making one means agreeing to Let's Encrypt's terms (https://letsencrypt.org/repository/): when you do, run this again with --agree-tos, and with --email <address> to give them one."
   fi
 fi
+# Whether certbot has noted, with this certificate's renewal settings, that
+# nginx is to be reloaded once it was renewed. Without that, nginx would go
+# on showing the old certificate until something else reloads it.
+RENEWAL_CONF="${LE_DIR}/renewal/${DOMAIN}.conf"
+HOOK="${NGINX} -s reload"
+reloads_after_renewal() { grep -qsF -- "${HOOK}" "${RENEWAL_CONF}"; }
 # What renews certificates on this machine by itself.
 RENEWAL=""
 if command -v systemctl > /dev/null 2>&1 && systemctl is-active --quiet certbot.timer 2> /dev/null; then
@@ -771,7 +781,13 @@ else
   say "  Certificate none, and certbot is not installed"
 fi
 if [ -n "${CERTBOT_KEEPS}" ]; then say "              certbot keeps ${CERTBOT_KEEPS} on this machine now"; fi
-if [ -n "${RENEWAL}" ]; then
+if [ -n "${RENEWAL}" ] && [ "${CERT_GOOD}" = true ] && [ ! -f "${RENEWAL_CONF}" ]; then
+  say "  Renewal     ${RENEWAL} renews certbot's certificates on this machine, but this one is not certbot's"
+  say "              (no ${RENEWAL_CONF}): whoever put it there has to renew it."
+elif [ -n "${RENEWAL}" ] && [ "${CERT_GOOD}" = true ] && ! reloads_after_renewal; then
+  say "  Renewal     ${RENEWAL} renews certificates on this machine. certbot is NOT told to reload nginx when this"
+  say "              one was renewed. To tell it:  certbot reconfigure --cert-name ${DOMAIN} --deploy-hook \"${HOOK}\""
+elif [ -n "${RENEWAL}" ]; then
   say "  Renewal     ${RENEWAL} renews certificates on this machine; nginx is reloaded when this one was"
 else
   say "  Renewal     nothing was found on this machine that renews certificates by itself (no certbot.timer, no cron job)."
@@ -972,7 +988,7 @@ if [ "${CERT_GOOD}" != true ]; then
     die "a request for $(url_of http /.well-known/acme-challenge/)... on this machine does not arrive at the new site, so Let's Encrypt would not get its answer either. Another site of this nginx takes the requests for that name first, or nginx did not take the new configuration (its error log says why)."
   fi
   others_untouched || die "the site was not set up."
-  options=(certonly --webroot -w "${WEBROOT}" -d "${DOMAIN}" --cert-name "${DOMAIN}" --non-interactive --keep-until-expiring --deploy-hook "${NGINX} -s reload")
+  options=(certonly --webroot -w "${WEBROOT}" -d "${DOMAIN}" --cert-name "${DOMAIN}" --non-interactive --keep-until-expiring --deploy-hook "${HOOK}")
   if [ "${LE_DIR}" != "/etc/letsencrypt" ]; then options+=(--config-dir "${LE_DIR}" --work-dir "${LE_DIR}/work" --logs-dir "${LE_DIR}/logs"); fi
   if [ "${HAS_ACCOUNT}" != true ]; then
     options+=(--agree-tos)
@@ -1008,14 +1024,16 @@ step "$(url_of https "") answers"
 say "The app's /api/health gives 200 there, and the certificate is accepted: it is for ${DOMAIN} and runs until $(cert_until)."
 PLAIN="$(status_of "$(url_of http /)" --resolve "$(at_this_machine "${HTTP_PORT}")")"
 if [ "${PLAIN}" = "301" ]; then say "$(url_of http "") sends everyone on to https."; else warn "$(url_of http /) gives ${PLAIN} instead of sending on to https."; fi
-if [ ! -f "${LE_DIR}/renewal/${DOMAIN}.conf" ]; then
-  warn "certbot has no renewal settings for this certificate (${LE_DIR}/renewal/${DOMAIN}.conf), so it is not renewed by certbot. It runs until $(cert_until)."
+if [ ! -f "${RENEWAL_CONF}" ]; then
+  warn "certbot has no renewal settings for this certificate (${RENEWAL_CONF}), so it is not renewed by certbot. It runs until $(cert_until)."
 elif ! answers_questions; then
   warn "the site does not answer Let's Encrypt's questions any more now that it is passed on to the app, so renewing the certificate would fail. It runs until $(cert_until)."
-elif [ -n "${RENEWAL}" ]; then
-  say "Renewal: ${RENEWAL} renews it, and nginx is reloaded when it was."
-else
+elif [ -z "${RENEWAL}" ]; then
   warn "nothing on this machine renews certificates by itself. Have \"certbot renew\" run every day, or the site warns again after $(cert_until)."
+elif ! reloads_after_renewal; then
+  warn "${RENEWAL} renews the certificate, but certbot did not note that nginx is to be reloaded afterwards. To tell it:  certbot reconfigure --cert-name ${DOMAIN} --deploy-hook \"${HOOK}\""
+else
+  say "Renewal: ${RENEWAL} renews it, and certbot has noted to reload nginx when it was."
 fi
 say ""
 say "The file: ${FILE}"
