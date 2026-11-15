@@ -1,6 +1,6 @@
 import "server-only";
 import { AppError } from "../errors";
-import { safeFetch } from "../http-client";
+import { providerFetch } from "../http-client";
 import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, pcmFormatFromMime } from "../media/files";
 import { readBodyCapped } from "../media/http";
 import { createSseParser } from "./anthropic-protocol";
@@ -72,7 +72,7 @@ async function post(
   body: unknown,
   timeoutMs?: number,
 ): Promise<Response> {
-  const res = await safeFetch(
+  const res = await providerFetch(
     `${base(ctx)}${path}`,
     { method: "POST", headers: geminiHeaders(ctx), body: JSON.stringify(body) },
     fetchOptions(ctx, timeoutMs),
@@ -106,7 +106,7 @@ export const geminiAdapter: ProviderAdapter = {
     const byId = new Map<string, ListedModel>();
     let pageToken: string | undefined;
     for (let page = 0; page < MAX_MODEL_PAGES; page++) {
-      const res = await safeFetch(
+      const res = await providerFetch(
         base(ctx) + modelsListPath({ pageSize: GEMINI_MODELS_PAGE_SIZE, pageToken }),
         { method: "GET", headers: geminiHeaders(ctx) },
         fetchOptions(ctx),
@@ -121,7 +121,7 @@ export const geminiAdapter: ProviderAdapter = {
   },
 
   async testConnection(ctx): Promise<void> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       base(ctx) + modelsListPath({ pageSize: 1 }),
       { method: "GET", headers: geminiHeaders(ctx) },
       fetchOptions(ctx),

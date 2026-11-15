@@ -1,6 +1,6 @@
 import "server-only";
 import { AppError, sanitizeUpstreamError } from "../errors";
-import { safeFetch } from "../http-client";
+import { providerFetch } from "../http-client";
 import { readBodyCapped } from "../media/http";
 import {
   buildChatRequest,
@@ -61,7 +61,7 @@ async function readJson(res: Response): Promise<unknown> {
 }
 
 async function get(ctx: ProviderContext, path: string): Promise<Response> {
-  return safeFetch(
+  return providerFetch(
     `${base(ctx)}${path}`,
     { method: "GET", headers: headers(ctx, false) },
     { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
@@ -113,7 +113,7 @@ export const customHttpAdapter: ProviderAdapter = {
   async chat(ctx, req: ChatRequest): Promise<ChatResult> {
     const config = parseCustomHttpConfig(ctx.config);
     const wire = buildChatRequest(config, req);
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}${wire.path}`,
       { method: wire.method, headers: headers(ctx, true), body: JSON.stringify(wire.body) },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },

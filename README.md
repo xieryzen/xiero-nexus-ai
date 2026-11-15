@@ -410,9 +410,32 @@ A provider's adapter is the protocol the gateway speaks to it.
 | `gemini` | ✓ streaming | ✓ | ✓ | ✓ | ✓ | |
 | `custom-http` | ✓ | | | | | |
 
-All four were run against local mocks written from the providers' public
-documentation, and **none against the live service**. A feature that is not
-ticked is not offered for models of that provider.
+All four are tested against local mocks written from the providers' public
+documentation. Against live services, on one server on 2026-11-15:
+`openai-compatible` for chat, agents with tools and images (Kilo Gateway,
+OVHcloud AI Endpoints, LLM7), and `gemini` for chat and speech. `anthropic`
+got as far as the provider's refusal of an account without credit, and
+`custom-http` was **not run against a live service**; nor were embeddings and
+videos with any provider. A feature that is not ticked is not offered for
+models of that provider.
+
+### A provider that says "not now"
+
+A provider answers 429 when its requests for the minute are used up, and 503
+when it is busy; a tier that costs nothing does so all the time. The app then
+waits and sends the request again: as long as the provider asks, or 3, 10, 25
+and 45 seconds, for a busy provider twice and no more. `PROVIDER_RETRIES`
+sets how often (4 unless set; 0 turns it off). A model that was waited for in
+vain, because its quota is used up for the day, is not waited for again for
+five minutes, then a quarter of an hour, then an hour at a time: a request
+gets the provider's answer at once, until the model answers again.
+
+In a project, an agent whose model still does not answer goes on with its
+second model, and then with the project's manager model; so does the review.
+The agent keeps its tools on the way: only a request that the model refused
+is tried once more without them. `GET /api/projects/{id}/attempts` lists
+every attempt of the last run's tasks, with the model that was asked, the
+time it took, and what the provider said.
 
 ### Anthropic
 
@@ -673,6 +696,7 @@ register through the UI becomes the admin.
 | `SUBTITLE_FONT_FILE` / `SUBTITLE_FONT_NAME` | no | A `.ttf` or `.otf` font for subtitles, instead of the bundled Noto Sans Bold; the name is only needed when it cannot be read from the file. |
 | `RUN_CONCURRENCY` | no | Project runs worked on at the same time: 1 to 10, default 3. |
 | `NEXUS_WORKER` | no | `0` switches the background worker off, for a second server process on the same database. |
+| `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
 | `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
@@ -716,9 +740,11 @@ passed on to the server's port, and leaves the other sites of that nginx as
 they are.
 
 A new installation has no agents. [`scripts/host/workforce.sh`](scripts/host#the-workforce-workforcesh-and-workforcejson)
-puts the workforce of a file into the running app (models with their prices,
-agents, teams and workflows), signed in as its administrator, and can ask
-each model for one word to see whether the provider's key may call it.
+puts the workforce of a file into the running app (providers that take no
+key, models with their prices, agents, teams and workflows), signed in as its
+administrator. It can ask each model for one word to see whether the provider
+lets it be called, and have the agents do a small project. The file of this
+repository uses [providers that cost nothing](scripts/host#providers-that-cost-nothing).
 
 The same folder has a read-only disk report for tidying up a node, and a way
 to run all of these without signing in to the node yourself: `over-ssh.sh`
@@ -841,11 +867,13 @@ and video generation (the three request styles, response and job-status
 parsing, file-type detection from a file's bytes, byte ranges, cost, download
 size and time limits, media tasks in a plan, the Reel template), the OpenAI
 and Gemini wire formats (tools, streaming, embeddings, images, speech), the
-custom HTTP adapter's templates, cron expressions and time zones, the agent's
-tool loop, document reading and passage ranking for the knowledge base, the
-timeline, subtitles and ffmpeg command line of a joined video, the API's
-request and response format, and the release tooling (channels, version
-ordering, release selection, checksums).
+custom HTTP adapter's templates, waiting for a provider that says "not now"
+(which answers are asked again, the waits, a model waited for in vain), cron
+expressions and time zones, the agent's tool loop, document reading and
+passage ranking for the knowledge base, the timeline, subtitles and ffmpeg
+command line of a joined video, the API's request and response format, and
+the release tooling (channels, version ordering, release selection,
+checksums).
 
 On every push, CI runs typecheck, lint and these tests, the end-to-end checks
 below, and the tests of the [host scripts](scripts/host#tests). It then builds
@@ -860,7 +888,8 @@ execute → synthesize orchestration loop have been verified end-to-end against 
 local OpenAI-compatible mock. The Anthropic adapter was run through the same
 paths against a local mock written from Anthropic's API reference; since
 v1.5.0 that is part of the end-to-end run below. It has not been run against
-the live API.
+the live API beyond a refused request. What was run against live providers
+is said under [Provider adapters](#provider-adapters).
 
 The end-to-end run is part of this repository:
 
@@ -871,7 +900,7 @@ npm run test:e2e
 
 It starts a mock provider ([`scripts/e2e/mock-provider.mjs`](scripts/e2e/mock-provider.mjs))
 and the built app on a throwaway database in the system's temporary folder,
-and makes about 590 checks through the app's HTTP API. From v1.4.0: the
+and makes about 600 checks through the app's HTTP API. From v1.4.0: the
 three request styles for images and videos, files returned inline, as links
 and behind redirects, the API key never leaving the provider's address,
 refused file types and oversized downloads, the life of a video job, access
@@ -882,7 +911,9 @@ Anthropic and Gemini formats, and their memory; the knowledge base with
 search by words and by meaning, in chat and for agents; speech; joining
 clips with a voice-over and subtitles; runs that go on without a page, are
 started by a schedule and are picked up after a restart; notifications and
-signed webhooks; and the API with its keys and limits. At the end the server
+signed webhooks; and the API with its keys and limits. From v1.6.0: the
+record of every attempt, an agent that keeps its tools when its model is
+limited, and a review by the reviewer's second model. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with

@@ -1,6 +1,6 @@
 import "server-only";
 import { AppError } from "../errors";
-import { safeFetch } from "../http-client";
+import { providerFetch } from "../http-client";
 import {
   ANTHROPIC_MODELS_PAGE_SIZE,
   anthropicHeaders,
@@ -73,7 +73,7 @@ export const anthropicAdapter: ProviderAdapter = {
     const ids = new Set<string>();
     let afterId: string | undefined;
     for (let page = 0; page < MAX_MODEL_PAGES; page++) {
-      const res = await safeFetch(
+      const res = await providerFetch(
         base(ctx) + modelsPath({ limit: ANTHROPIC_MODELS_PAGE_SIZE, afterId }),
         { method: "GET", headers: anthropicHeaders(ctx) },
         fetchOptions(ctx),
@@ -88,7 +88,7 @@ export const anthropicAdapter: ProviderAdapter = {
   },
 
   async testConnection(ctx): Promise<void> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       base(ctx) + modelsPath({ limit: 1 }),
       { method: "GET", headers: anthropicHeaders(ctx) },
       fetchOptions(ctx),
@@ -97,7 +97,7 @@ export const anthropicAdapter: ProviderAdapter = {
   },
 
   async chat(ctx, req: ChatRequest): Promise<ChatResult> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/messages`,
       {
         method: "POST",
@@ -111,7 +111,7 @@ export const anthropicAdapter: ProviderAdapter = {
   },
 
   async chatStream(ctx, req, onDelta): Promise<ChatResult> {
-    const res = await safeFetch(
+    const res = await providerFetch(
       `${base(ctx)}/messages`,
       {
         method: "POST",

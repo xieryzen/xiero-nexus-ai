@@ -201,6 +201,10 @@ const appEnv = {
   SUBTITLE_FONT_FILE: "",
   SUBTITLE_FONT_NAME: "",
   RUN_CONCURRENCY: "",
+  // The checks ask the mock for 429 and 529 on purpose and look at what the
+  // app does with them; asking again would only make them wait. Asking again
+  // itself is tested in tests/retry.test.ts and scripts/host/test/workforce.sh.
+  PROVIDER_RETRIES: "0",
   NEXUS_WORKER: "",
 };
 const startApp = () =>
