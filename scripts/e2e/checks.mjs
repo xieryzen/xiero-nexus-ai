@@ -878,4 +878,9 @@ try {
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 for (const failure of failures) console.log(`  ✗ ${failure}`);
+// On GitHub the numbers also go on the run's page, with the ffmpeg they were made with.
+if (process.env.GITHUB_ACTIONS === "true") {
+  const ffmpeg = process.env.E2E_FFMPEG_VERSION ? `joining clips checked with ffmpeg ${process.env.E2E_FFMPEG_VERSION}` : "without ffmpeg";
+  console.log(`::notice title=End-to-end checks::${passed} passed, ${failures.length} failed; ${ffmpeg}`);
+}
 process.exit(failures.length ? 1 : 0);

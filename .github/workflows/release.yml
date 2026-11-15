@@ -61,12 +61,15 @@ jobs:
           node-version: 22
           cache: npm
       # Joining clips is checked for real when there is an ffmpeg, and for its
-      # explanation of what is missing when there is none.
+      # explanation of what is missing when there is none. Here there has to
+      # be one: without it the run stops instead of checking less.
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: npm ci
       - run: npm run build
       - run: npm run test:e2e
+        env:
+          E2E_REQUIRE_FFMPEG: "1"
 
   bundle:
     name: Bundle for Node ${{ matrix.node }}

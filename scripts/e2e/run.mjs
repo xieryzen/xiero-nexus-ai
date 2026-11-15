@@ -18,6 +18,8 @@
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   KEEP=1                                        keep the temporary folder
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
+//   E2E_REQUIRE_FFMPEG=1                          stop when there is no usable
+//                                                 ffmpeg (CI sets it)
 //   E2E_BROWSER=<folder>                          also click through the dashboard
 //                                                 in a headless browser; see
 //                                                 browser-checks.mjs
@@ -145,7 +147,20 @@ const made = spawnSync(
   { stdio: "ignore" },
 );
 const hasFfmpeg = made.status === 0 && existsSync(sample);
-if (!hasFfmpeg) console.log("test:e2e: no usable ffmpeg here: joining clips is checked for its error message only.");
+const ffmpegVersion = hasFfmpeg
+  ? (spawnSync(ffmpeg, ["-hide_banner", "-version"], { encoding: "utf8" }).stdout ?? "").match(/ffmpeg version (\S+)/)?.[1] ?? "of an unknown version"
+  : null;
+if (!hasFfmpeg && process.env.E2E_REQUIRE_FFMPEG === "1") {
+  // Where joining clips is meant to be checked for real, a machine that lost
+  // its ffmpeg must not pass with the smaller set of checks.
+  console.error(`test:e2e: E2E_REQUIRE_FFMPEG is set, and "${ffmpeg}" could not make a test clip. It has to be installed, with libx264 and aac.`);
+  await finish(1);
+}
+console.log(
+  hasFfmpeg
+    ? `test:e2e: joining clips is checked with ffmpeg ${ffmpegVersion}.`
+    : "test:e2e: no usable ffmpeg here: joining clips is checked for its error message only.",
+);
 
 const mock = start("mock provider", [join(here, "mock-provider.mjs"), String(ports.mock), String(ports.cdn)], {
   ...process.env,
@@ -217,6 +232,7 @@ const checkEnv = {
   E2E_FFMPEG: hasFfmpeg ? "1" : "",
   // The checks decode the joined videos with it, to see what the files hold.
   E2E_FFMPEG_PATH: hasFfmpeg ? ffmpeg : "",
+  E2E_FFMPEG_VERSION: ffmpegVersion ?? "",
 };
 
 /** Run one of the check scripts and resolve with its exit code. */
@@ -329,6 +345,9 @@ async function stopAndStartAgain() {
   check("  the video that was being generated is not ordered a second time", videos === 1, videos);
 
   console.log(`\n${passed} passed, ${failed} failed (stopping and starting again)`);
+  if (process.env.GITHUB_ACTIONS === "true") {
+    console.log(`::notice title=Stopping and starting again::${passed} passed, ${failed} failed`);
+  }
   return failed === 0 ? 0 : 1;
 }
 

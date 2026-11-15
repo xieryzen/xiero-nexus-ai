@@ -870,7 +870,9 @@ requests.
 Joining clips is checked for real when ffmpeg is there (`FFMPEG_PATH`, or
 `ffmpeg` on the PATH), and for its explanation of what is missing when not:
 the joined files are decoded again, and their picture and sound counted. It
-was run with ffmpeg 4.2 and 9.0; CI uses the ffmpeg package of its runner.
+was run with ffmpeg 4.2 and 9.0; CI uses the ffmpeg package of its runner,
+and with `E2E_REQUIRE_FFMPEG=1` stops when there is none instead of
+checking less.
 
 `E2E_BROWSER=<folder with puppeteer-core and @sparticuz/chromium>` also
 opens every dashboard page in a headless browser and clicks through the new
