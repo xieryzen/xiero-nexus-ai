@@ -239,9 +239,9 @@ sudo bash pterodactyl-upgrade.sh --server <short id>
 
 The short ID is the one in the panel's address of the server. Options, what
 is backed up where, and how to go back are in
-[scripts/host/README.md](scripts/host/README.md). The script was tested
-against a stand-in for Wings, not on a real node: do the dry run first and
-read the plan.
+[scripts/host/README.md](scripts/host/README.md). The script is tested
+against a stand-in for Wings and has upgraded one real node so far: do the
+dry run first and read the plan.
 
 **Without signing in to the node yourself:** the workflow *Deploy to a
 Pterodactyl node* (Actions, started by hand) runs the same script over SSH,

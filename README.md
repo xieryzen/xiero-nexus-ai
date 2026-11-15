@@ -19,8 +19,8 @@ OpenAI's format.
 > **not against a live provider**; the **remote Git** push (GitHub API) has
 > likewise **not been tested against a live repository**; the
 > [scripts for a Pterodactyl host](scripts/host) are tested against a
-> stand-in for Wings, and of them the **upgrade has not yet run on a real
-> node** (the installer and the reports have, on one); and the **workflow builder** is
+> stand-in for Wings and were used on **one real node**, where going back
+> after a failed upgrade has not happened yet; and the **workflow builder** is
 > step-based (a reusable ordered plan), not a drag-and-drop canvas. Joining
 > clips into one video is done by ffmpeg on the server, and was tested with a
 > real ffmpeg on generated test clips.

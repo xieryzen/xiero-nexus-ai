@@ -45,9 +45,10 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ### Notes
 
-- The installer, the start, the check and the disk report were used on one
-  real node on 2026-11-15. The upgrade itself has still only run against the
-  stand-in for Wings.
+- The host scripts were used on one real node on 2026-11-15: an
+  installation, the check, the disk report, and one upgrade that installed
+  the same version again. Going back by itself after a failed start has
+  still only run against the stand-in for Wings.
 
 ## [1.5.0] - 2026-11-15
 

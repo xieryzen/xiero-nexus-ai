@@ -14,12 +14,13 @@ not part of a release bundle and the app never runs them.
 
 All of them are tested on a made-up Wings host (see [Tests](#tests)), written
 from the source of Wings 1.12; no test here talks to a real Wings. Outside
-the tests, the installer, the start it ends with, the check and the disk
-report have been used on one real node (Debian 13, Docker 29, the Node.js egg
-of ptero-eggs), in November 2026. **The upgrade itself has not yet run
-against a real Wings.** It is built for that: it has a dry run, asks before it
-starts, keeps a backup outside the server's files, and puts the old version
-back when the new one does not answer.
+the tests they have been used on one real node (Debian 13, Docker 29, the
+Node.js egg of ptero-eggs), in November 2026: an installation, the check, the
+disk report, and one upgrade, which installed the version that was there
+again. **Going back by itself after a new version does not come up has only
+run against the stand-in.** So do the dry run first and read the plan; the
+upgrade keeps a backup outside the server's files, and `--restore` puts it
+back.
 
 Get them on the node:
 
