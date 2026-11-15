@@ -456,19 +456,22 @@ What [`workforce.json`](workforce.json) holds is said in its `about`.
 
 ### Providers that cost nothing
 
-The committed file uses three providers that take no key, and no model that
-is billed:
+The committed file adds three providers that take no key, and uses no model
+that is billed:
 
 | Provider | What it has | What it allows from one address |
 | --- | --- | --- |
 | [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | About 200 requests an hour, all models together |
 | [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
-| [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and a daily allowance |
+| [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and an allowance for a day that a few tasks use up |
 
 That is little: an agent with tools makes several requests for one task. The
 app waits and asks again when a provider answers "too many requests" (see
 `PROVIDER_RETRIES` in the main README), and an agent whose first model does
 not answer goes on with its second, so a project gets done, slowly. The
+agents have their first model with Kilo Gateway and their second with
+OVHcloud or Gemini. None depends on LLM7, whose allowance was used up after
+a few tasks: its free models are in the app to be picked by hand. The
 providers list far more models than they give away: one word from each
 (`--test`) is how the ones in the file were found. Kilo Gateway and LLM7 may
 log what is sent to their free models and use it to improve models: nothing

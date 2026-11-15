@@ -5,7 +5,7 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [1.6.0-rc.1] - 2026-11-15
+## [1.6.0] - 2026-11-15
 
 Providers that cost nothing, and what it takes to work with them: the app
 waits and asks again when a provider says "too many requests", an agent keeps
@@ -88,12 +88,12 @@ real server is said under Notes.
 - **A workforce that costs nothing**, in the committed `workforce.json`:
   eleven agents, two teams, and the workflows "Software delivery" and "Short
   Reels" (a vertical video of four pictures under their voice-overs, for
-  providers without a video model), on the free models of three providers
-  that take no key (Kilo Gateway, OVHcloud AI Endpoints, LLM7). The voice,
-  and the second model of two agents, are Gemini's, on a key without
-  billing. Each agent has its second model with another provider than its
-  first. What these providers allow is little, and what is sent to two of
-  them may be logged: see
+  providers without a video model), on free models. Each agent has its first
+  model with Kilo Gateway; nine have their second with OVHcloud AI
+  Endpoints and two with Gemini, on a key without billing, which also gives
+  the voice. Kilo Gateway and OVHcloud take no key. LLM7, a third provider
+  without a key, is added for models to pick by hand. What these providers
+  allow is little, and what is sent to two of them may be logged: see
   [scripts/host](scripts/host#providers-that-cost-nothing).
 - CI runs these against an SSH server on the runner itself, as a plain user
   with a key and as root with a password and through sudo, installs each
@@ -123,7 +123,8 @@ real server is said under Notes.
 
 - The host scripts were used on one real node on 2026-11-15: an
   installation, the check, the disk report, one upgrade that installed the
-  same version again, and the site in nginx with a certificate from Let's
+  same version again and one from 1.5.0 to the release candidate of this
+  version, and the site in nginx with a certificate from Let's
   Encrypt, which the runner then saw answer from the outside. Going back by
   itself after a failed start has still only run against the stand-in for
   Wings, and taking a site out of nginx again after a failed step only in
@@ -131,25 +132,29 @@ real server is said under Notes.
 - When the site does not answer from the outside after an upgrade, the
   workflow's warning now says what was in the way (the name is not known, no
   connection, a certificate that is not accepted).
-- Free models were tried on one real server on 2026-11-15, which ran 1.5.0,
-  with an earlier arrangement of the agents than the one in the file. The
-  three providers were added; the models of the file were asked for one
-  word, and all answered but one, the first model of two agents, which said
-  "busy" the last time and had answered before; the image model made a
-  picture, which was joined with a spoken sentence; and a project that gave
-  each of the eleven agents one small task ended with all eleven done, most
-  of them with a tool call. A project that a model planned did not end well
-  there: requests of its tasks, its summary and its review were answered
-  with "too many requests", and 1.5 does not wait.
-- That waiting is what this release adds, and at the time of this release
-  candidate it **has run against the mock only**, not against a provider.
-  The candidate is there to see it at work on that server, with the file as
-  it is here.
-- The free models change. Of the models these providers listed as free on
-  that day, three did not serve (limited by their provider, or minutes for
-  one word); the picture models of LLM7 answer "missing API key"; the free
-  English voice of OVHcloud wants another audio format than the app asks
-  for.
+- Free models were tried on one real server on 2026-11-15, first with
+  1.5.0, then with the release candidate of this version, whose program is
+  the same. With the candidate, and the agents as the file has them but for
+  the second model of two: every chat model of the file answered one word;
+  the image model made a picture, which was joined with a spoken sentence; a
+  project that a model planned ended as succeeded, with both its tasks done,
+  a summary and a review; and a project that gave each of the eleven agents
+  one small task ended with all eleven done at the first attempt, ten of
+  them with a tool call, and a review. With 1.5.0 the planned project had
+  ended twice with a task failed after "too many requests", and without a
+  review.
+- Whether a request was sent again in those projects cannot be seen from
+  the outside, so **the waiting itself has been tested against the mock
+  only**. What was seen on the server: a model whose allowance for the day
+  was used up was passed over, and the task went on with the agent's next
+  model and was done.
+- The free models change, within a day. Of the models these providers
+  listed as free: three did not serve (limited by their provider, or minutes
+  for one word); Qwen3.5-397B at OVHcloud answered in seconds at times and
+  not within five minutes at another, and is not in the file; the allowance
+  of LLM7 without a key was used up after a few tasks, so no agent depends
+  on it; its picture models answer "missing API key"; and the free English
+  voice of OVHcloud wants another audio format than the app asks for.
 
 ### Upgrading
 
