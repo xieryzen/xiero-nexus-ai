@@ -48,12 +48,27 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
   step fails. The workflow and `over-ssh.sh` have the actions `site-plan`
   and `site` for it, and after `site` the runner asks the site from the
   outside with the certificate checked.
+- **The workforce from a file**, `scripts/host/workforce.sh` with
+  `workforce.py` and `workforce.json`: signs in to the running app as its
+  administrator and adds the models, agents, teams and workflows the file
+  names, through the app's own API. What is there under the same name is
+  reported and changed only with `--update`; nothing is deleted. `--test`,
+  `--test-all` and `--test-media` try the models with one small request
+  each, which is the only way to learn that a key may call a model its
+  provider lists. The workflow and `over-ssh.sh` have the actions
+  `workforce-plan` and `workforce` for it. The committed file holds eleven
+  agents on Claude and Gemini, two teams, and the workflows "Software
+  delivery" and "Short Reels" (a vertical video of four pictures under their
+  voice-overs, for providers without a video model). See
+  [scripts/host](scripts/host#the-workforce-workforcesh-and-workforcejson).
 - CI runs these against an SSH server on the runner itself, as a plain user
   with a key and as root with a password and through sudo, installs each
   bundle on a made-up Pterodactyl host, started through `ts-node` the way the
   common Node.js egg starts it, and sets a site up in a real nginx on the
   runner, next to other sites, with stand-ins for certbot and Let's Encrypt.
-  No test signs in to a real node.
+  It also puts the committed `workforce.json` into the app it built, with
+  the mock providers, and runs both workflows in a project. No test signs in
+  to a real node or asks a real provider.
 
 ### Notes
 
