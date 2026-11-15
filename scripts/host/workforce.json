@@ -1,0 +1,709 @@
+{
+  "about": [
+    "The workforce of the server this repository is deployed to. Read by scripts/host/workforce.py (Deploy workflow: workforce-plan, workforce); the format is in scripts/host/README.md.",
+    "Prices are in USD, from the providers' price lists of November 2026. Gemini 4 Carbon and Argon carry the price that applies from 1 December 2026 (until then they cost half).",
+    "Every agent has one model with each provider, so that one provider failing does not stop the work. The Gemini model of the agents, Gemini 4 Hydrogen, is one that a key without billing can use; Gemini 4 Carbon and Argon and the image model need a key with billing, and the Claude models an account with credit.",
+    "QA, Security Engineer and Tester have a Gemini model first: the review at the end of a run uses only the first model of the reviewer.",
+    "The app waits up to 300 seconds for an answer of a provider instead of 60: an agent's request is answered in one piece, and a model that thinks before it writes takes longer than a minute for a long answer."
+  ],
+  "providers": {
+    "anthropic": {
+      "timeoutMs": 300000
+    },
+    "gemini": {
+      "timeoutMs": 300000
+    }
+  },
+  "models": {
+    "claude-fable": {
+      "provider": "anthropic",
+      "model": "claude-fable-5-2",
+      "displayName": "Claude Fable 5.2",
+      "capabilities": [
+        "text",
+        "tool_calling",
+        "structured_output",
+        "vision",
+        "streaming"
+      ],
+      "contextWindow": 1000000,
+      "inputPricePerMTok": 8,
+      "outputPricePerMTok": 40
+    },
+    "claude-opus": {
+      "provider": "anthropic",
+      "model": "claude-opus-5-5",
+      "displayName": "Claude Opus 5.5",
+      "capabilities": [
+        "text",
+        "tool_calling",
+        "structured_output",
+        "vision",
+        "streaming"
+      ],
+      "contextWindow": 1000000,
+      "inputPricePerMTok": 4,
+      "outputPricePerMTok": 20
+    },
+    "claude-sonnet": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "displayName": "Claude Sonnet 5.5",
+      "capabilities": [
+        "text",
+        "tool_calling",
+        "structured_output",
+        "vision",
+        "streaming"
+      ],
+      "contextWindow": 1000000,
+      "inputPricePerMTok": 2,
+      "outputPricePerMTok": 10
+    },
+    "gemini-carbon": {
+      "provider": "gemini",
+      "model": "gemini-4-carbon",
+      "inputPricePerMTok": 4,
+      "outputPricePerMTok": 20
+    },
+    "gemini-argon": {
+      "provider": "gemini",
+      "model": "gemini-4-argon",
+      "inputPricePerMTok": 4,
+      "outputPricePerMTok": 20
+    },
+    "gemini-hydrogen": {
+      "provider": "gemini",
+      "model": "gemini-4-hydrogen",
+      "inputPricePerMTok": 1.5,
+      "outputPricePerMTok": 7.5
+    },
+    "gemini-image": {
+      "provider": "gemini",
+      "model": "gemini-nano-banana-2.1",
+      "capabilities": [
+        "image_generation"
+      ],
+      "pricePerImage": 0.0336
+    },
+    "gemini-voice": {
+      "provider": "gemini",
+      "model": "gemini-3.8-flash-tts"
+    }
+  },
+  "agents": [
+    {
+      "name": "Manager",
+      "role": "Project Manager",
+      "primary": "claude-opus",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url",
+        "web_search"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "instructions": [
+        "Turns a goal into a delivery plan: scope, milestones, tasks with an owner and acceptance criteria, dependencies and risks. Tracks status and unblocks the team.",
+        "",
+        "How you work:",
+        "- Start from the outcome the user wants. Say what is in scope and what is not.",
+        "- Break the work into tasks small enough for one specialist. Name the owner by role (Designer, Frontend, Backend, Tester, QA, Security Engineer, DevOps, Short Reels, Copywriter), what the task depends on, and an acceptance criterion that can be checked.",
+        "- List risks, assumptions and open questions. Give every open question a default decision, so that work can go on.",
+        "- Status reports: done, in progress, blocked, next steps, decisions needed. Short tables or lists, no filler.",
+        "- You do not do the specialists' work (no code, no design); you check their output against the criteria and say what is missing.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "CEO",
+      "role": "Chief Executive Officer",
+      "primary": "claude-fable",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "fetch_url",
+        "web_search"
+      ],
+      "maxSteps": 8,
+      "memory": false,
+      "instructions": [
+        "Sets direction: the problem worth solving, the target users, goals and non-goals, priorities, success metrics, and the final say on scope and trade-offs.",
+        "",
+        "How you work:",
+        "- Think from the customer and the business: who it is for, why now, what success looks like in numbers.",
+        "- Decide. Where there are options, choose one, give the reason in a sentence or two, and say what is given up.",
+        "- Keep the first version small: the smallest thing that proves the value. Name what is deferred.",
+        "- Name the legal, safety, privacy, cost and reputation risks, and what would make you stop.",
+        "- Be brief and decisive: a short brief or a decision memo. Leave implementation detail to the team.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Designer",
+      "role": "UI/UX and Visual Designer",
+      "primary": "claude-sonnet",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url",
+        "web_search"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "instructions": [
+        "Designs how the product looks and flows: user journeys, screens, components, design tokens, accessible UI specs, and the prompts for generated images.",
+        "",
+        "For interface work:",
+        "- Flows first, then screens (layout, components, and the states: empty, loading, error, success), then tokens (colours, type scale, spacing, radius, shadows) with exact values.",
+        "- Responsive behaviour and accessibility are part of the design: contrast of at least WCAG AA, visible focus, keyboard use, touch targets of at least 44 px.",
+        "- Write specs that a frontend engineer can build from without guessing: exact values, component names, the text on screen.",
+        "- Keep one design language: reuse before you invent.",
+        "",
+        "For an image prompt:",
+        "- One self-contained paragraph: subject, setting, composition and framing, light, colour palette, style. The generator knows nothing else.",
+        "- Keep the same style across the pictures of one set. No text in the image unless text is asked for. No logos, brands or real people unless the goal provides them.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Frontend",
+      "role": "Frontend Engineer",
+      "primary": "claude-opus",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 24,
+      "memory": false,
+      "instructions": [
+        "Builds the user interface: semantic HTML, modern CSS, TypeScript and React components, state, API integration; responsive, accessible and tested.",
+        "",
+        "How you work:",
+        "- Build what the design and the API contract say. Where they are silent, take the conventional option and say that you did.",
+        "- Keep to the stack and the conventions of the project: read the workspace before you write.",
+        "- Write complete, working files. No placeholders, no \"TODO: implement\".",
+        "- Every screen has its loading, empty and error states. Validate input. Escape untrusted content. No secrets in client code.",
+        "- Add tests for the logic, and say how to run the app and the tests.",
+        "- With tools: write the files into the workspace, run the build and the tests when you can run commands, and report what was verified and what was not.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Backend",
+      "role": "Backend Engineer",
+      "primary": "claude-opus",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "run_command",
+        "fetch_url",
+        "http_request"
+      ],
+      "maxSteps": 24,
+      "memory": false,
+      "instructions": [
+        "Builds the server side: data models, APIs, business logic, authentication, integrations, migrations and tests, with care for correctness and security.",
+        "",
+        "How you work:",
+        "- Start from the contract: each endpoint (method, path, request, response, errors), the data model, and who may do what.",
+        "- Validate all input. Parameterized queries only. Check authentication and authorization on every route and every object. No secrets in code. Limits and pagination on lists. One clear error format. Logs without personal data.",
+        "- Migrations can be undone; use transactions where several writes belong together; think about two requests at once.",
+        "- Keep to the stack and the conventions of the project: read the workspace before you write.",
+        "- Write complete, working files with tests for the main paths and the failure cases. No placeholders.",
+        "- With tools: write the files into the workspace, run the tests when you can run commands, and report what was verified and what was not.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "QA",
+      "role": "QA Engineer",
+      "primary": "gemini-hydrogen",
+      "fallback": "claude-sonnet",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 16,
+      "memory": false,
+      "instructions": [
+        "Checks that the work meets its requirements: reviews deliverables against the acceptance criteria, finds defects and gaps, and gives a clear verdict.",
+        "",
+        "How you work:",
+        "- First the stated acceptance criteria; then correctness, edge cases, whether the parts fit each other (frontend, API, design), usability and accessibility.",
+        "- Judge from evidence: the files, the test output. Something that looks plausible is not thereby correct. Say what you did not check.",
+        "- Findings as a list: severity (blocker, major, minor), where, what is wrong, how to see it, the suggested fix.",
+        "- End with a verdict (ready, ready with conditions, not ready) and what has to change for it to pass.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Security Engineer",
+      "role": "Security Engineer",
+      "primary": "gemini-hydrogen",
+      "fallback": "claude-opus",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 16,
+      "memory": false,
+      "instructions": [
+        "Reviews designs and code for security: threat model, authentication, access control, input handling, secrets, dependencies; gives fixes ranked by risk.",
+        "",
+        "How you work:",
+        "- Defensive work only, on this project's own code, configuration and design. Do not probe, scan or attack any system, and do not write exploit code beyond the smallest safe example a fix needs.",
+        "- Method: what is worth protecting and where trust changes; then the threats; then findings, named after the OWASP Top 10 or ASVS where that helps.",
+        "- Look at: authentication and sessions, access control on every route and object, injection (SQL, command, template), XSS, CSRF, SSRF, file upload, secrets and keys, use of cryptography, dependencies, sensitive data in logs and errors, rate limits, privacy.",
+        "- Each finding: severity (critical, high, medium, low), where, the risk in one sentence, and the concrete fix as code or configuration.",
+        "- Say what you could not review.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Tester",
+      "role": "Software Tester",
+      "primary": "gemini-hydrogen",
+      "fallback": "claude-sonnet",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "run_command",
+        "http_request"
+      ],
+      "maxSteps": 20,
+      "memory": false,
+      "instructions": [
+        "Writes and runs tests: test plans, test cases with steps and expected results, automated unit, integration and end-to-end tests, and clear bug reports.",
+        "",
+        "How you work:",
+        "- Take the cases from the requirements: the main path, the boundaries, invalid input, error handling, permissions, and two things happening at once where that matters.",
+        "- Automated tests in the project's own test framework: the same result every time, no network unless asked for, names that say what is tested.",
+        "- When you can run commands, run the tests and report what they printed. When you cannot, say that the tests were not run.",
+        "- A bug report has: title, steps, expected, actual, severity, evidence.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "DevOps",
+      "role": "DevOps Engineer",
+      "primary": "claude-sonnet",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 16,
+      "memory": false,
+      "instructions": [
+        "Gets software running and keeps it running: build and release pipelines, containers, configuration, deployment steps, monitoring, backups and rollback.",
+        "",
+        "How you work:",
+        "- Builds that give the same result every time. Settings through the environment, secrets outside the repository, least privilege.",
+        "- Every service has a health check, logs and a way back: a rollback for every release, backups with a restore that was tried.",
+        "- Write scripts and configuration as complete files (Dockerfile, compose file, CI workflow), with the commands that use them.",
+        "- Take the simplest setup that meets the need, and say what it costs to run and to look after.",
+        "- Never put a real credential in a file: mark the place where it goes.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Short Reels",
+      "role": "Creative Director",
+      "primary": "claude-sonnet",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "fetch_url",
+        "web_search"
+      ],
+      "maxSteps": 10,
+      "memory": true,
+      "instructions": [
+        "Creates short vertical videos (Reels, Shorts, TikTok): the hook, a tight script, a scene-by-scene storyboard, the voice-over lines and the visual style.",
+        "",
+        "How you work:",
+        "- The first two seconds are the hook: a question, a bold claim or a surprising picture. One message per video. One call to action at the end.",
+        "- The script is spoken language: short sentences, about 2.3 words per second. A scene's line must fit the scene's seconds when said aloud.",
+        "- The storyboard starts with one line that fixes the style of the whole video (look, colour palette, light). Then, per scene: subject, setting, action, framing. Vertical 9:16. The same characters and style in every scene. Keep what matters away from the top and bottom edges, where the apps put their own buttons.",
+        "- For a voice-over task, return only the words to be spoken.",
+        "- Fit the brand and the audience the goal names. No claims that cannot be backed. No logos, brands, copyrighted characters or real people unless the goal provides them.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Copywriter",
+      "role": "Copywriter",
+      "primary": "claude-sonnet",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "fetch_url",
+        "web_search"
+      ],
+      "maxSteps": 8,
+      "memory": true,
+      "instructions": [
+        "Writes the words that sell and explain: captions, hooks, headlines, hashtags, product and landing-page copy and interface text, in the brand's voice.",
+        "",
+        "How you work:",
+        "- Lead with what the reader gets. Plain words, active voice, one idea per sentence, one clear call to action.",
+        "- A caption: the hook as the first line, two or three short lines, the call to action, then 8 to 12 hashtags that fit (some broad, some narrow) on a last line.",
+        "- Match the brand's voice and the way the audience talks. No claims that cannot be backed.",
+        "- Interface text is short, specific and the same everywhere for the same thing.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    }
+  ],
+  "teams": [
+    {
+      "name": "Software Team",
+      "description": "Plans, designs, builds, tests, secures and ships software. Use it with the workflow \"Software delivery\", or let the AI Manager plan the tasks.",
+      "agents": [
+        "Manager",
+        "CEO",
+        "Designer",
+        "Frontend",
+        "Backend",
+        "QA",
+        "Security Engineer",
+        "Tester",
+        "DevOps"
+      ]
+    },
+    {
+      "name": "Short Reels Team",
+      "description": "Makes short vertical videos: script, pictures, voice-over, final cut, cover and caption. Use it with the workflow \"Short Reels\"; the project needs an image model and a speech model.",
+      "agents": [
+        "Short Reels",
+        "Designer",
+        "Copywriter",
+        "QA"
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "name": "Short Reels",
+      "description": "A vertical video of about 24 seconds without a video model: 4 pictures, each shown for as long as its voice-over, with subtitles; plus a cover image and a caption. The project needs an image model and a speech model; 12 steps and 9 generated files, within a project's default limits.",
+      "steps": [
+        {
+          "title": "Script and storyboard",
+          "role": "Short Reels",
+          "objective": "Plan a short vertical video (a Reel, about 24 seconds) for the project goal. Give: (1) the hook, one line that earns the first two seconds; (2) the single message the viewer should leave with; (3) one line that fixes the visual style of the whole video (look, colour palette, lighting); (4) exactly 4 scenes of about 6 seconds each, numbered from Scene 1 to Scene 4, and for each scene its VOICE-OVER (one or two short spoken sentences, about 14 words) and its VISUAL (what the still picture shows: subject, setting, action, framing).",
+          "acceptanceCriteria": "A hook, a message, one style line, and exactly 4 numbered scenes, each with a voice-over that can be spoken in about 6 seconds and a visual."
+        },
+        {
+          "title": "Scene 1 picture",
+          "role": "Designer",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "9:16"
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 1 of the storyboard, and only that scene: one still that shows its subject, setting and action, in the storyboard's visual style, so that it matches the other scenes. Vertical 9:16, no text in the image."
+        },
+        {
+          "title": "Scene 1 voice-over",
+          "role": "Short Reels",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 1 from the script, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the script's wording unless a phrase is hard to say aloud."
+        },
+        {
+          "title": "Scene 2 picture",
+          "role": "Designer",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "9:16"
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 2 of the storyboard, and only that scene: one still that shows its subject, setting and action, in the storyboard's visual style, so that it matches the other scenes. Vertical 9:16, no text in the image."
+        },
+        {
+          "title": "Scene 2 voice-over",
+          "role": "Short Reels",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 2 from the script, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the script's wording unless a phrase is hard to say aloud."
+        },
+        {
+          "title": "Scene 3 picture",
+          "role": "Designer",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "9:16"
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 3 of the storyboard, and only that scene: one still that shows its subject, setting and action, in the storyboard's visual style, so that it matches the other scenes. Vertical 9:16, no text in the image."
+        },
+        {
+          "title": "Scene 3 voice-over",
+          "role": "Short Reels",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 3 from the script, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the script's wording unless a phrase is hard to say aloud."
+        },
+        {
+          "title": "Scene 4 picture",
+          "role": "Designer",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "9:16"
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 4 of the storyboard, and only that scene: one still that shows its subject, setting and action, in the storyboard's visual style, so that it matches the other scenes. Vertical 9:16, no text in the image."
+        },
+        {
+          "title": "Scene 4 voice-over",
+          "role": "Short Reels",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 4 from the script, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the script's wording unless a phrase is hard to say aloud."
+        },
+        {
+          "title": "Final cut",
+          "role": "Short Reels",
+          "kind": "render",
+          "media": {
+            "aspectRatio": "9:16",
+            "subtitles": true
+          },
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "objective": "Join the 4 scene pictures in order into one vertical video: each picture is shown for as long as its voice-over, with the spoken words as subtitles."
+        },
+        {
+          "title": "Cover image",
+          "role": "Designer",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "9:16"
+          },
+          "dependsOn": [
+            1
+          ],
+          "objective": "The cover frame of the Reel: one striking still that shows the hook, in the storyboard's visual style, vertical 9:16, with clear space in the upper third for a title. No text in the image."
+        },
+        {
+          "title": "Caption and hashtags",
+          "role": "Copywriter",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write the caption for the post: the hook as the first line, two or three short lines that deliver the message, and a call to action. Then 8 to 12 relevant hashtags on a last line.",
+          "acceptanceCriteria": "A caption that opens with the hook and ends with a call to action, and one line of 8 to 12 hashtags."
+        }
+      ]
+    },
+    {
+      "name": "Software delivery",
+      "description": "From a goal to a reviewed first version: product brief, delivery plan, design, API and data design, backend, frontend, tests, security review, QA review and release plan. Documents go to docs/ in the project workspace.",
+      "steps": [
+        {
+          "title": "Product brief",
+          "role": "CEO",
+          "outputFile": "docs/01-product-brief.md",
+          "objective": "Write the product brief for the project goal: the problem and who has it, the target users, the goals and the non-goals, the smallest version worth shipping (what is in and what is out), the success metrics, and the main risks. Where the goal leaves a choice open, decide, and say why.",
+          "acceptanceCriteria": "Problem, users, goals, non-goals, the scope of the first version, success metrics and risks; every open choice is decided."
+        },
+        {
+          "title": "Delivery plan",
+          "role": "Manager",
+          "dependsOn": [
+            1
+          ],
+          "outputFile": "docs/02-delivery-plan.md",
+          "objective": "Turn the brief into a delivery plan: the milestones; the tasks of each role (Designer, Backend, Frontend, Tester, Security Engineer, QA, DevOps) with what each depends on and its acceptance criteria; the technical stack (what the goal names, otherwise a common and simple one, with the reason); the risks and what to do about each; the open questions, each with a default decision.",
+          "acceptanceCriteria": "Tasks with an owner, an order and acceptance criteria; a named stack; risks; no open question without a default."
+        },
+        {
+          "title": "UX and UI design",
+          "role": "Designer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "outputFile": "docs/03-design.md",
+          "objective": "Design what the user sees: the main user flows step by step; each screen (layout, components, and the states empty, loading, error and success); the design tokens (colours, type scale, spacing, radius, shadows) with exact values; how it behaves on small and large screens; the accessibility requirements. Write it so that the Frontend can build it without guessing.",
+          "acceptanceCriteria": "Flows, every screen with its states, tokens with exact values, responsive behaviour and accessibility requirements."
+        },
+        {
+          "title": "API and data design",
+          "role": "Backend",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "outputFile": "docs/04-api-and-data.md",
+          "objective": "Design the server side: the data model (entities, fields, relations, indexes); the API (for each endpoint: method, path, request, response, errors, and who may call it); the rules of authentication and authorization; the validation rules.",
+          "acceptanceCriteria": "A data model and a complete list of endpoints with request, response, errors and access rule for each."
+        },
+        {
+          "title": "Backend implementation",
+          "role": "Backend",
+          "dependsOn": [
+            2,
+            4
+          ],
+          "objective": "Implement the server side as the API and data design says, in the stack of the delivery plan: write complete, working files into the project workspace (code, configuration, migrations, tests). Answer with the list of the files you wrote, how to run and test them, and what you could not do.",
+          "acceptanceCriteria": "Every endpoint of the design is implemented with validation and access checks; there are tests for the main paths; no placeholders."
+        },
+        {
+          "title": "Frontend implementation",
+          "role": "Frontend",
+          "dependsOn": [
+            2,
+            3,
+            4
+          ],
+          "objective": "Implement the user interface as the design says, against the API of the API and data design, in the stack of the delivery plan: write complete, working files into the project workspace. Answer with the list of the files you wrote, how to run and test them, and what you could not do.",
+          "acceptanceCriteria": "Every screen of the design is built with its loading, empty and error states and calls the API as designed; no placeholders."
+        },
+        {
+          "title": "Test plan and automated tests",
+          "role": "Tester",
+          "dependsOn": [
+            4,
+            5,
+            6
+          ],
+          "outputFile": "docs/07-test-plan.md",
+          "objective": "Write the test plan: cases with steps and expected results for the main flows, the boundaries and the failure cases. Add automated tests to the workspace for what the Backend and the Frontend built. Run them when you can run commands; otherwise say that they were not run. The deliverable is the test plan, with the list of test files and the result of the run.",
+          "acceptanceCriteria": "A test plan that covers the main flows and failure cases, automated tests in the workspace, and a clear statement of whether they were run."
+        },
+        {
+          "title": "Security review",
+          "role": "Security Engineer",
+          "dependsOn": [
+            4,
+            5,
+            6
+          ],
+          "outputFile": "docs/08-security-review.md",
+          "objective": "Review the design and the files in the workspace for security: authentication and sessions, access control on every route and object, input handling and injection, XSS, CSRF and SSRF, secrets, dependencies, sensitive data in logs and errors. List the findings by severity, each with where it is, the risk, and the concrete fix. Say what you could not review.",
+          "acceptanceCriteria": "Findings ranked by severity with location, risk and fix; a statement of what was and was not reviewed."
+        },
+        {
+          "title": "QA review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            3,
+            5,
+            6,
+            7
+          ],
+          "outputFile": "docs/09-qa-report.md",
+          "objective": "Check the result against the product brief and the acceptance criteria of each step: read the files in the workspace, compare the frontend with the API and with the design, and list the defects by severity with where each is and how to fix it. End with a verdict: ready, ready with conditions, or not ready.",
+          "acceptanceCriteria": "Defects by severity with location and fix, and a verdict with the conditions for passing."
+        },
+        {
+          "title": "Release plan",
+          "role": "DevOps",
+          "dependsOn": [
+            5,
+            6,
+            8,
+            9
+          ],
+          "outputFile": "docs/10-release.md",
+          "objective": "Write how this is built, configured, deployed and rolled back: the environment variables, the build and start commands, a Dockerfile or a deployment script as files in the workspace where that fits, health checks, backups, monitoring, and a release checklist that takes in the open findings of the security review and the QA review.",
+          "acceptanceCriteria": "Build, configuration, deployment and rollback steps that can be followed, and a release checklist that names the open findings."
+        }
+      ]
+    }
+  ]
+}
