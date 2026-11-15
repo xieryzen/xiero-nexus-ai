@@ -270,6 +270,13 @@ server.
   `SEARCH_PROVIDER`, `RUN_CONCURRENCY` and others) are optional and described
   in `.env.example`; an existing `.env` keeps working as it is.
 
+### From 1.5 to 1.6
+
+- Nothing has to be configured, and the database stays as it is: going back
+  to 1.5 needs no backup of `data/` to be put back.
+- The app now waits and asks again when a provider answers "too many
+  requests" or "busy". `PROVIDER_RETRIES=0` in `.env` turns that off.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of
