@@ -7,7 +7,7 @@
     "gpt-oss-120b of OVHcloud is no agent's model: it is the one to pick as the manager model of a project, which plans, sums up, and is every task's last resort. \"tryRun\" uses it that way.",
     "What is sent to the free models of Kilo Gateway and LLM7 may be logged by the provider and used to improve its models: nothing personal or confidential.",
     "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes between ten seconds and a minute and a half for one, so the reel shows them cropped to its vertical frame.",
-    "Two models that were tried and did not serve are switched off: one was rate-limited by its provider, the other took four minutes to answer.",
+    "Two models that were tried and did not serve are switched off: one was rate-limited by its provider, the other took four minutes to answer. Qwen3.5-397B of OVHcloud is left out: it answered one word in seconds at times, and not within five minutes at another.",
     "The app waits up to 300 seconds for an answer of a provider instead of 60: an agent's request is answered in one piece."
   ],
   "providers": {
@@ -73,12 +73,6 @@
       "inputPricePerMTok": 0,
       "outputPricePerMTok": 0
     },
-    "ovh-qwen": {
-      "provider": "OVHcloud AI Endpoints",
-      "model": "Qwen3.5-397B-A17B",
-      "inputPricePerMTok": 0,
-      "outputPricePerMTok": 0
-    },
     "ovh-qwen36": {
       "provider": "OVHcloud AI Endpoints",
       "model": "Qwen3.6-27B",
@@ -129,7 +123,7 @@
       "name": "Manager",
       "role": "Project Manager",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-qwen",
+      "fallback": "ovh-gpt-oss-20b",
       "tools": [
         "list_files",
         "read_file",
@@ -158,7 +152,7 @@
       "name": "CEO",
       "role": "Chief Executive Officer",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-qwen",
+      "fallback": "ovh-gpt-oss-20b",
       "tools": [
         "list_files",
         "read_file",
