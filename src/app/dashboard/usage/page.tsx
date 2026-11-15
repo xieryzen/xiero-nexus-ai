@@ -1,6 +1,7 @@
 import { getCurrentUser } from "@/lib/auth";
 import { getUsageSummary } from "@/lib/stats";
-import { formatCompact, formatCost, formatNumber, formatRelative } from "@/lib/format";
+import { formatCompact, formatCost, formatNumber } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -59,7 +60,7 @@ export default function UsagePage() {
                 <tbody className="divide-y divide-line">
                   {summary.recent.map((r) => (
                     <tr key={r.id}>
-                      <td className="whitespace-nowrap px-5 py-2.5 text-ink-3">{formatRelative(r.createdAt)}</td>
+                      <td className="whitespace-nowrap px-5 py-2.5 text-ink-3"><RelativeTime at={new Date(r.createdAt).getTime()} /></td>
                       <td className="px-5 py-2.5">
                         <span className="mono text-ink-2">{r.modelId ?? "—"}</span>
                         {r.providerName && <span className="ml-2 text-xs text-ink-3">{r.providerName}</span>}

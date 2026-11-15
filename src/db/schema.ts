@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import {
+  blob,
   index,
   integer,
   real,
@@ -126,6 +127,9 @@ export const providers = sqliteTable(
     timeoutMs: integer("timeout_ms").notNull().default(60_000),
     // JSON object of safe, allowlisted static headers.
     extraHeaders: text("extra_headers"),
+    // JSON: how the custom-http adapter writes requests and reads responses
+    // (v1.5). See src/lib/adapters/custom-http-protocol.ts.
+    config: text("config"),
     status: text("status", { enum: ["enabled", "disabled"] })
       .notNull()
       .default("enabled"),
@@ -186,6 +190,8 @@ export const models = sqliteTable(
     // Media price metadata (v1.4): per generated image, per second of video.
     pricePerImage: real("price_per_image"),
     pricePerSecond: real("price_per_second"),
+    // Speech price metadata (v1.5): per one million characters of input text.
+    pricePerMChars: real("price_per_mchars"),
     source: text("source", { enum: ["discovered", "manual"] })
       .notNull()
       .default("manual"),
@@ -277,9 +283,13 @@ export const usageRecords = sqliteTable(
     modelRowId: text("model_row_id").references(() => models.id, {
       onDelete: "set null",
     }),
-    kind: text("kind", { enum: ["chat", "test", "embedding", "image", "video", "other"] })
+    kind: text("kind", {
+      enum: ["chat", "test", "embedding", "image", "video", "speech", "other"],
+    })
       .notNull()
       .default("chat"),
+    // The API key the request came in with (v1.5), for per-key quotas.
+    apiKeyId: text("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
     promptTokens: integer("prompt_tokens").notNull().default(0),
     completionTokens: integer("completion_tokens").notNull().default(0),
     totalTokens: integer("total_tokens").notNull().default(0),
@@ -297,6 +307,7 @@ export const usageRecords = sqliteTable(
   (t) => ({
     byUser: index("usage_user_idx").on(t.userId),
     byCreated: index("usage_created_idx").on(t.createdAt),
+    byApiKey: index("usage_api_key_idx").on(t.apiKeyId, t.createdAt),
   }),
 );
 
@@ -341,6 +352,13 @@ export const agents = sqliteTable(
     routingMode: text("routing_mode", { enum: ["manual", "auto"] }).notNull().default("manual"),
     requiredCapability: text("required_capability", { enum: CAPABILITIES }),
     temperature: real("temperature").notNull().default(0.7),
+    // Tools (v1.5): JSON array of tool names the agent may call while it works
+    // on a task. Empty means the agent answers in one pass, as before.
+    tools: text("tools").notNull().default("[]"),
+    // Most model calls one task may take when the agent uses tools.
+    maxSteps: integer("max_steps").notNull().default(12),
+    // Memory (v1.5): notes the agent saved are recalled in later tasks.
+    memoryEnabled: integer("memory_enabled", { mode: "boolean" }).notNull().default(false),
     status: text("status", { enum: ["active", "disabled"] })
       .notNull()
       .default("active"),
@@ -376,6 +394,8 @@ export const teamAgents = sqliteTable(
 
 export const PROJECT_STATES = [
   "draft",
+  // Waiting for the background worker to start the run (v1.5).
+  "queued",
   "planning",
   "running",
   "review",
@@ -421,6 +441,13 @@ export const projects = sqliteTable(
     }),
     // Most images + videos one run may generate.
     maxMedia: integer("max_media").notNull().default(10),
+    // Voice-over tasks (v1.5) generate with this model.
+    speechModelRowId: text("speech_model_row_id").references(() => models.id, {
+      onDelete: "set null",
+    }),
+    // Remember earlier runs (v1.5): the results of the last runs are given to
+    // the next one, so a scheduled project does not repeat itself.
+    memory: integer("memory", { mode: "boolean" }).notNull().default(false),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -460,7 +487,13 @@ export const projectTasks = sqliteTable(
     // What the task delivers (v1.4): written text, or a generated image / video
     // whose prompt the agent writes.
     kind: text("kind", { enum: TASK_KINDS }).notNull().default("text"),
-    mediaOptions: text("media_options"), // JSON: { aspectRatio, durationSeconds, resolution, size }
+    mediaOptions: text("media_options"), // JSON: { aspectRatio, durationSeconds, resolution, size, … }
+    // Workspace path the artifact is saved to (v1.5: kept on the task so that
+    // a run can be resumed after a restart).
+    outputFile: text("output_file"),
+    // Model calls and tool calls the task took (v1.5).
+    steps: integer("steps").notNull().default(0),
+    toolCallCount: integer("tool_call_count").notNull().default(0),
     dependsOn: text("depends_on"), // JSON array of task seq numbers
     artifact: text("artifact"),
     error: text("error"),
@@ -490,6 +523,8 @@ export const agentRuns = sqliteTable(
     promptTokens: integer("prompt_tokens"),
     completionTokens: integer("completion_tokens"),
     latencyMs: integer("latency_ms"),
+    steps: integer("steps"),
+    toolCallCount: integer("tool_call_count"),
     error: text("error"),
     createdAt: createdAt(),
   },
@@ -598,7 +633,7 @@ export const execRuns = sqliteTable(
 // ─── Creative media (v1.4.0) ──────────────────────────────────────────────────
 
 /**
- * A generated image or video. The bytes live on disk under the media folder
+ * A generated image, video or voice-over. The bytes live on disk under the media folder
  * (see src/lib/media/store.ts); this row holds the metadata and the file name.
  * A video is created `pending` and becomes `ready` once the provider's job has
  * finished and the file has been downloaded.
@@ -612,7 +647,12 @@ export const mediaAssets = sqliteTable(
     // re-running it keeps the asset in the owner's library.
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     taskId: text("task_id").references(() => projectTasks.id, { onDelete: "set null" }),
-    kind: text("kind", { enum: ["image", "video"] }).notNull(),
+    kind: text("kind", { enum: ["image", "video", "audio"] }).notNull(),
+    // Where the file comes from (v1.5): a provider's model, this server's own
+    // ffmpeg (a video joined from clips), or an upload.
+    source: text("source", { enum: ["provider", "render", "upload"] })
+      .notNull()
+      .default("provider"),
     status: text("status", { enum: ["pending", "ready", "failed"] })
       .notNull()
       .default("pending"),
@@ -622,6 +662,9 @@ export const mediaAssets = sqliteTable(
     prompt: text("prompt").notNull(),
     params: text("params"), // JSON: what was requested (aspect ratio, duration, …)
     providerJobId: text("provider_job_id"), // video: the provider's job id while pending
+    // The API key the media was requested with (v1.5), so that a video's cost
+    // counts against that key when it is finished.
+    apiKeyId: text("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
     fileName: text("file_name"), // "<id>.<ext>" inside the media folder
     mimeType: text("mime_type"),
     sizeBytes: integer("size_bytes"),
@@ -636,6 +679,324 @@ export const mediaAssets = sqliteTable(
   (t) => ({
     byUser: index("media_assets_user_idx").on(t.userId, t.createdAt),
     byProject: index("media_assets_project_idx").on(t.projectId),
+  }),
+);
+
+// ─── Background work (v1.5.0) ────────────────────────────────────────────────
+
+export const RUN_STATES = [
+  "queued",
+  "running",
+  "succeeded",
+  "review",
+  "needs_approval",
+  "failed",
+  "cancelled",
+] as const;
+
+/**
+ * One run of a project. Runs are executed by the background worker, so they
+ * continue without a page open and are picked up again after a restart. The
+ * project's own `status` always mirrors its latest run.
+ */
+export const projectRuns = sqliteTable(
+  "project_runs",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status", { enum: RUN_STATES }).notNull().default("queued"),
+    trigger: text("trigger", { enum: ["manual", "schedule", "api"] })
+      .notNull()
+      .default("manual"),
+    scheduleId: text("schedule_id"),
+    apiKeyId: text("api_key_id").references(() => apiKeys.id, { onDelete: "set null" }),
+    requestedBy: text("requested_by").references(() => users.id, { onDelete: "set null" }),
+    // Extra instruction for this run only (from the API or a schedule).
+    input: text("input"),
+    deliverable: text("deliverable"),
+    reviewNotes: text("review_notes"),
+    error: text("error"),
+    tokensUsed: integer("tokens_used").notNull().default(0),
+    cancelRequested: integer("cancel_requested", { mode: "boolean" }).notNull().default(false),
+    // The server process executing the run, and when it last said so.
+    workerId: text("worker_id"),
+    heartbeatAt: integer("heartbeat_at", { mode: "timestamp_ms" }),
+    // Times the run was picked up again after a restart.
+    resumes: integer("resumes").notNull().default(0),
+    createdAt: createdAt(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  },
+  (t) => ({
+    byProject: index("project_runs_project_idx").on(t.projectId, t.createdAt),
+    byStatus: index("project_runs_status_idx").on(t.status),
+  }),
+);
+
+/** Runs a project on a cron schedule, in a time zone. */
+export const schedules = sqliteTable(
+  "schedules",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    cron: text("cron").notNull(), // five fields: minute hour day-of-month month day-of-week
+    timezone: text("timezone").notNull().default("UTC"), // IANA name
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    input: text("input"), // extra instruction given to every run it starts
+    nextRunAt: integer("next_run_at", { mode: "timestamp_ms" }),
+    lastRunAt: integer("last_run_at", { mode: "timestamp_ms" }),
+    lastRunId: text("last_run_id"),
+    lastStatus: text("last_status", { enum: ["started", "skipped", "error"] }),
+    lastError: text("last_error"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({
+    byProject: index("schedules_project_idx").on(t.projectId),
+    byDue: index("schedules_due_idx").on(t.enabled, t.nextRunAt),
+  }),
+);
+
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["run", "media", "schedule", "knowledge", "system"] }).notNull(),
+    level: text("level", { enum: ["info", "success", "warning", "error"] })
+      .notNull()
+      .default("info"),
+    title: text("title").notNull(),
+    body: text("body"),
+    link: text("link"), // a path inside the dashboard
+    readAt: integer("read_at", { mode: "timestamp_ms" }),
+    // Delivery to the user's webhook, when one is set.
+    webhookStatus: text("webhook_status", { enum: ["none", "pending", "sent", "failed"] })
+      .notNull()
+      .default("none"),
+    webhookAttempts: integer("webhook_attempts").notNull().default(0),
+    webhookNextAt: integer("webhook_next_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    byUser: index("notifications_user_idx").on(t.userId, t.createdAt),
+    byWebhook: index("notifications_webhook_idx").on(t.webhookStatus),
+  }),
+);
+
+/** Where a user's notifications are also sent. One per user. */
+export const notificationWebhooks = sqliteTable(
+  "notification_webhooks",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    // Signs each delivery (HMAC-SHA256). Encrypted at rest.
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    lastStatus: text("last_status", { enum: ["ok", "error"] }),
+    lastError: text("last_error"),
+    lastDeliveredAt: integer("last_delivered_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ userUnique: uniqueIndex("notification_webhooks_user_unique").on(t.userId) }),
+);
+
+/** Work the background worker does outside a project run. */
+export const jobs = sqliteTable(
+  "jobs",
+  {
+    id: id(),
+    kind: text("kind", { enum: ["render", "embed"] }).notNull(),
+    status: text("status", { enum: ["queued", "running", "done", "failed"] })
+      .notNull()
+      .default("queued"),
+    payload: text("payload").notNull().default("{}"), // JSON
+    error: text("error"),
+    attempts: integer("attempts").notNull().default(0),
+    runAfter: integer("run_after", { mode: "timestamp_ms" }),
+    workerId: text("worker_id"),
+    lockedAt: integer("locked_at", { mode: "timestamp_ms" }),
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  },
+  (t) => ({ byStatus: index("jobs_status_idx").on(t.status, t.runAfter) }),
+);
+
+// ─── Agent tools (v1.5.0) ────────────────────────────────────────────────────
+
+/** One tool call an agent made while working on a task. */
+export const toolCalls = sqliteTable(
+  "tool_calls",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    taskId: text("task_id")
+      .notNull()
+      .references(() => projectTasks.id, { onDelete: "cascade" }),
+    agentId: text("agent_id").references(() => agents.id, { onDelete: "set null" }),
+    step: integer("step").notNull().default(0),
+    name: text("name").notNull(),
+    arguments: text("arguments"), // JSON, shortened
+    result: text("result"), // shortened
+    isError: integer("is_error", { mode: "boolean" }).notNull().default(false),
+    durationMs: integer("duration_ms"),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byTask: index("tool_calls_task_idx").on(t.taskId) }),
+);
+
+// ─── Knowledge base and agent memory (v1.5.0) ────────────────────────────────
+
+export const knowledgeCollections = sqliteTable(
+  "knowledge_collections",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    description: text("description"),
+    // 'shared' collections can be read by every user and attached to agents.
+    visibility: text("visibility", { enum: ["private", "shared"] })
+      .notNull()
+      .default("private"),
+    // Optional: also search by meaning, with this embedding model.
+    embeddingModelRowId: text("embedding_model_row_id").references(() => models.id, {
+      onDelete: "set null",
+    }),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ byCreator: index("knowledge_collections_creator_idx").on(t.createdBy) }),
+);
+
+export const knowledgeDocuments = sqliteTable(
+  "knowledge_documents",
+  {
+    id: id(),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => knowledgeCollections.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    sourceType: text("source_type", { enum: ["upload", "text", "url"] }).notNull(),
+    sourceName: text("source_name"), // file name or address
+    mimeType: text("mime_type"),
+    sizeBytes: integer("size_bytes"),
+    charCount: integer("char_count").notNull().default(0),
+    chunkCount: integer("chunk_count").notNull().default(0),
+    // Embeddings are computed in the background after the text is indexed.
+    embeddingStatus: text("embedding_status", { enum: ["none", "pending", "ready", "failed"] })
+      .notNull()
+      .default("none"),
+    error: text("error"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ byCollection: index("knowledge_documents_collection_idx").on(t.collectionId) }),
+);
+
+/**
+ * A passage of a document. `knowledge_chunks_fts` (an FTS5 table created in
+ * the migration, kept in step by triggers) indexes `content` by this row's id.
+ */
+export const knowledgeChunks = sqliteTable(
+  "knowledge_chunks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    documentId: text("document_id")
+      .notNull()
+      .references(() => knowledgeDocuments.id, { onDelete: "cascade" }),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => knowledgeCollections.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    content: text("content").notNull(),
+    // Float32 vector, when the collection has an embedding model.
+    embedding: blob("embedding", { mode: "buffer" }),
+    embeddingModelRowId: text("embedding_model_row_id"),
+  },
+  (t) => ({
+    byCollection: index("knowledge_chunks_collection_idx").on(t.collectionId),
+    byDocument: index("knowledge_chunks_document_idx").on(t.documentId, t.seq),
+  }),
+);
+
+export const agentKnowledge = sqliteTable(
+  "agent_knowledge",
+  {
+    id: id(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    collectionId: text("collection_id")
+      .notNull()
+      .references(() => knowledgeCollections.id, { onDelete: "cascade" }),
+  },
+  (t) => ({ unique: uniqueIndex("agent_knowledge_unique").on(t.agentId, t.collectionId) }),
+);
+
+/**
+ * A note an agent keeps across tasks and projects. `agent_memories_fts`
+ * indexes `content` by this row's id.
+ */
+export const agentMemories = sqliteTable(
+  "agent_memories",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    content: text("content").notNull(),
+    source: text("source", { enum: ["agent", "manual"] }).notNull().default("agent"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+  },
+  (t) => ({ byAgent: index("agent_memories_agent_idx").on(t.agentId, t.createdAt) }),
+);
+
+// ─── Public API (v1.5.0) ─────────────────────────────────────────────────────
+
+/** A key for /api/v1. Only its SHA-256 hash is stored. */
+export const apiKeys = sqliteTable(
+  "api_keys",
+  {
+    id: id(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    prefix: text("prefix").notNull(), // the first characters, for telling keys apart
+    keyHash: text("key_hash").notNull(),
+    scopes: text("scopes").notNull().default("[]"), // JSON array
+    // JSON array of model row ids the key may use; null means every model.
+    modelRowIds: text("model_row_ids"),
+    rateLimitPerMinute: integer("rate_limit_per_minute"),
+    monthlyTokenLimit: integer("monthly_token_limit"),
+    monthlyCostLimit: real("monthly_cost_limit"),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    hashUnique: uniqueIndex("api_keys_hash_unique").on(t.keyHash),
+    byUser: index("api_keys_user_idx").on(t.userId),
   }),
 );
 
@@ -657,5 +1018,16 @@ export type WorkspaceSnapshot = typeof workspaceSnapshots.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type GitRemote = typeof gitRemotes.$inferSelect;
 export type MediaAsset = typeof mediaAssets.$inferSelect;
+export type ProjectRun = typeof projectRuns.$inferSelect;
+export type Schedule = typeof schedules.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;
+export type NotificationWebhook = typeof notificationWebhooks.$inferSelect;
+export type Job = typeof jobs.$inferSelect;
+export type ToolCallRow = typeof toolCalls.$inferSelect;
+export type KnowledgeCollection = typeof knowledgeCollections.$inferSelect;
+export type KnowledgeDocument = typeof knowledgeDocuments.$inferSelect;
+export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
+export type AgentMemory = typeof agentMemories.$inferSelect;
+export type ApiKey = typeof apiKeys.$inferSelect;
 
 export const _sqlKeepalive = sql``;

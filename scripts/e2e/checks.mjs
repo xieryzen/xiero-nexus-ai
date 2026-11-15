@@ -1,11 +1,16 @@
-// End-to-end checks of image and video generation, against the mock provider.
+// End-to-end checks against the mock provider: image and video generation
+// here, and everything that came with background runs (speech, joined videos,
+// knowledge, agent tools, schedules, the public API, …) in
+// checks-automation.mjs.
 // Started by scripts/e2e/run.mjs (`npm run test:e2e`), which also starts the
 // mock and the app on a throwaway database. It needs a FRESH database: the
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
+//   ONLY=speech,render,knowledge,tools,runs,notifications,api,adapters,reel
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
+import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
 
 const APP = process.env.E2E_APP_URL ?? "http://127.0.0.1:3100";
 const MOCK = process.env.E2E_MOCK_URL ?? "http://127.0.0.1:4010";
@@ -109,9 +114,12 @@ async function settle(user, id, { tries = 10, gapMs = 3200 } = {}) {
   return { asset: last, checkErrors };
 }
 
-/** POST a run and collect its server-sent events. */
-async function runProject(user, projectId, { onEvent } = {}) {
-  const res = await user.raw(`/api/projects/${projectId}/run`, { method: "POST" });
+/** POST a run and collect its server-sent events. `input` is the run's extra instruction. */
+async function runProject(user, projectId, { onEvent, input } = {}) {
+  const res = await user.raw(`/api/projects/${projectId}/run`, {
+    method: "POST",
+    body: input === undefined ? undefined : JSON.stringify({ input }),
+  });
   const events = [];
   if (!res.ok || !res.body) return { status: res.status, events, error: await res.text() };
   const reader = res.body.getReader();
@@ -151,6 +159,9 @@ async function setup() {
   eq("second account is an ordinary user", b.data?.user?.role, "user");
   const c = await carol.post("/api/auth/register", { username: "carol", email: "carol@example.com", password: "correct-horse-battery" });
   eq("third account registers", c.status, 201);
+  // For uptime monitors and upgrade scripts: answers without a sign-in, and says nothing else.
+  const health = await anon.raw("/api/health");
+  eq("the health check answers without a sign-in", [health.status, await health.json(), health.headers.get("cache-control")], [200, { status: "ok" }, "no-store"]);
 
   const providerDefs = {
     openai: { name: "Mock OpenAI-style", baseUrl: `${MOCK}/openai/v1` },
@@ -537,7 +548,7 @@ async function library() {
   const chatTest = await admin.post(`/api/models/${ids.models.chat}/test`);
   check("the chat test still works for a chat model", chatTest.status === 200 && chatTest.data?.ok === true, chatTest.data);
   const chat = await admin.post("/api/chat", { modelRowId: ids.models.img_openai, messages: [{ role: "user", content: "hi" }] });
-  check("chat refuses an image model", chat.status === 400 && /only generates images or videos/.test(chat.error ?? ""), `${chat.status} ${chat.error}`);
+  check("chat refuses an image model", chat.status === 400 && /is not a chat model/.test(chat.error ?? ""), `${chat.status} ${chat.error}`);
   const chatBoth = await admin.raw("/api/chat", { method: "POST", body: JSON.stringify({ modelRowId: ids.models.both, messages: [{ role: "user", content: "hi" }] }) });
   eq("chat accepts a model marked for both text and images", chatBoth.status, 200);
   await chatBoth.text();
@@ -591,7 +602,7 @@ async function projects() {
     ["image", { aspectRatio: "9:16" }],
     ["text", null],
   ]);
-  const badStep = await admin.post("/api/workflows", { name: "Bad", steps: [{ title: "t", objective: "o", role: "r", kind: "audio" }] });
+  const badStep = await admin.post("/api/workflows", { name: "Bad", steps: [{ title: "t", objective: "o", role: "r", kind: "hologram" }] });
   eq("a step of an unknown kind is refused", badStep.status, 400);
   const badMedia = await admin.post("/api/workflows", { name: "Bad", steps: [{ title: "t", objective: "o", role: "r", kind: "video", media: { durationSeconds: 600 } }] });
   eq("a step with a 600-second video is refused", badMedia.status, 400);
@@ -602,7 +613,7 @@ async function projects() {
   res = await admin.post("/api/projects", { ...base, videoModelRowId: ids.models.vid_xai });
   check("  and without an image model", res.status === 400 && /image steps/.test(res.error ?? ""), res.error);
   res = await admin.post("/api/projects", { ...base, imageModelRowId: ids.models.img_openai, videoModelRowId: ids.models.vid_xai, maxMedia: 2 });
-  check("  and with a media limit below what it generates", res.status === 400 && /generates 3 images and videos/.test(res.error ?? ""), res.error);
+  check("  and with a media limit below what it generates", res.status === 400 && /generates 3 images, videos and voice-overs/.test(res.error ?? ""), res.error);
   res = await admin.post("/api/projects", { ...base, imageModelRowId: ids.models.chat, videoModelRowId: ids.models.vid_xai });
   check("a chat model cannot be the image model", res.status === 400 && /Image model: .*not marked/.test(res.error ?? ""), res.error);
   res = await admin.post("/api/projects", { ...base, managerModelRowId: ids.models.img_openai });
@@ -836,6 +847,29 @@ try {
   if (!ONLY || ONLY.has("projects")) {
     const made = await projects();
     await pages(made);
+  }
+  if (!ONLY || AUTOMATION_PARTS.some((part) => ONLY.has(part))) {
+    await automation({
+      APP,
+      MOCK,
+      KEY,
+      only: ONLY,
+      admin,
+      bob,
+      carol,
+      anon,
+      client,
+      ids,
+      begin,
+      check,
+      eq,
+      sleep,
+      mockLog,
+      mockReset,
+      mediaFiles,
+      settle,
+      runProject,
+    });
   }
 } catch (err) {
   failures.push(`${section}: the run stopped: ${err?.stack ?? err}`);

@@ -4,8 +4,11 @@ import { agents, models } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { DEFAULT_MAX_STEPS } from "@/lib/agent/catalog";
+import { memoryCounts } from "@/lib/agent/memory";
 import { Errors } from "@/lib/errors";
 import { modelIsMediaOnly } from "@/lib/gateway";
+import { agentCollectionMap, setAgentCollections } from "@/lib/knowledge/service";
 import { getClientMeta } from "@/lib/request";
 import { serializeAgent, serializeAgents } from "@/lib/workforce";
 import { agentCreateSchema } from "@/lib/validation";
@@ -18,14 +21,20 @@ function assertModelExists(id: string | null | undefined) {
   if (!m) throw Errors.badRequest("Selected model does not exist");
   // An agent thinks in text, also when its task is to write an image prompt.
   if (modelIsMediaOnly(id)) {
-    throw Errors.badRequest("An image or video model cannot be an agent's model. Choose a chat model.");
+    throw Errors.badRequest("A media or embedding model cannot be an agent's model. Choose a chat model.");
   }
 }
 
 export const GET = handle(async () => {
-  requireUser();
+  const user = requireUser();
   const rows = db.select().from(agents).orderBy(asc(agents.name)).all();
-  return json({ agents: serializeAgents(rows) });
+  return json({
+    agents: serializeAgents(rows, {
+      collections: agentCollectionMap(),
+      // An administrator sees how many notes there are; everyone else, their own.
+      memories: memoryCounts(user.role === "admin" ? undefined : user.id),
+    }),
+  });
 });
 
 export const POST = handle(async (req) => {
@@ -46,19 +55,34 @@ export const POST = handle(async (req) => {
       routingMode: body.routingMode ?? "manual",
       requiredCapability: body.requiredCapability ?? null,
       temperature: body.temperature ?? 0.7,
+      tools: JSON.stringify(body.tools ?? []),
+      maxSteps: body.maxSteps ?? DEFAULT_MAX_STEPS,
+      memoryEnabled: body.memoryEnabled ?? false,
       createdBy: user.id,
     })
     .returning()
     .get();
+  if (body.collectionIds?.length) {
+    try {
+      setAgentCollections(agent.id, body.collectionIds);
+    } catch (err) {
+      // Not half an agent: without its collections it is not what was asked for.
+      db.delete(agents).where(eq(agents.id, agent.id)).run();
+      throw err;
+    }
+  }
 
   audit({
     actorUserId: user.id,
     action: "agent.create",
     targetType: "agent",
     targetId: agent.id,
-    metadata: { name: agent.name, role: agent.role },
+    metadata: { name: agent.name, role: agent.role, tools: body.tools ?? [] },
     ip,
     userAgent,
   });
-  return json({ agent: serializeAgent(agent) }, { status: 201 });
+  return json(
+    { agent: serializeAgent(agent, undefined, { collectionIds: body.collectionIds ?? [] }) },
+    { status: 201 },
+  );
 });

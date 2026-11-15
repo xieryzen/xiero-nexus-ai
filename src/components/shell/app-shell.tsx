@@ -8,6 +8,7 @@ import { Icon, type IconName } from "@/components/icons";
 import { apiFetch } from "@/lib/client";
 import { APP_VERSION, BUILD_SHA, releaseChannel } from "@/lib/version";
 import { cn } from "@/components/ui";
+import { NotificationBell } from "./notification-bell";
 
 interface NavItem {
   href: string;
@@ -26,6 +27,7 @@ const groups: { heading: string; items: NavItem[] }[] = [
       { href: "/dashboard/workflows", label: "Workflows", icon: "workflow" },
       { href: "/dashboard/chat", label: "Chat", icon: "chat" },
       { href: "/dashboard/studio", label: "Creative Studio", icon: "studio" },
+      { href: "/dashboard/knowledge", label: "Knowledge", icon: "knowledge" },
     ],
   },
   {
@@ -169,6 +171,7 @@ export function AppShell({
         </button>
         <div className="flex-1" />
         <div className="flex items-center gap-3">
+          <NotificationBell />
           <div className="text-right leading-tight">
             <p className="text-sm font-medium text-ink">{user.username}</p>
             <p className="text-xs capitalize text-ink-3">{user.role}</p>

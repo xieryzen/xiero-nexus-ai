@@ -3,11 +3,14 @@
 import { useEffect, useState } from "react";
 import type { ProviderDTO } from "@/lib/providers";
 import { apiFetch, ApiError } from "@/lib/client";
-import { Alert, Button, Spinner, cn } from "@/components/ui";
+import { MODEL_TYPE_LABELS, type ModelType } from "@/lib/discovery";
+import { Alert, Badge, Button, Spinner, cn } from "@/components/ui";
 
 interface DiscoverResult {
   ok: boolean;
   models?: string[];
+  /** What each model looks to be for; it is imported with that type. */
+  suggested?: Record<string, { type: ModelType }>;
   existing?: string[];
   error?: string;
 }
@@ -24,6 +27,7 @@ export function DiscoverPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [available, setAvailable] = useState<string[]>([]);
+  const [types, setTypes] = useState<Record<string, ModelType>>({});
   const [existing, setExisting] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
@@ -41,6 +45,9 @@ export function DiscoverPanel({
           setError(res.error ?? "Discovery failed");
         } else {
           setAvailable(res.models ?? []);
+          setTypes(
+            Object.fromEntries(Object.entries(res.suggested ?? {}).map(([id, s]) => [id, s.type])),
+          );
           setExisting(new Set(res.existing ?? []));
         }
       } catch (err) {
@@ -122,7 +129,10 @@ export function DiscoverPanel({
                         checked={already || selected.has(m)}
                         onChange={() => toggle(m)}
                       />
-                      <span className="mono text-ink">{m}</span>
+                      <span className="mono min-w-0 break-all text-ink">{m}</span>
+                      {types[m] && types[m] !== "chat" && (
+                        <Badge tone="info">{MODEL_TYPE_LABELS[types[m]]}</Badge>
+                      )}
                       {already && <span className="ml-auto text-xs text-ink-3">in catalog</span>}
                     </label>
                   </li>
@@ -132,7 +142,8 @@ export function DiscoverPanel({
           </div>
           <div className="mt-3 flex items-center justify-between">
             <p className="text-xs text-ink-3">
-              {importable.length} new · {selected.size} selected
+              {importable.length} new · {selected.size} selected. Each model is imported with the
+              type shown; change it on the Models page if the guess is wrong.
             </p>
             <Button onClick={importSelected} loading={importing} disabled={selected.size === 0}>
               Import selected

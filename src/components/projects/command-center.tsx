@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { ProjectDTO } from "@/lib/workforce";
 import { DEFAULT_MAX_MEDIA, MAX_MEDIA_PER_RUN } from "@/lib/creative/prompt";
+import { MAX_PROJECT_TASKS } from "@/lib/limits";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Alert, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { StateBadge } from "./status-badge";
@@ -17,8 +18,10 @@ interface Option {
 }
 
 interface WorkflowOption extends Option {
-  /** How many images and videos the workflow's steps generate. */
-  media: { image: number; video: number };
+  /** How many steps of each creative kind the workflow has. */
+  media: { image: number; video: number; audio: number; render: number };
+  /** How many steps it has in all. */
+  steps: number;
 }
 
 function countLabel(n: number, noun: string): string {
@@ -30,14 +33,19 @@ export function CommandCenter({
   managerModels,
   imageModels,
   videoModels,
+  speechModels,
+  canRender,
   teams,
   workflows,
 }: {
   initialProjects: ProjectDTO[];
   managerModels: Option[];
-  /** Models marked for image / video generation. Empty when there are none. */
+  /** Models marked for image, video or speech generation. Empty when there are none. */
   imageModels: Option[];
   videoModels: Option[];
+  speechModels: Option[];
+  /** Whether this server can join clips into one video (it has ffmpeg). */
+  canRender: boolean;
   teams: Option[];
   workflows: WorkflowOption[];
 }) {
@@ -57,6 +65,8 @@ export function CommandCenter({
   const [workflowId, setWorkflowId] = useState("");
   const [imageModelRowId, setImageModel] = useState("");
   const [videoModelRowId, setVideoModel] = useState("");
+  const [speechModelRowId, setSpeechModel] = useState("");
+  const [memory, setMemory] = useState(false);
   const [maxMedia, setMaxMedia] = useState(String(DEFAULT_MAX_MEDIA));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -65,28 +75,41 @@ export function CommandCenter({
   const workflow = workflows.find((w) => w.id === workflowId) ?? null;
   const needImages = workflow?.media.image ?? 0;
   const needVideos = workflow?.media.video ?? 0;
-  const needMedia = needImages + needVideos;
-  const showMedia = imageModels.length > 0 || videoModels.length > 0 || needMedia > 0;
+  const needVoices = workflow?.media.audio ?? 0;
+  const needRender = (workflow?.media.render ?? 0) > 0;
+  const needMedia = needImages + needVideos + needVoices;
+  const showMedia =
+    imageModels.length > 0 || videoModels.length > 0 || speechModels.length > 0 || needMedia > 0;
+  const missing = (need: number, chosen: string, options: Option[], noun: string, capability: string) =>
+    need > 0 && !chosen
+      ? options.length > 0
+        ? `This workflow has ${noun} steps: choose ${noun === "image" ? "an" : "a"} ${noun === "voice-over" ? "speech" : noun} model.`
+        : `This workflow has ${noun} steps, but no model is marked for ${capability} yet (Models page).`
+      : null;
   const mediaProblem =
-    needImages > 0 && !imageModelRowId
-      ? imageModels.length > 0
-        ? "This workflow has image steps: choose an image model."
-        : "This workflow has image steps, but no model is marked for image generation yet (Models page)."
-      : needVideos > 0 && !videoModelRowId
-        ? videoModels.length > 0
-          ? "This workflow has video steps: choose a video model."
-          : "This workflow has video steps, but no model is marked for video generation yet (Models page)."
-        : needMedia > Number(maxMedia)
-          ? `This workflow generates ${needMedia} images and videos. Raise the media limit in the advanced settings (now ${maxMedia}).`
-          : null;
+    missing(needImages, imageModelRowId, imageModels, "image", "image generation") ??
+    missing(needVideos, videoModelRowId, videoModels, "video", "video generation") ??
+    missing(needVoices, speechModelRowId, speechModels, "voice-over", "speech generation") ??
+    (needRender && !canRender
+      ? "This workflow joins its clips into one video, which needs ffmpeg on the server. Ask an administrator to install it, or use a workflow without the joined video."
+      : needMedia > Number(maxMedia)
+        ? `This workflow generates ${needMedia} images, videos and voice-overs. Raise the media limit in the advanced settings (now ${maxMedia}).`
+        : workflow && workflow.steps > Number(maxTasks)
+          ? `This workflow has ${workflow.steps} steps. Raise “Max tasks” in the advanced settings (now ${maxTasks}).`
+          : null);
 
   function chooseWorkflow(id: string) {
     setWorkflowId(id);
-    // Pre-select the models the workflow needs when there is no choice yet.
+    // Pre-select the models the workflow needs when there is no choice yet,
+    // and make room for its steps and its media.
     const next = workflows.find((w) => w.id === id);
     if (!next) return;
     if (next.media.image > 0 && !imageModelRowId && imageModels[0]) setImageModel(imageModels[0].id);
     if (next.media.video > 0 && !videoModelRowId && videoModels[0]) setVideoModel(videoModels[0].id);
+    if (next.media.audio > 0 && !speechModelRowId && speechModels[0]) setSpeechModel(speechModels[0].id);
+    const media = next.media.image + next.media.video + next.media.audio;
+    if (media > Number(maxMedia) && media <= MAX_MEDIA_PER_RUN) setMaxMedia(String(media));
+    if (next.steps > Number(maxTasks) && next.steps <= MAX_PROJECT_TASKS) setMaxTasks(String(next.steps));
   }
 
   async function create(e: React.FormEvent) {
@@ -109,7 +132,9 @@ export function CommandCenter({
           workflowId: workflowId || null,
           imageModelRowId: imageModelRowId || null,
           videoModelRowId: videoModelRowId || null,
+          speechModelRowId: speechModelRowId || null,
           maxMedia: Number(maxMedia),
+          memory,
         }),
       });
       router.push(`/dashboard/projects/${res.project.id}`);
@@ -177,7 +202,7 @@ export function CommandCenter({
 
               {showMedia && (
                 <div className="space-y-3">
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-3">
                     <Field label="Image model" htmlFor="p-img" hint="Generates the images of image tasks.">
                       <Select id="p-img" value={imageModelRowId} onChange={(e) => setImageModel(e.target.value)}>
                         <option value="">No images</option>
@@ -194,14 +219,27 @@ export function CommandCenter({
                         ))}
                       </Select>
                     </Field>
+                    <Field label="Speech model" htmlFor="p-tts" hint="Speaks the voice-overs.">
+                      <Select id="p-tts" value={speechModelRowId} onChange={(e) => setSpeechModel(e.target.value)}>
+                        <option value="">No voice-overs</option>
+                        {speechModels.map((m) => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                      </Select>
+                    </Field>
                   </div>
                   {needMedia > 0 && (
                     <p className="text-xs text-ink-3">
                       This workflow generates{" "}
-                      {[needVideos > 0 ? countLabel(needVideos, "video") : "", needImages > 0 ? countLabel(needImages, "image") : ""]
+                      {[
+                        needVideos > 0 ? countLabel(needVideos, "video") : "",
+                        needImages > 0 ? countLabel(needImages, "image") : "",
+                        needVoices > 0 ? countLabel(needVoices, "voice-over") : "",
+                      ]
                         .filter(Boolean)
-                        .join(" and ")}{" "}
+                        .join(", ")}{" "}
                       per run. Each one is billed by the provider.
+                      {needRender && " Joining the clips is done on this server and costs nothing at a provider."}
                     </p>
                   )}
                   {mediaProblem && <Alert tone="warn">{mediaProblem}</Alert>}
@@ -209,7 +247,7 @@ export function CommandCenter({
               )}
 
               <button type="button" onClick={() => setShowAdv((s) => !s)} className="text-xs font-medium text-signal hover:underline">
-                {showAdv ? "Hide" : "Show"} advanced settings (budget, parallelism, approval)
+                {showAdv ? "Hide" : "Show"} advanced settings (budget, limits, memory, approval)
               </button>
               {showAdv && (
                 <div className="space-y-4 rounded-md border border-line bg-surface-2/40 p-4">
@@ -218,16 +256,26 @@ export function CommandCenter({
                       <Input id="p-maxtok" type="number" min={1000} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
                     </Field>
                     <Field label="Max tasks" htmlFor="p-maxtask">
-                      <Input id="p-maxtask" type="number" min={1} max={20} value={maxTasks} onChange={(e) => setMaxTasks(e.target.value)} />
+                      <Input id="p-maxtask" type="number" min={1} max={MAX_PROJECT_TASKS} value={maxTasks} onChange={(e) => setMaxTasks(e.target.value)} />
                     </Field>
                     <Field label="Max parallel" htmlFor="p-par" hint="concurrent tasks">
                       <Input id="p-par" type="number" min={1} max={8} value={maxParallel} onChange={(e) => setMaxParallel(e.target.value)} />
                     </Field>
                     {showMedia && (
-                      <Field label="Media limit" htmlFor="p-maxmedia" hint="images + videos per run">
+                      <Field label="Media limit" htmlFor="p-maxmedia" hint="images, videos and voice-overs per run">
                         <Input id="p-maxmedia" type="number" min={0} max={MAX_MEDIA_PER_RUN} value={maxMedia} onChange={(e) => setMaxMedia(e.target.value)} />
                       </Field>
                     )}
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm text-ink">Remember earlier runs</p>
+                      <p className="text-xs text-ink-3">
+                        Each run is told what the last runs delivered, so a project that runs on a schedule builds on
+                        its own work instead of repeating it.
+                      </p>
+                    </div>
+                    <Toggle checked={memory} onChange={setMemory} label="Remember earlier runs" />
                   </div>
                   <div className="flex items-center justify-between">
                     <div>
@@ -272,7 +320,7 @@ export function CommandCenter({
                     </div>
                     <p className="mt-1 line-clamp-1 text-sm text-ink-3">{p.goal}</p>
                   </div>
-                  <span className="shrink-0 text-xs text-ink-3">{formatRelative(p.updatedAt)}</span>
+                  <RelativeTime at={p.updatedAt} className="shrink-0 text-xs text-ink-3" />
                 </div>
               </Card>
             </Link>

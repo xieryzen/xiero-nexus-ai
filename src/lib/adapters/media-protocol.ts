@@ -12,12 +12,15 @@
  *   ──────────   ───────────────────────────────────   ─────────────────────────────────────
  *   openai       POST /images/generations              POST /videos
  *                size                                  seconds, size
+ *                                                      first frame: input_reference.image_url
  *                                                      result: GET /videos/{id}/content
  *   openrouter   POST /images                          POST /videos
  *                aspect_ratio, resolution, size        duration, aspect_ratio, resolution, size
+ *                                                      first frame: frame_images[] (first_frame)
  *                                                      result: unsigned_urls[] (needs the key)
  *   xai          POST /images/generations              POST /videos/generations
  *                aspect_ratio, resolution              duration, aspect_ratio, resolution
+ *                                                      first frame: image.url
  *                                                      result: video.url (temporary link)
  *
  * A video is always a job: create it, read GET /videos/{id} until it is done,
@@ -102,6 +105,11 @@ export interface VideoRequest {
   resolution?: string;
   /** Exact "WIDTHxHEIGHT" (openai and openrouter styles). */
   size?: string;
+  /**
+   * The image the video starts from (image-to-video): a `data:` URL or a
+   * public link. The clip then opens on that picture.
+   */
+  image?: string;
   extra?: Record<string, unknown>;
 }
 
@@ -228,6 +236,7 @@ export function buildVideoRequest(api: MediaApi, req: VideoRequest): WireRequest
       if (seconds) body.seconds = String(seconds);
       const size = req.size ?? videoSizeFor(req.aspectRatio, req.resolution);
       if (size) body.size = size;
+      if (req.image) body.input_reference = { image_url: req.image };
       return { path: "/videos", body };
     }
     case "openrouter": {
@@ -238,12 +247,18 @@ export function buildVideoRequest(api: MediaApi, req: VideoRequest): WireRequest
         if (req.aspectRatio) body.aspect_ratio = req.aspectRatio;
         if (req.resolution) body.resolution = req.resolution;
       }
+      if (req.image) {
+        body.frame_images = [
+          { type: "image_url", image_url: { url: req.image }, frame_type: "first_frame" },
+        ];
+      }
       return { path: "/videos", body };
     }
     case "xai": {
       if (seconds) body.duration = seconds;
       if (req.aspectRatio) body.aspect_ratio = req.aspectRatio;
       if (req.resolution) body.resolution = req.resolution;
+      if (req.image) body.image = { url: req.image };
       return { path: "/videos/generations", body };
     }
   }

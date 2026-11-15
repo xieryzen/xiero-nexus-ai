@@ -1,47 +1,41 @@
 import { handle } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
+import { Errors } from "@/lib/errors";
 import { loadOwnedProject } from "@/lib/project-access";
-import { runProject, type RunEvent } from "@/lib/orchestrator";
+import { SSE_HEADERS, runEventStream } from "@/lib/run-bus";
+import { startRun } from "@/lib/runs";
+import { runStartSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
-// A hint for serverless hosts only. The self-hosted server (`next start`, the
-// release bundle) does not enforce it, and a run that generates videos can
-// take much longer: it waits up to 15 minutes for each video.
-export const maxDuration = 300;
 
-export const POST = handle(async (_req, { params }) => {
+/**
+ * Start a run and follow it. The answer is a stream of server-sent events, as
+ * before, but the run itself is executed by the background worker: closing
+ * the connection does not stop it, and GET …/events follows it again.
+ *
+ * The body is optional: { "input": "an extra instruction for this run" }.
+ * 409 when the project is already running.
+ */
+export const POST = handle(async (req, { params }) => {
   const user = requireUser();
   const project = loadOwnedProject(params.id!, user); // throws if not owner/admin
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const emit = (e: RunEvent) => {
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`));
-        } catch {
-          /* client gone */
-        }
-      };
-      try {
-        await runProject(project.id, emit);
-      } catch {
-        emit({ type: "error", message: "Run failed unexpectedly" });
-      } finally {
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      }
-    },
-  });
+  let input: string | undefined;
+  const raw = await req.text().catch(() => "");
+  if (raw.trim()) {
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw Errors.badRequest("Request body must be valid JSON");
+    }
+    const parsed = runStartSchema.safeParse(body);
+    if (!parsed.success) {
+      throw Errors.badRequest(parsed.error.issues[0]?.message ?? "Invalid request");
+    }
+    input = parsed.data.input;
+  }
 
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "x-accel-buffering": "no",
-    },
-  });
+  startRun(project, { trigger: "manual", requestedBy: user.id, input });
+  return new Response(runEventStream(project.id, req.signal), { headers: SSE_HEADERS });
 });

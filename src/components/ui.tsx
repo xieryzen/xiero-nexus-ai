@@ -203,11 +203,12 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div>
+      <div className="min-w-0">
         <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
         {description && <p className="mt-1 text-sm text-ink-2">{description}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {/* A long description must not squeeze the buttons onto two lines. */}
+      {actions && <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">{actions}</div>}
     </div>
   );
 }

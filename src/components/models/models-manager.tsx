@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 import type { SerializedModel } from "@/lib/models";
 import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatRelative } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Badge, Button, Card, EmptyState, PageHeader, StatusDot, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ModelForm } from "./model-form";
@@ -14,8 +15,10 @@ interface ProviderLite {
   id: string;
   name: string;
   adapterImplemented: boolean;
-  /** Whether its adapter can generate images or videos. */
+  /** Whether its adapter can generate images, videos or speech. */
   supportsMedia: boolean;
+  /** What its adapter can do besides chat. */
+  abilities: { image: boolean; video: boolean; audio: boolean; embed: boolean; tools: boolean };
   status: "enabled" | "disabled";
 }
 
@@ -144,7 +147,12 @@ export function ModelsManager({
         <div className="mb-6">
           <Card title={form.mode === "new" ? "Add model manually" : `Edit ${form.model?.modelId}`}>
             <ModelForm
-              providers={providers.map((p) => ({ id: p.id, name: p.name, supportsMedia: p.supportsMedia }))}
+              providers={providers.map((p) => ({
+                id: p.id,
+                name: p.name,
+                supportsMedia: p.supportsMedia,
+                abilities: p.abilities,
+              }))}
               initial={form.model}
               onSaved={(m) => {
                 patch(m);
@@ -200,12 +208,13 @@ export function ModelsManager({
                             </div>
                           )}
                           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs text-ink-3">
-                            {m.contextWindow != null && <span>ctx {m.contextWindow.toLocaleString()}</span>}
+                            {m.contextWindow != null && <span>ctx {formatNumber(m.contextWindow)}</span>}
                             {m.inputPricePerMTok != null && <span>in ${m.inputPricePerMTok}/1M</span>}
                             {m.outputPricePerMTok != null && <span>out ${m.outputPricePerMTok}/1M</span>}
                             {m.pricePerImage != null && <span>${m.pricePerImage}/image</span>}
                             {m.pricePerSecond != null && <span>${m.pricePerSecond}/second</span>}
-                            {m.lastTestedAt && <span>tested {formatRelative(m.lastTestedAt)}</span>}
+                            {m.pricePerMChars != null && <span>${m.pricePerMChars}/1M characters</span>}
+                            {m.lastTestedAt && <span>tested <RelativeTime at={m.lastTestedAt} /></span>}
                           </div>
                           {testNote[m.id] && (
                             <p
@@ -233,12 +242,20 @@ export function ModelsManager({
                               />
                             </div>
                             {isMediaOnly(m.capabilities.map((c) => c.capability)) ? (
-                              // The test is a chat request, which an image / video model cannot answer.
-                              // Creative Studio offers it only on a provider that can generate media.
-                              mediaProviders.has(m.providerId) && (
-                                <Link href="/dashboard/studio" className="btn-ghost" title="Try this model in Creative Studio">
-                                  <Icon name="studio" /> Try
+                              // The test is a chat request, which such a model cannot answer.
+                              // Creative Studio offers it only on a provider that can generate media;
+                              // an embedding model is tried by giving it to a knowledge collection.
+                              m.capabilities.some((c) => c.capability === "embeddings") &&
+                              !m.capabilities.some((c) => /_generation$/.test(c.capability)) ? (
+                                <Link href="/dashboard/knowledge" className="btn-ghost" title="Use this model for a knowledge collection">
+                                  <Icon name="knowledge" /> Use
                                 </Link>
+                              ) : (
+                                mediaProviders.has(m.providerId) && (
+                                  <Link href="/dashboard/studio" className="btn-ghost" title="Try this model in Creative Studio">
+                                    <Icon name="studio" /> Try
+                                  </Link>
+                                )
                               )
                             ) : (
                               <Button variant="ghost" loading={busy[m.id] === "test"} disabled={!!busy[m.id]} onClick={() => test(m)}>

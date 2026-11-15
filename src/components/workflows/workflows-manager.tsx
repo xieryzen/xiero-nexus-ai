@@ -3,15 +3,17 @@
 import { useState } from "react";
 import type { WorkflowDTO } from "@/lib/workforce";
 import { ASPECT_RATIOS, MAX_VIDEO_SECONDS } from "@/lib/adapters/media-protocol";
-import type { TaskKind } from "@/lib/creative/prompt";
+import { MAX_SPEECH_SPEED, MIN_SPEECH_SPEED, VOICE_PATTERN, type TaskKind } from "@/lib/creative/prompt";
 import {
   REEL_DEFAULT_CLIP_SECONDS,
   REEL_DEFAULT_SCENES,
   REEL_MAX_CLIP_SECONDS,
   REEL_MAX_SCENES,
   reelWorkflowTemplate,
+  templateNeeds,
 } from "@/lib/creative/templates";
 import { apiFetch, ApiError } from "@/lib/client";
+import { MAX_PROJECT_TASKS } from "@/lib/limits";
 import { Alert, Badge, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
 import { Icon } from "@/components/icons";
 
@@ -28,6 +30,15 @@ interface StepForm {
   resolution: string;
   /** Kept as saved; the builder has no field for it. */
   size: string;
+  /** Voice-over: the voice, and how fast it speaks. */
+  voice: string;
+  speed: string;
+  /** Video: the number of the image step whose picture the clip starts from. */
+  imageFrom: string;
+  /** Joined video: burn the spoken words in, keep the clips' own sound, fill the frame. */
+  subtitles: boolean;
+  keepClipAudio: boolean;
+  fit: "" | "contain" | "cover";
 }
 
 const emptyStep: StepForm = {
@@ -42,6 +53,20 @@ const emptyStep: StepForm = {
   durationSeconds: "",
   resolution: "",
   size: "",
+  voice: "",
+  speed: "",
+  imageFrom: "",
+  subtitles: true,
+  keepClipAudio: false,
+  fit: "",
+};
+
+const KIND_NOUN: Record<TaskKind, string> = {
+  text: "text",
+  image: "image",
+  video: "video",
+  audio: "voice-over",
+  render: "joined video",
 };
 
 type SavedStep = WorkflowDTO["steps"][number];
@@ -59,6 +84,12 @@ function toForm(s: Pick<SavedStep, "title" | "objective" | "role"> & Partial<Sav
     durationSeconds: s.media?.durationSeconds ? String(s.media.durationSeconds) : "",
     resolution: s.media?.resolution ?? "",
     size: s.media?.size ?? "",
+    voice: s.media?.voice ?? "",
+    speed: s.media?.speed ? String(s.media.speed) : "",
+    imageFrom: s.media?.imageFrom ? String(s.media.imageFrom) : "",
+    subtitles: s.media?.subtitles ?? true,
+    keepClipAudio: s.media?.keepClipAudio ?? false,
+    fit: s.media?.fit ?? "",
   };
 }
 
@@ -69,23 +100,30 @@ function parseDeps(csv: string): number[] {
     .filter((n) => Number.isFinite(n) && n > 0);
 }
 
-/** Rewrite every step's "depends on" numbers after steps moved or went away. */
+/** Rewrite the step numbers every step refers to, after steps moved or went away. */
 function renumber(steps: StepForm[], newNumber: (old: number) => number | null): StepForm[] {
-  return steps.map((s) => ({
-    ...s,
-    dependsOn: parseDeps(s.dependsOn)
-      .map(newNumber)
-      .filter((n): n is number => n !== null)
-      .join(","),
-  }));
+  return steps.map((s) => {
+    const from = parseInt(s.imageFrom, 10);
+    const image = Number.isFinite(from) && from > 0 ? newNumber(from) : null;
+    return {
+      ...s,
+      dependsOn: parseDeps(s.dependsOn)
+        .map(newNumber)
+        .filter((n): n is number => n !== null)
+        .join(","),
+      imageFrom: image === null ? "" : String(image),
+    };
+  });
 }
 
 function mediaCounts(steps: { kind?: TaskKind }[]): string {
-  const videos = steps.filter((s) => s.kind === "video").length;
-  const images = steps.filter((s) => s.kind === "image").length;
+  const count = (kind: TaskKind) => steps.filter((s) => s.kind === kind).length;
+  const part = (n: number, one: string, many: string) => (n > 0 ? `${n} ${n === 1 ? one : many}` : "");
   return [
-    videos > 0 ? `${videos} ${videos === 1 ? "video" : "videos"}` : "",
-    images > 0 ? `${images} ${images === 1 ? "image" : "images"}` : "",
+    part(count("video"), "video", "videos"),
+    part(count("image"), "image", "images"),
+    part(count("audio"), "voice-over", "voice-overs"),
+    count("render") > 0 ? "joined into one video" : "",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -108,6 +146,11 @@ function Builder({
   );
   const [reelScenes, setReelScenes] = useState(String(REEL_DEFAULT_SCENES));
   const [reelSeconds, setReelSeconds] = useState(String(REEL_DEFAULT_CLIP_SECONDS));
+  const [reelKeyframes, setReelKeyframes] = useState(false);
+  const [reelVoice, setReelVoice] = useState(false);
+  const [reelVoiceName, setReelVoiceName] = useState("");
+  const [reelJoin, setReelJoin] = useState(false);
+  const [reelSubtitles, setReelSubtitles] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -139,6 +182,11 @@ function Builder({
     const template = reelWorkflowTemplate({
       scenes: Number(reelScenes) || undefined,
       clipSeconds: Number(reelSeconds) || undefined,
+      keyframes: reelKeyframes,
+      voiceOver: reelVoice,
+      voice: reelVoiceName.trim() || undefined,
+      join: reelJoin,
+      subtitles: reelSubtitles,
     });
     setName((current) => current.trim() || template.name);
     setDescription((current) => current.trim() || template.description);
@@ -167,26 +215,56 @@ function Builder({
         setError(`Step ${number} depends on step ${later}. A step can only depend on steps before it.`);
         return;
       }
+      if (s.kind === "video" && s.imageFrom) {
+        const from = Number(s.imageFrom);
+        if (!(from >= 1 && from < number) || steps[from - 1]?.kind !== "image") {
+          setError(`Step ${number} starts from the image of step ${s.imageFrom}, which is not an image step before it.`);
+          return;
+        }
+      }
+      if (s.kind === "audio" && s.voice.trim() && !VOICE_PATTERN.test(s.voice.trim())) {
+        setError(`Step ${number}: the voice is the provider's name for it, such as "alloy".`);
+        return;
+      }
     }
 
     const payloadSteps = kept.map(({ s }) => {
+      const number = (value: string) => (value.trim() ? Number(value) : undefined);
       const media =
         s.kind === "text"
           ? undefined
-          : {
-              aspectRatio: s.aspectRatio.trim() || undefined,
-              durationSeconds: s.kind === "video" && s.durationSeconds.trim() ? Number(s.durationSeconds) : undefined,
-              resolution: s.resolution.trim() || undefined,
-              size: s.size.trim() || undefined,
-            };
+          : s.kind === "audio"
+            ? {
+                // How long it should take to say: the agent writes that many words.
+                durationSeconds: number(s.durationSeconds),
+                voice: s.voice.trim() || undefined,
+                speed: number(s.speed),
+              }
+            : s.kind === "render"
+              ? {
+                  aspectRatio: s.aspectRatio.trim() || undefined,
+                  subtitles: s.subtitles,
+                  keepClipAudio: s.keepClipAudio || undefined,
+                  fit: s.fit || undefined,
+                }
+              : {
+                  aspectRatio: s.aspectRatio.trim() || undefined,
+                  durationSeconds: s.kind === "video" ? number(s.durationSeconds) : undefined,
+                  resolution: s.resolution.trim() || undefined,
+                  size: s.size.trim() || undefined,
+                  imageFrom: s.kind === "video" ? number(s.imageFrom) : undefined,
+                };
+      // A clip that starts from a picture needs that picture first.
+      const deps = parseDeps(s.dependsOn);
+      if (s.kind === "video" && s.imageFrom && !deps.includes(Number(s.imageFrom))) deps.push(Number(s.imageFrom));
       return {
         title: s.title.trim(),
         objective: s.objective.trim(),
         acceptanceCriteria: s.acceptanceCriteria.trim() || undefined,
         role: s.role.trim(),
-        // An image / video step delivers the generated file, not a workspace file.
+        // Only a text step delivers a workspace file.
         outputFile: s.kind === "text" ? s.outputFile.trim() || undefined : undefined,
-        dependsOn: parseDeps(s.dependsOn),
+        dependsOn: deps.sort((a, b) => a - b),
         kind: s.kind,
         media,
       };
@@ -216,7 +294,7 @@ function Builder({
           <p className="text-sm font-medium text-ink">Start from the Reel template</p>
           <p className="mt-0.5 text-xs text-ink-3">
             A short vertical video: script, storyboard, one generated clip per scene, a cover image and a caption.
-            The clips are separate files; joining them into one video is done in a video editor.
+            Tick what else it should do. Each option adds steps, and what they generate is billed by the provider.
           </p>
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <Field label="Scenes" htmlFor="w-reel-scenes">
@@ -240,9 +318,74 @@ function Builder({
                 className="w-32"
               />
             </Field>
+            {reelVoice && (
+              <Field label="Voice" htmlFor="w-reel-voice">
+                <Input
+                  id="w-reel-voice"
+                  value={reelVoiceName}
+                  onChange={(e) => setReelVoiceName(e.target.value)}
+                  placeholder="provider default"
+                  maxLength={64}
+                  className="w-44"
+                />
+              </Field>
+            )}
+          </div>
+          <ul className="mt-3 space-y-1.5 text-sm text-ink-2">
+            <li>
+              <label className="flex cursor-pointer items-start gap-2">
+                <input type="checkbox" className="mt-1 accent-current" checked={reelKeyframes} onChange={(e) => setReelKeyframes(e.target.checked)} />
+                <span>
+                  Keyframes
+                  <span className="block text-xs text-ink-3">
+                    An image is generated for each scene first, and the scene&apos;s clip starts from it (image-to-video). Keeps the scenes looking alike. Needs a video model that takes a first frame.
+                  </span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label className="flex cursor-pointer items-start gap-2">
+                <input type="checkbox" className="mt-1 accent-current" checked={reelVoice} onChange={(e) => setReelVoice(e.target.checked)} />
+                <span>
+                  Voice-over
+                  <span className="block text-xs text-ink-3">Each scene&apos;s line of the script is spoken. The project needs a speech model.</span>
+                </span>
+              </label>
+            </li>
+            <li>
+              <label className="flex cursor-pointer items-start gap-2">
+                <input type="checkbox" className="mt-1 accent-current" checked={reelJoin} onChange={(e) => setReelJoin(e.target.checked)} />
+                <span>
+                  Join into one video
+                  <span className="block text-xs text-ink-3">
+                    The clips are joined in order, with the voice-overs over them, on this server. It needs ffmpeg installed there and costs nothing at a provider. Without it the clips stay separate files.
+                  </span>
+                </span>
+              </label>
+            </li>
+            {reelJoin && reelVoice && (
+              <li className="pl-6">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input type="checkbox" className="accent-current" checked={reelSubtitles} onChange={(e) => setReelSubtitles(e.target.checked)} />
+                  Burn the spoken words in as subtitles
+                </label>
+              </li>
+            )}
+          </ul>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button type="button" variant="ghost" onClick={applyReelTemplate}>
               <Icon name="video" size={16} /> Use template
             </Button>
+            <ReelNeeds
+              options={{
+                scenes: Number(reelScenes) || undefined,
+                clipSeconds: Number(reelSeconds) || undefined,
+                keyframes: reelKeyframes,
+                voiceOver: reelVoice,
+                join: reelJoin,
+                subtitles: reelSubtitles,
+              }}
+            />
           </div>
         </div>
       )}
@@ -258,9 +401,11 @@ function Builder({
 
       <p className="text-xs text-ink-3">
         A step goes to the agent whose name or role matches its agent role, or to the first agent of the team when none
-        does. A step that delivers an image or a video has its agent write the prompt; the project&apos;s image or video
-        model then generates one file from it.
-        {counts && ` This workflow generates ${counts} per run.`}
+        does. A step that delivers an image, a video or a voice-over has its agent write the prompt (for a voice-over:
+        the words to speak); the project&apos;s image, video or speech model then generates one file from it. A step
+        that joins clips needs no agent: this server does it.
+        {counts && ` This workflow makes ${counts} per run.`}
+        {steps.length > MAX_PROJECT_TASKS && ` A workflow can have ${MAX_PROJECT_TASKS} steps; this one has ${steps.length}.`}
       </p>
 
       <div className="space-y-3">
@@ -269,9 +414,16 @@ function Builder({
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-ink-3">Step {i + 1}</span>
               <div className="flex gap-1">
-                <button type="button" onClick={() => move(i, -1)} className="btn-ghost px-2 py-1 text-xs" aria-label="Move up">↑</button>
-                <button type="button" onClick={() => move(i, 1)} className="btn-ghost px-2 py-1 text-xs" aria-label="Move down">↓</button>
-                <button type="button" onClick={() => removeStep(i)} className="btn-ghost px-2 py-1 text-xs text-danger" aria-label="Remove">✕</button>
+                {/* Drawn icons: the arrow and cross characters are missing from some fonts. */}
+                <button type="button" onClick={() => move(i, -1)} disabled={i === 0} className="btn-ghost px-2 py-1 text-xs" aria-label={`Move step ${i + 1} up`} title="Move up">
+                  <Icon name="up" size={14} />
+                </button>
+                <button type="button" onClick={() => move(i, 1)} disabled={i === steps.length - 1} className="btn-ghost px-2 py-1 text-xs" aria-label={`Move step ${i + 1} down`} title="Move down">
+                  <Icon name="down" size={14} />
+                </button>
+                <button type="button" onClick={() => removeStep(i)} className="btn-ghost px-2 py-1 text-xs text-danger" aria-label={`Remove step ${i + 1}`} title="Remove">
+                  <Icon name="x" size={14} />
+                </button>
               </div>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -281,15 +433,42 @@ function Builder({
             <Textarea
               value={s.objective}
               onChange={(e) => update(i, { objective: e.target.value })}
-              placeholder={s.kind === "text" ? "Objective" : `What the ${s.kind} should show. The agent turns this into the prompt.`}
+              placeholder={
+                s.kind === "text"
+                  ? "Objective"
+                  : s.kind === "audio"
+                    ? "What is said. The agent writes the exact words that are spoken."
+                    : s.kind === "render"
+                      ? "A note for people. The step joins the videos (else the images) of the steps it depends on, in order, with their voice-overs."
+                      : `What the ${s.kind} should show. The agent turns this into the prompt.`
+              }
               aria-label={`Step ${i + 1} objective`}
               className="mt-2 min-h-[56px]"
             />
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <Select value={s.kind} onChange={(e) => update(i, { kind: e.target.value as TaskKind })} aria-label={`Step ${i + 1} delivers`}>
+              <Select
+                value={s.kind}
+                onChange={(e) => {
+                  const kind = e.target.value as TaskKind;
+                  // A step that joins clips has nothing for an agent to do: fill in what the form requires.
+                  update(
+                    i,
+                    kind === "render"
+                      ? {
+                          kind,
+                          role: s.role.trim() || "Video Artist",
+                          objective: s.objective.trim() || "Join the clips of the steps this one depends on into one video.",
+                        }
+                      : { kind },
+                  );
+                }}
+                aria-label={`Step ${i + 1} delivers`}
+              >
                 <option value="text">Delivers text</option>
                 <option value="image">Delivers an image</option>
                 <option value="video">Delivers a video</option>
+                <option value="audio">Delivers a voice-over</option>
+                <option value="render">Joins clips into one video</option>
               </Select>
               <Input value={s.dependsOn} onChange={(e) => update(i, { dependsOn: e.target.value })} placeholder="Depends on steps (e.g. 1,2)" aria-label={`Step ${i + 1} depends on steps`} />
             </div>
@@ -301,6 +480,64 @@ function Builder({
                 aria-label={`Step ${i + 1} output file`}
                 className="mono mt-2"
               />
+            ) : s.kind === "audio" ? (
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <Input
+                  value={s.voice}
+                  onChange={(e) => update(i, { voice: e.target.value })}
+                  placeholder="Voice (provider default)"
+                  aria-label={`Step ${i + 1} voice`}
+                  maxLength={64}
+                />
+                <Input
+                  type="number"
+                  min={1}
+                  max={MAX_VIDEO_SECONDS}
+                  step={1}
+                  value={s.durationSeconds}
+                  onChange={(e) => update(i, { durationSeconds: e.target.value })}
+                  placeholder="About how many seconds"
+                  aria-label={`Step ${i + 1} length in seconds`}
+                />
+                <Input
+                  type="number"
+                  min={MIN_SPEECH_SPEED}
+                  max={MAX_SPEECH_SPEED}
+                  step={0.05}
+                  value={s.speed}
+                  onChange={(e) => update(i, { speed: e.target.value })}
+                  placeholder="Speed (1 is normal)"
+                  aria-label={`Step ${i + 1} speaking speed`}
+                />
+              </div>
+            ) : s.kind === "render" ? (
+              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                <Select value={s.aspectRatio} onChange={(e) => update(i, { aspectRatio: e.target.value })} aria-label={`Step ${i + 1} aspect ratio`}>
+                  <option value="">Frame: as the first clip</option>
+                  {s.aspectRatio && !(ASPECT_RATIOS as readonly string[]).includes(s.aspectRatio) && (
+                    <option value={s.aspectRatio}>{s.aspectRatio}</option>
+                  )}
+                  {ASPECT_RATIOS.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </Select>
+                <Select value={s.fit} onChange={(e) => update(i, { fit: e.target.value as StepForm["fit"] })} aria-label={`Step ${i + 1} fit`}>
+                  <option value="">Show each clip whole (bars if needed)</option>
+                  <option value="cover">Fill the frame (crops the edges)</option>
+                </Select>
+                <div className="flex flex-col justify-center gap-1 text-xs text-ink-2">
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input type="checkbox" className="accent-current" checked={s.subtitles} onChange={(e) => update(i, { subtitles: e.target.checked })} />
+                    Subtitles from the voice-overs
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input type="checkbox" className="accent-current" checked={s.keepClipAudio} onChange={(e) => update(i, { keepClipAudio: e.target.checked })} />
+                    Keep the clips&apos; own sound
+                  </label>
+                </div>
+              </div>
             ) : (
               <div className="mt-2 grid gap-2 sm:grid-cols-3">
                 <Select value={s.aspectRatio} onChange={(e) => update(i, { aspectRatio: e.target.value })} aria-label={`Step ${i + 1} aspect ratio`}>
@@ -334,6 +571,28 @@ function Builder({
                   aria-label={`Step ${i + 1} resolution`}
                   maxLength={8}
                 />
+                {s.kind === "video" && (
+                  <Select
+                    value={s.imageFrom}
+                    onChange={(e) => update(i, { imageFrom: e.target.value })}
+                    aria-label={`Step ${i + 1} starts from the image of step`}
+                    className="sm:col-span-3"
+                  >
+                    <option value="">Starts from the prompt alone</option>
+                    {steps.map((other, j) =>
+                      j < i && other.kind === "image" ? (
+                        <option key={j} value={String(j + 1)}>
+                          Starts from the image of step {j + 1}
+                          {other.title.trim() ? ` (${other.title.trim()})` : ""}
+                        </option>
+                      ) : null,
+                    )}
+                    {/* A reference that no longer fits stays visible, so that it can be changed. */}
+                    {s.imageFrom && !(Number(s.imageFrom) <= i && steps[Number(s.imageFrom) - 1]?.kind === "image") && (
+                      <option value={s.imageFrom}>Step {s.imageFrom} (not an image step before this one)</option>
+                    )}
+                  </Select>
+                )}
               </div>
             )}
             <Input
@@ -355,6 +614,18 @@ function Builder({
         <Button type="submit" loading={loading}>{editing ? "Save workflow" : "Create workflow"}</Button>
       </div>
     </form>
+  );
+}
+
+/** What the template, with these options, asks of a project. */
+function ReelNeeds({ options }: { options: Parameters<typeof reelWorkflowTemplate>[0] }) {
+  const needs = templateNeeds(reelWorkflowTemplate(options).steps);
+  return (
+    <p className="text-xs text-ink-3">
+      {needs.tasks} steps, {needs.media} generated {needs.media === 1 ? "file" : "files"} per run. A project that
+      runs it needs a task limit of at least {needs.tasks} and a media limit of at least {needs.media}; the project
+      form sets both when the workflow is chosen.
+    </p>
   );
 }
 
@@ -431,8 +702,9 @@ export function WorkflowsManager({ initialWorkflows, isAdmin }: { initialWorkflo
                     <ol className="mt-2 list-inside list-decimal text-xs text-ink-3">
                       {w.steps.slice(0, STEPS_SHOWN).map((s, i) => (
                         <li key={i}>
-                          <span className="text-ink-2">{s.title}</span> · {s.role}
-                          {s.kind && s.kind !== "text" ? ` · ${s.kind}` : ""}
+                          <span className="text-ink-2">{s.title}</span>
+                          {s.kind === "render" ? "" : ` · ${s.role}`}
+                          {s.kind && s.kind !== "text" ? ` · ${KIND_NOUN[s.kind]}` : ""}
                         </li>
                       ))}
                     </ol>

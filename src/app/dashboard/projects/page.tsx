@@ -2,6 +2,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projects, teams, workflows } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
+import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { chatModels, mediaModelOptions, usableModels } from "@/lib/model-options";
 import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
@@ -10,7 +11,7 @@ import { CommandCenter } from "@/components/projects/command-center";
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Manager" };
 
-export default function ProjectsPage() {
+export default async function ProjectsPage() {
   const user = requirePageUser();
 
   const projectRows =
@@ -25,20 +26,26 @@ export default function ProjectsPage() {
   }));
   const imageModels = mediaModelOptions("image", allModels).map((m) => ({ id: m.id, label: m.label }));
   const videoModels = mediaModelOptions("video", allModels).map((m) => ({ id: m.id, label: m.label }));
+  const speechModels = mediaModelOptions("audio", allModels).map((m) => ({ id: m.id, label: m.label }));
+  const ffmpeg = await ffmpegStatus();
 
   const teamRows = db.select({ id: teams.id, name: teams.name }).from(teams).orderBy(asc(teams.name)).all();
-  // How many images / videos each workflow generates, so the form can ask for
-  // the models it needs before the project is created.
+  // What each workflow generates and how many steps it has, so the form can
+  // ask for the models and the room it needs before the project is created.
   const workflowOptions = db
     .select()
     .from(workflows)
     .orderBy(asc(workflows.name))
     .all()
-    .map((w) => ({
-      id: w.id,
-      label: w.name,
-      media: countMediaTasks(serializeWorkflow(w).steps.map((step) => ({ kind: step.kind ?? "text" }))),
-    }));
+    .map((w) => {
+      const steps = serializeWorkflow(w).steps;
+      return {
+        id: w.id,
+        label: w.name,
+        media: countMediaTasks(steps.map((step) => ({ kind: step.kind ?? "text" }))),
+        steps: steps.length,
+      };
+    });
 
   return (
     <CommandCenter
@@ -46,6 +53,8 @@ export default function ProjectsPage() {
       managerModels={managerModels}
       imageModels={imageModels}
       videoModels={videoModels}
+      speechModels={speechModels}
+      canRender={ffmpeg.available && ffmpeg.h264}
       teams={teamRows.map((t) => ({ id: t.id, label: t.name }))}
       workflows={workflowOptions}
     />

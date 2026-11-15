@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { providerCredentials, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin, requireUser } from "@/lib/auth";
+import { parseCustomHttpConfig } from "@/lib/adapters/custom-http-protocol";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -53,6 +54,15 @@ export const PATCH = handle(async (req, { params }) => {
   }
   if (body.extraHeaders !== undefined) {
     patch.extraHeaders = body.extraHeaders ? JSON.stringify(body.extraHeaders) : null;
+  }
+  // A custom HTTP provider keeps a valid configuration; other adapters have none.
+  const adapter = body.adapter ?? existing.adapter;
+  if (adapter === "custom-http") {
+    const config = body.config !== undefined ? (body.config ?? "") : existing.config;
+    parseCustomHttpConfig(config);
+    if (body.config !== undefined) patch.config = config;
+  } else if (existing.config !== null) {
+    patch.config = null;
   }
 
   db.update(providers).set(patch).where(eq(providers.id, existing.id)).run();

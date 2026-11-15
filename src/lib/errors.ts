@@ -26,19 +26,25 @@ export const Errors = {
 
 /**
  * Reduce an arbitrary upstream/provider error to a short, safe string.
- * Strips anything that could contain a key, and truncates.
+ * Strips anything that could contain a key, and truncates to `max` characters.
  */
-export function sanitizeUpstreamError(input: unknown): string {
+export function sanitizeUpstreamError(input: unknown, max = 300): string {
   let s =
     input instanceof Error
       ? input.message
       : typeof input === "string"
         ? input
         : "Unknown upstream error";
-  // Remove bearer tokens / sk- style keys / long opaque tokens.
+  // Remove bearer tokens / sk- style keys / long opaque tokens. Keys that are
+  // shorter than the last rule, or contain characters that end a word, have
+  // their own: Anthropic (sk-ant-…), Google (AIza…, 39 characters), Tavily
+  // (tvly-…), this app's own API keys (xn_…), and a key in a URL (?key=…).
   s = s
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
-    .replace(/\b(sk|rk|pk)[-_][A-Za-z0-9]{8,}\b/g, "[redacted-key]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/\b(sk|rk|pk)[-_][A-Za-z0-9_-]{8,}/g, "[redacted-key]")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "[redacted-key]")
+    .replace(/\b(tvly|xn)[-_][A-Za-z0-9_-]{8,}/g, "[redacted-key]")
+    .replace(/([?&](?:key|api_key|apikey|access_token|token)=)[^&\s"']+/gi, "$1[redacted]")
     .replace(/\b[A-Za-z0-9_-]{40,}\b/g, "[redacted]");
-  return s.length > 300 ? `${s.slice(0, 297)}…` : s;
+  return s.length > max ? `${s.slice(0, max - 3)}…` : s;
 }

@@ -1,0 +1,1174 @@
+// End-to-end checks of what runs in the background and around it: speech,
+// joined videos, the knowledge base, agent tools and memory, runs that go on
+// without a page, schedules, notifications, the public API, and the
+// Anthropic, Gemini and custom HTTP adapters. Called by checks.mjs, which owns
+// the accounts, the providers and the test harness.
+//
+// Like the rest: this runs against the mock in mock-provider.mjs, which is
+// written from the providers' public documentation. Passing here shows the
+// app is consistent with that reading; it is not a test against the real
+// services.
+import { spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/templates.ts";
+
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "runs", "notifications", "api", "adapters", "reel"];
+
+const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
+const DB_PATH = process.env.E2E_DB_PATH;
+const HAS_FFMPEG = process.env.E2E_FFMPEG === "1";
+const FFMPEG = process.env.E2E_FFMPEG_PATH || "ffmpeg";
+const GEMINI_KEY = "AIzaSyMOCK-0123456789-not-a-real-key";
+const ANTHROPIC_KEY = "sk-ant-mock-0123456789abcdefghijklmnopqrstuvwxyz";
+
+/** A minimal, valid PDF with text on its pages. */
+function makePdf(pages) {
+  const objects = [];
+  const add = (body) => objects.push(body);
+  const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
+  const pagesId = 1 + pages.length * 2 + 1;
+  const pageIds = [];
+  for (const lines of pages) {
+    const text = lines
+      .map((line, i) => `BT /F1 12 Tf 72 ${720 - i * 18} Td (${line.replace(/([()\\])/g, "\\$1")}) Tj ET`)
+      .join("\n");
+    const content = add(`<< /Length ${Buffer.byteLength(text)} >>\nstream\n${text}\nendstream`);
+    pageIds.push(
+      add(`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 ${font} 0 R >> >> >>`),
+    );
+  }
+  add(`<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${pageIds.length} >>`);
+  const catalog = add(`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
+  let out = "%PDF-1.4\n";
+  const offsets = [];
+  objects.forEach((body, i) => {
+    offsets.push(Buffer.byteLength(out, "latin1"));
+    out += `${i + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = Buffer.byteLength(out, "latin1");
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  out += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+}
+
+export async function automation(ctx) {
+  const { APP, MOCK, KEY, only, admin, bob, carol, ids, begin, check, eq, sleep, mockLog, mockReset, mediaFiles, settle, runProject, client } = ctx;
+  const wants = (part) => !only || only.has(part);
+  const state = { models: {}, agents: {} };
+
+  // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  /** A request whose answer is a stream of events; resolves when the stream ends. */
+  async function sse(user, path, { method = "GET", body } = {}) {
+    const res = await user.raw(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+    const events = [];
+    if (!res.ok || !(res.headers.get("content-type") ?? "").includes("event-stream")) {
+      return { status: res.status, events, text: await res.text() };
+    }
+    const text = await res.text();
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      try {
+        events.push(JSON.parse(payload));
+      } catch {
+        events.push(payload);
+      }
+    }
+    return { status: res.status, events, text };
+  }
+
+  /** Upload a file as the body of a request. */
+  async function upload(user, path, bytes, name, type = "application/octet-stream") {
+    const res = await user.raw(path, {
+      method: "POST",
+      body: bytes,
+      headers: { "content-type": type, "x-file-name": encodeURIComponent(name) },
+    });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      /* no JSON body */
+    }
+    return { status: res.status, data, error: data?.error?.message ?? null };
+  }
+
+  /** Ask again until `done(value)` holds. Resolves to the last value. */
+  async function until(read, done, { tries = 30, gapMs = 1000 } = {}) {
+    let value;
+    for (let i = 0; i < tries; i++) {
+      value = await read();
+      if (done(value)) return value;
+      await sleep(gapMs);
+    }
+    return value;
+  }
+
+  /** The app's database, for the few checks that have to set a time or a state by hand. */
+  function database() {
+    const require = createRequire(import.meta.url);
+    const Database = require("better-sqlite3");
+    const db = new Database(DB_PATH);
+    db.pragma("busy_timeout = 5000");
+    return db;
+  }
+
+  /** The public API, with a key. */
+  async function v1(path, { key, method = "GET", body, headers = {} } = {}) {
+    return fetch(`${APP}/api/v1${path}`, {
+      method,
+      headers: {
+        ...(key ? { authorization: `Bearer ${key}` } : {}),
+        ...(body !== undefined ? { "content-type": "application/json" } : {}),
+        ...headers,
+      },
+      body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body),
+    });
+  }
+  async function v1json(path, init) {
+    const res = await v1(path, init);
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      /* no JSON body */
+    }
+    return { status: res.status, data, error: data?.error ?? null, headers: res.headers };
+  }
+
+  async function model(key, provider, modelId, capabilities, extra = {}) {
+    const res = await admin.post("/api/models", { providerId: provider, modelId, capabilities, ...extra });
+    if (res.status !== 201) check(`model ${key} is created`, false, res.error);
+    state.models[key] = res.data?.model?.id;
+    return res.data?.model;
+  }
+
+  async function agent(name, role, body = {}) {
+    const res = await admin.post("/api/agents", { name, role, instructions: `You are the ${role}.`, primaryModelRowId: ids.models.chat, ...body });
+    if (res.status !== 201) check(`agent ${name} is created`, false, res.error);
+    state.agents[name] = res.data?.agent?.id;
+    return res;
+  }
+
+  async function workflow(name, steps) {
+    const res = await admin.post("/api/workflows", { name, steps });
+    if (res.status !== 201) check(`workflow ${name} is created`, false, res.error);
+    return res.data?.workflow?.id;
+  }
+
+  async function project(user, body) {
+    const res = await user.post("/api/projects", { goal: "Check the app.", managerModelRowId: ids.models.chat, ...body });
+    if (res.status !== 201) check(`project ${body.title} is created`, false, res.error);
+    return res.data?.project?.id;
+  }
+
+  const finished = (events) => events.filter((e) => e.type === "task" && e.status !== "running");
+  const taskOf = (events, seq) => finished(events).find((e) => e.seq === seq);
+
+  // ─── Setup ─────────────────────────────────────────────────────────────────
+
+  begin("Setup: speech, embedding and tool models");
+  const openai = ids.providers.openai;
+  const speechModel = await model("tts", openai, "tts-1", ["speech_generation"], { pricePerMChars: 15 });
+  eq("a speech model stores its price per million characters", speechModel?.pricePerMChars, 15);
+  for (const id of ["tts-pcm", "tts-fail", "tts-json", "tts-html"]) await model(id, openai, id, ["speech_generation"]);
+  await model("embed", openai, "text-embedding-3-small", ["embeddings"], { inputPricePerMTok: 0.02 });
+  await model("embed-fail", openai, "embed-fail", ["embeddings"]);
+  await model("vid-real", openai, "vid-real", ["video_generation"], { pricePerSecond: 0.1 });
+  await model("chat-notools", openai, "chat-notools", ["text"]);
+  check("the models are created", Object.values(state.models).every(Boolean), state.models);
+
+  const listed = await admin.get("/api/models");
+  const kinds = new Map((listed.data?.models ?? []).map((m) => [m.modelId, m.capabilities.map((c) => c.capability)]));
+  eq("an embedding model is no chat model", kinds.get("text-embedding-3-small"), ["embeddings"]);
+  const chatWithEmbedding = await admin.post("/api/chat", { modelRowId: state.models.embed, messages: [{ role: "user", content: "hi" }] });
+  check("  chat refuses it", chatWithEmbedding.status === 400 && /not a chat model/.test(chatWithEmbedding.error ?? ""), chatWithEmbedding.error);
+  const agentWithSpeech = await admin.post("/api/agents", { name: "Wrong", role: "Wrong", primaryModelRowId: state.models.tts });
+  eq("  a speech model cannot be an agent's model", agentWithSpeech.status, 400);
+
+  // ─── Speech ────────────────────────────────────────────────────────────────
+
+  const made = {};
+  async function speech() {
+    begin("Speech: text to a stored voice-over");
+    await mockReset();
+    const filesBefore = (await mediaFiles()).length;
+    const text = "Hello from Pekanbaru. This is a short test of the voice, twenty words long so that it lasts one second.";
+    const res = await admin.post("/api/media/speech", { modelRowId: state.models.tts, text, voice: "alloy", speed: 1.25 });
+    eq("the request is accepted", res.status, 201);
+    const a = res.data?.asset;
+    made.speech = a;
+    eq("it is stored as audio, ready at once", [a?.kind, a?.status, a?.source, a?.mimeType], ["audio", "ready", "provider", "audio/wav"]);
+    check("its length is read from the file", a?.durationSeconds > 0.9 && a?.durationSeconds < 1.1, a?.durationSeconds);
+    eq("the voice and speed are kept with it", [a?.options?.voice, a?.options?.speed], ["alloy", 1.25]);
+    check("the cost is the text's length times the price", Math.abs((a?.estimatedCost ?? 0) - (text.length * 15) / 1_000_000) < 1e-9, a?.estimatedCost);
+    const log = await mockLog();
+    eq("one request, to the speech endpoint, with the text and the voice", [log.length, log[0]?.path, log[0]?.body?.input, log[0]?.body?.voice, log[0]?.body?.speed], [1, "/openai/v1/audio/speech", text, "alloy", 1.25]);
+    eq("the key goes to the provider", log[0]?.authorization, `Bearer ${KEY}`);
+
+    const file = await admin.raw(a.url);
+    const bytes = Buffer.from(await file.arrayBuffer());
+    eq("the file is served as audio", [file.status, file.headers.get("content-type"), file.headers.get("x-content-type-options")], [200, "audio/wav", "nosniff"]);
+    check("  and is the WAV the provider sent", bytes.subarray(0, 4).toString() === "RIFF" && bytes.length === a.sizeBytes, bytes.length);
+    const part = await admin.raw(a.url, { headers: { range: "bytes=0-43" } });
+    eq("  a player can ask for a part of it", [part.status, part.headers.get("content-range")], [206, `bytes 0-43/${a.sizeBytes}`]);
+    await part.arrayBuffer();
+    eq("another user cannot read it", (await bob.raw(a.url)).status, 403);
+    const audioOnly = await admin.get("/api/media?kind=audio");
+    check("the library lists it under ?kind=audio", audioOnly.data?.assets?.length >= 1 && audioOnly.data.assets.every((x) => x.kind === "audio"), audioOnly.data?.assets?.length);
+
+    const pcm = await admin.post("/api/media/speech", { modelRowId: state.models["tts-pcm"], text: "Bare samples." });
+    const pcmFile = Buffer.from(await (await admin.raw(pcm.data?.asset?.url ?? "/none")).arrayBuffer());
+    check("bare samples from the provider are stored as a playable WAV file", pcm.status === 201 && pcm.data.asset.mimeType === "audio/wav" && pcmFile.subarray(0, 4).toString() === "RIFF" && pcmFile.subarray(8, 12).toString() === "WAVE", [pcm.status, pcm.error]);
+    check("  with the length of the samples", Math.abs((pcm.data?.asset?.durationSeconds ?? 0) - 0.5) < 0.01, pcm.data?.asset?.durationSeconds);
+    made.speechShort = pcm.data?.asset;
+
+    begin("Speech: failures");
+    const before = (await mediaFiles()).length;
+    const rejected = await admin.post("/api/media/speech", { modelRowId: state.models["tts-fail"], text: "x" });
+    check("a request the provider rejects is an error with its reason", rejected.status === 502 && /voice is not available/.test(rejected.error ?? ""), `${rejected.status} ${rejected.error}`);
+    const disguised = await admin.post("/api/media/speech", { modelRowId: state.models["tts-json"], text: "x" });
+    check("an error that came with a success status is an error", disguised.status === 502 && /Quota exceeded for speech/.test(disguised.error ?? ""), `${disguised.status} ${disguised.error}`);
+    const html = await admin.post("/api/media/speech", { modelRowId: state.models["tts-html"], text: "x" });
+    check("a file that is not audio is refused, whatever it claims to be", html.status === 502 && /not an MP3, WAV/.test(html.error ?? ""), `${html.status} ${html.error}`);
+    eq("failed requests leave no file behind", (await mediaFiles()).length, before);
+    eq("text over the limit is refused", (await admin.post("/api/media/speech", { modelRowId: state.models.tts, text: "x".repeat(4097) })).status, 400);
+    eq("empty text is refused", (await admin.post("/api/media/speech", { modelRowId: state.models.tts, text: "   " })).status, 400);
+    const wrong = await admin.post("/api/media/speech", { modelRowId: ids.models.chat, text: "x" });
+    check("a chat model is not a speech model", wrong.status === 400 && /not marked for speech/.test(wrong.error ?? ""), wrong.error);
+    eq("signed out: refused", (await ctx.anon.post("/api/media/speech", { modelRowId: state.models.tts, text: "x" })).status, 401);
+    check("files were stored for the two that worked", (await mediaFiles()).length === filesBefore + 2, [(await mediaFiles()).length, filesBefore]);
+  }
+
+  // ─── Joining clips ─────────────────────────────────────────────────────────
+
+  /** A finished video of the model that returns a real, playable clip. */
+  /**
+   * What a video file holds when it is played: frames of picture, and seconds
+   * of sound. Decoded with ffmpeg, not read from the file's own description.
+   */
+  async function played(user, asset) {
+    const folder = mkdtempSync(join(tmpdir(), "nexus-e2e-film-"));
+    try {
+      const file = join(folder, "film.mp4");
+      writeFileSync(file, Buffer.from(await (await user.raw(asset.url)).arrayBuffer()));
+      const decode = (stream) =>
+        spawnSync(FFMPEG, ["-hide_banner", "-nostdin", "-i", file, "-map", stream, "-f", "null", "-"], { encoding: "utf8" }).stderr ?? "";
+      const frames = [...decode("0:v:0").matchAll(/frame=\s*(\d+)/g)].at(-1)?.[1];
+      const time = [...decode("0:a:0").matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)].at(-1);
+      return {
+        frames: frames === undefined ? null : Number(frames),
+        sound: time ? Number(time[1]) * 3600 + Number(time[2]) * 60 + Number(time[3]) : null,
+      };
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  }
+  /** Old ffmpeg versions count the last, partly empty packet of sound whole: up to 0.05 s more. */
+  const soundIs = (film, seconds) => film.sound !== null && Math.abs(film.sound - seconds) <= 0.05;
+
+  async function realVideo(user, prompt) {
+    const started = await user.post("/api/media/videos", { modelRowId: state.models["vid-real"], prompt, durationSeconds: 2, aspectRatio: "9:16" });
+    if (started.status !== 201) return null;
+    return (await settle(user, started.data.asset.id)).asset;
+  }
+
+  async function render() {
+    begin("Joining clips: what this server can do");
+    const caps = await admin.get("/api/media/capabilities");
+    eq("the server says whether it can join clips", caps.data?.render?.available, HAS_FFMPEG);
+    const pngBytes = Buffer.from(await (await fetch(`${CDN}/cdn/any.png`)).arrayBuffer());
+
+    const up = await upload(admin, "/api/media/upload", pngBytes, "my photo.png", "image/png");
+    eq("an image can be uploaded into the library", [up.status, up.data?.asset?.kind, up.data?.asset?.source, up.data?.asset?.prompt], [201, "image", "upload", "my photo.png"]);
+    made.upload = up.data?.asset;
+    const svg = await upload(admin, "/api/media/upload", Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'), "x.png", "image/png");
+    check("  an SVG named .png is refused: the type is read from the bytes", svg.status === 400 && /PNG, JPEG, GIF or WebP/.test(svg.error ?? ""), `${svg.status} ${svg.error}`);
+    const empty = await upload(admin, "/api/media/upload", Buffer.alloc(0), "empty.png", "image/png");
+    eq("  an empty file is refused", empty.status, 400);
+    eq("  signed out: refused", (await upload(ctx.anon, "/api/media/upload", pngBytes, "x.png", "image/png")).status, 401);
+
+    if (!made.speech) {
+      const s = await admin.post("/api/media/speech", { modelRowId: state.models.tts, text: "One line of narration for the cut." });
+      made.speech = s.data?.asset;
+    }
+
+    if (!HAS_FFMPEG) {
+      const refused = await admin.post("/api/media/render", { clipIds: [made.upload.id] });
+      check("without ffmpeg, joining says what is missing", refused.status === 400 && /needs ffmpeg/.test(refused.error ?? ""), `${refused.status} ${refused.error}`);
+      return;
+    }
+
+    begin("Joining clips: videos, a still, a voice-over, subtitles");
+    const clipA = await realVideo(admin, "clip one");
+    const clipB = await realVideo(admin, "clip two");
+    check("two real clips are generated", clipA?.status === "ready" && clipB?.status === "ready", [clipA?.status, clipB?.status]);
+    made.clips = [clipA, clipB];
+
+    const started = await admin.post("/api/media/render", {
+      clipIds: [clipA.id, made.upload.id, clipB.id],
+      narrationIds: [made.speech.id],
+      subtitles: true,
+      aspectRatio: "9:16",
+      title: "My cut",
+    });
+    eq("the request answers at once, with the video in progress", [started.status, started.data?.asset?.kind, started.data?.asset?.source, started.data?.asset?.status, started.data?.asset?.prompt], [201, "video", "render", "pending", "My cut"]);
+    const renderId = started.data?.asset?.id;
+    const done = await until(
+      async () => (await admin.get(`/api/media/${renderId}`)).data?.asset,
+      (a) => a?.status !== "pending",
+      { tries: 90, gapMs: 1000 },
+    );
+    eq("the background worker makes the file", [done?.status, done?.mimeType, done?.error], ["ready", "video/mp4", null]);
+    // Two clips of 2 s and a still of 4 s; the voice-over is shorter than that.
+    eq("its length is the clips' and the still's together", done?.durationSeconds, 8);
+    const film = await played(admin, done);
+    check("  and the file holds just that: 240 frames of picture at 30 a second, and sound to the end", film.frames === 240 && soundIs(film, 8), film);
+    const file = await admin.raw(done.url, { headers: { range: "bytes=0-11" } });
+    const head = Buffer.from(await file.arrayBuffer());
+    eq("the file is an MP4, served like any other video", [file.status, head.subarray(4, 8).toString()], [206, "ftyp"]);
+    check("it costs nothing: no provider was asked", done.estimatedCost == null, done.estimatedCost);
+    const bell = await admin.get("/api/notifications");
+    check("its owner is told when it is ready", bell.data?.notifications?.some((n) => n.title === "Your joined video is ready"), bell.data?.notifications?.map((n) => n.title));
+    made.render = done;
+
+    const paired = await admin.post("/api/media/render", { clipIds: [clipA.id, clipB.id], narrationIds: [made.speech.id, made.speechShort?.id ?? made.speech.id], fit: "cover" });
+    const pairedDone = await until(async () => (await admin.get(`/api/media/${paired.data?.asset?.id}`)).data?.asset, (a) => a?.status !== "pending", { tries: 90 });
+    eq("one voice-over per clip: each plays over its own clip, and nothing is stretched when the clips are longer", [pairedDone?.status, pairedDone?.durationSeconds], ["ready", 4]);
+
+    // Sixty words: the mock speaks them in three seconds, which is longer than the clip they go with.
+    const long = await admin.post("/api/media/speech", { modelRowId: state.models.tts, text: `${Array.from({ length: 60 }, (_, i) => `word${i + 1}`).join(" ")}.` });
+    const held = await admin.post("/api/media/render", { clipIds: [clipA.id, clipB.id], narrationIds: [long.data?.asset?.id, made.speechShort?.id ?? made.speech.id], keepClipAudio: true });
+    const heldDone = await until(async () => (await admin.get(`/api/media/${held.data?.asset?.id}`)).data?.asset, (a) => a?.status !== "pending", { tries: 90 });
+    // The first clip: 0.15 s, the 3 s of its voice-over, 0.35 s. The second: its own 2 s.
+    eq("a clip under a longer voice-over lasts until the voice has ended", [long.data?.asset?.durationSeconds, heldDone?.status, heldDone?.error, heldDone?.durationSeconds], [3, "ready", null, 5.5]);
+    const heldFilm = heldDone?.status === "ready" ? await played(admin, heldDone) : {};
+    check("  its last frame is held: the picture is as long as the sound, with the clips' own sound kept under the voices", heldFilm.frames === 165 && soundIs(heldFilm, 5.5), heldFilm);
+
+    begin("Joining clips: what is refused");
+    const none = await admin.post("/api/media/render", { clipIds: [] });
+    eq("no clips", none.status, 400);
+    const foreign = await bob.post("/api/media/render", { clipIds: [clipA.id] });
+    check("someone else's clip: as if it did not exist", foreign.status === 400 && /was not found/.test(foreign.error ?? ""), `${foreign.status} ${foreign.error}`);
+    const audioAsClip = await admin.post("/api/media/render", { clipIds: [made.speech.id] });
+    check("a voice-over as a clip", audioAsClip.status === 400 && /cannot be used as a clip/.test(audioAsClip.error ?? ""), audioAsClip.error);
+    const clipAsVoice = await admin.post("/api/media/render", { clipIds: [clipA.id], narrationIds: [clipB.id] });
+    check("a video as a voice-over", clipAsVoice.status === 400 && /cannot be used as a voice-over/.test(clipAsVoice.error ?? ""), clipAsVoice.error);
+    const slow = await admin.post("/api/media/videos", { modelRowId: ids.models["vid-slow"], prompt: "never finishes" });
+    const pending = await admin.post("/api/media/render", { clipIds: [slow.data?.asset?.id] });
+    check("a video that is not finished", pending.status === 400 && /not finished/.test(pending.error ?? ""), pending.error);
+    await admin.del(`/api/media/${slow.data?.asset?.id}`);
+    eq("more clips than the limit", (await admin.post("/api/media/render", { clipIds: Array.from({ length: 41 }, () => clipA.id) })).status, 400);
+    // The stand-in "video" of the other models is not a video at all: ffmpeg cannot read it.
+    const fake = await admin.post("/api/media/videos", { modelRowId: ids.models["vid-instant"], prompt: "not a real video" });
+    const fakeReady = fake.data?.asset?.status === "ready" ? fake.data.asset : (await settle(admin, fake.data?.asset?.id)).asset;
+    const broken = await admin.post("/api/media/render", { clipIds: [fakeReady.id] });
+    const brokenDone = await until(async () => (await admin.get(`/api/media/${broken.data?.asset?.id}`)).data?.asset, (a) => a?.status !== "pending", { tries: 60 });
+    check("a clip ffmpeg cannot read: the result fails with the reason, and no file is left", brokenDone?.status === "failed" && /could not read one of the clips/.test(brokenDone?.error ?? "") && brokenDone.url === null, [brokenDone?.status, brokenDone?.error]);
+    const leftovers = (await mediaFiles()).filter((name) => name.includes(broken.data?.asset?.id ?? "none"));
+    eq("  nothing of it is in the media folder", leftovers, []);
+  }
+
+  // ─── Knowledge ─────────────────────────────────────────────────────────────
+
+  async function knowledge() {
+    begin("Knowledge: collections and documents");
+    await mockReset();
+    const created = await admin.post("/api/knowledge", { name: "Shop handbook", description: "How the shop works", visibility: "shared", embeddingModelRowId: state.models.embed });
+    eq("a shared collection with an embedding model", [created.status, created.data?.collection?.visibility, created.data?.collection?.embeddingModelLabel], [201, "shared", "text-embedding-3-small"]);
+    const col = created.data?.collection?.id;
+    made.collection = col;
+    const notEmbedding = await admin.post("/api/knowledge", { name: "Wrong", embeddingModelRowId: ids.models.chat });
+    check("a chat model is not an embedding model", notEmbedding.status === 400 && /not marked for embeddings/.test(notEmbedding.error ?? ""), notEmbedding.error);
+
+    const doc = await admin.post(`/api/knowledge/${col}/documents`, {
+      title: "Refund policy",
+      text: "Refund policy. Returns are accepted within 30 days of delivery when the item is unused. Refunds go back to the original payment method within five working days.\n\nShipping. Orders ship from Pekanbaru on weekdays. Delivery inside Sumatra takes two to four days.",
+    });
+    eq("pasted text becomes a document, searchable at once", [doc.status, doc.data?.document?.sourceType, doc.data?.document?.chunkCount, doc.data?.document?.embeddingStatus], [201, "text", 1, "pending"]);
+    const early = await admin.post("/api/knowledge/search", { query: "refund", collectionIds: [col] });
+    check("  by its words, before it is embedded", early.data?.hits?.[0]?.documentTitle === "Refund policy" && early.data.hits[0].matched.includes("text"), early.data?.hits);
+
+    const link = await admin.post(`/api/knowledge/${col}/documents`, { url: `${CDN}/site/moved` });
+    eq("a link: the page is fetched (through a redirect) and its title used", [link.status, link.data?.document?.title, link.data?.document?.sourceType, link.data?.document?.sourceName], [201, "The lighthouse keepers", "url", `${CDN}/site/article.html`]);
+    const page = await admin.post("/api/knowledge/search", { query: "wick weather", collectionIds: [col] });
+    const pageText = page.data?.hits?.find((h) => h.documentTitle === "The lighthouse keepers")?.content ?? "";
+    check("  only what a reader sees is kept: no script, no style, entities decoded", pageText.includes("every four hours & logged") && !pageText.includes("document.title") && !pageText.includes("color:red"), pageText);
+    const metadata = await admin.post(`/api/knowledge/${col}/documents`, { url: "http://169.254.169.254/latest/meta-data/" });
+    check("a link into a private network is refused", metadata.status === 400 && /private network/.test(metadata.error ?? ""), `${metadata.status} ${metadata.error}`);
+    const hop = await admin.post(`/api/knowledge/${col}/documents`, { url: `${CDN}/site/to-metadata` });
+    check("  also when a public page redirects there", hop.status === 400 && /private network/.test(hop.error ?? ""), `${hop.status} ${hop.error}`);
+    const binary = await admin.post(`/api/knowledge/${col}/documents`, { url: `${CDN}/site/binary.bin` });
+    check("a link to something that is not text is refused", binary.status === 400 && /not text/.test(binary.error ?? ""), `${binary.status} ${binary.error}`);
+    const gone = await admin.post(`/api/knowledge/${col}/documents`, { url: `${CDN}/site/missing` });
+    check("a link that answers 404 is an error", gone.status === 502 && /404/.test(gone.error ?? ""), `${gone.status} ${gone.error}`);
+
+    const pdf = await upload(admin, `/api/knowledge/${col}/documents/upload`, makePdf([["Warranty", "Every lamp has a two year warranty against defects."], ["Repairs", "Send the lamp back in its box."]]), "Warranty terms.pdf", "application/pdf");
+    eq("a PDF: its text is read, page after page", [pdf.status, pdf.data?.document?.title, pdf.data?.document?.mimeType, pdf.data?.document?.sourceName], [201, "Warranty terms", "application/pdf", "Warranty terms.pdf"]);
+    const md = await upload(admin, `/api/knowledge/${col}/documents/upload`, Buffer.from("# Opening hours\n\nThe shop is open from nine to five on weekdays.\n"), "hours.md", "text/markdown");
+    eq("a Markdown file", [md.status, md.data?.document?.mimeType], [201, "text/markdown"]);
+    const exe = await upload(admin, `/api/knowledge/${col}/documents/upload`, Buffer.from([0x4d, 0x5a, 0, 0, 0, 1, 2, 3, 0, 0, 0, 0, 0xff, 0xfe]), "tool.exe");
+    check("a program is refused", exe.status === 400 && /not text/.test(exe.error ?? ""), `${exe.status} ${exe.error}`);
+    const scan = await upload(admin, `/api/knowledge/${col}/documents/upload`, makePdf([[]]), "scan.pdf", "application/pdf");
+    check("a PDF without text says that it is probably a scan", scan.status === 400 && /scan/.test(scan.error ?? ""), `${scan.status} ${scan.error}`);
+    const big = await upload(admin, `/api/knowledge/${col}/documents/upload`, Buffer.alloc(15 * 1024 * 1024 + 1, 0x61), "big.txt", "text/plain");
+    eq("a file over 15 MB is refused", big.status, 413);
+
+    begin("Knowledge: embedding in the background, search by words and by meaning");
+    const settled = await until(
+      async () => (await admin.get(`/api/knowledge/${col}`)).data,
+      (d) => d?.documents?.every((x) => x.embeddingStatus !== "pending"),
+      { tries: 40, gapMs: 1000 },
+    );
+    eq("the worker embeds every document", settled?.documents?.map((d) => d.embeddingStatus).sort(), ["ready", "ready", "ready", "ready"]);
+    eq("the collection counts its documents", [settled?.collection?.documentCount, settled?.collection?.chunkCount >= 4], [4, true]);
+    const log = await mockLog();
+    const embedCalls = log.filter((l) => l.path === "/openai/v1/embeddings");
+    check("the texts went to the embedding model", embedCalls.length >= 1 && embedCalls.every((l) => l.body?.model === "text-embedding-3-small" && Array.isArray(l.body.input)), embedCalls.length);
+    const found = await admin.post("/api/knowledge/search", { query: "how long do I have to return an item", collectionIds: [col] });
+    eq("a question finds the passage that answers it", found.data?.hits?.[0]?.documentTitle, "Refund policy");
+    check("  found by its words and by its meaning", found.data?.hits?.[0]?.matched?.includes("text") && found.data.hits[0].matched.includes("meaning"), found.data?.hits?.[0]?.matched);
+    const limited = await admin.post("/api/knowledge/search", { query: "lamp warranty repairs shop", collectionIds: [col], limit: 2 });
+    eq("  no more passages than asked for", limited.data?.hits?.length, 2);
+    eq("an empty question is refused", (await admin.post("/api/knowledge/search", { query: " ", collectionIds: [col] })).status, 400);
+
+    begin("Knowledge: who can do what");
+    const bobList = await bob.get("/api/knowledge");
+    check("another user sees the shared collection", bobList.data?.collections?.some((c) => c.id === col && !c.canManage && !c.owner), bobList.data?.collections);
+    eq("  can search it", (await bob.post("/api/knowledge/search", { query: "refund", collectionIds: [col] })).data?.hits?.[0]?.documentTitle, "Refund policy");
+    eq("  cannot add to it", (await bob.post(`/api/knowledge/${col}/documents`, { title: "x", text: "y" })).status, 403);
+    eq("  cannot change it", (await bob.patch(`/api/knowledge/${col}`, { name: "Mine now" })).status, 403);
+    eq("  cannot delete it", (await bob.del(`/api/knowledge/${col}`)).status, 403);
+    const priv = await bob.post("/api/knowledge", { name: "Bob's notes" });
+    eq("a user's own collection is private, searched by its words", [priv.status, priv.data?.collection?.visibility, priv.data?.collection?.embeddingModelRowId], [201, "private", null]);
+    const bobCol = priv.data?.collection?.id;
+    await bob.post(`/api/knowledge/${bobCol}/documents`, { title: "Secret plan", text: "The surprise party is on Friday." });
+    const carolList = await carol.get("/api/knowledge");
+    check("a third user does not see it", !carolList.data?.collections?.some((c) => c.id === bobCol), carolList.data?.collections?.map((c) => c.name));
+    eq("  and cannot open it: as if it did not exist", (await carol.get(`/api/knowledge/${bobCol}`)).status, 404);
+    eq("  nor search it", (await carol.post("/api/knowledge/search", { query: "party", collectionIds: [bobCol] })).status, 404);
+    const mixed = await carol.post("/api/knowledge/search", { query: "party refund", collectionIds: [bobCol, col] });
+    check("  asked together with one she can read, only that one is searched", mixed.status === 200 && mixed.data.hits.every((h) => h.collectionId === col), mixed.data?.hits?.map((h) => h.documentTitle));
+    eq("signed out: refused", (await ctx.anon.get("/api/knowledge")).status, 401);
+
+    begin("Knowledge: in chat");
+    const chat = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: ids.models.chat, messages: [{ role: "user", content: "What is the warranty on lamps?" }], collectionIds: [col] } });
+    const sources = chat.events.find((e) => e.sources)?.sources;
+    eq("the passages that fit the question are looked up, the best one first", sources?.[0]?.documentTitle, "Warranty terms");
+    const answer = chat.events.filter((e) => e.delta).map((e) => e.delta).join("");
+    check("  and put in front of the model", answer.startsWith("From your documents [1]: Warranty terms (Shop handbook)"), answer);
+    const off = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: ids.models.chat, messages: [{ role: "user", content: "Reply with the single word: ok" }] } });
+    check("without a collection, chat is as before", !off.events.some((e) => e.sources) && off.events.filter((e) => e.delta).map((e) => e.delta).join("") === "ok", off.events);
+    const foreign = await sse(carol, "/api/chat", { method: "POST", body: { modelRowId: ids.models.chat, messages: [{ role: "user", content: "When is the party?" }], collectionIds: [bobCol] } });
+    check("someone else's private collection is not looked up", !foreign.events.some((e) => e.sources), foreign.events.find((e) => e.sources));
+
+    begin("Knowledge: agents, changes, a failing embedding model");
+    const onlyShared = await admin.post("/api/agents", { name: "Reader", role: "Reader", primaryModelRowId: ids.models.chat, collectionIds: [bobCol] });
+    check("an agent cannot be given a private collection", onlyShared.status === 400 && /shared/.test(onlyShared.error ?? ""), `${onlyShared.status} ${onlyShared.error}`);
+    const reader = await agent("Reader", "Reader", { collectionIds: [col] });
+    eq("  it can be given a shared one", reader.data?.agent?.collectionIds, [col]);
+    const lock = await admin.patch(`/api/knowledge/${col}`, { visibility: "private" });
+    check("a collection an agent uses cannot be made private", lock.status === 400 && /agents/.test(lock.error ?? ""), `${lock.status} ${lock.error}`);
+
+    const without = await admin.patch(`/api/knowledge/${col}`, { embeddingModelRowId: null });
+    const dropped = (await admin.get(`/api/knowledge/${col}`)).data;
+    eq("taking the model away drops the embeddings", [without.status, [...new Set(dropped?.documents?.map((d) => d.embeddingStatus))]], [200, ["none"]]);
+    const wordsOnly = await admin.post("/api/knowledge/search", { query: "how long do I have to return an item", collectionIds: [col] });
+    eq("  the collection is then searched by its words alone", wordsOnly.data?.hits?.[0]?.matched, ["text"]);
+    await admin.patch(`/api/knowledge/${col}`, { embeddingModelRowId: state.models.embed });
+    const again = await until(async () => (await admin.get(`/api/knowledge/${col}`)).data, (d) => d?.documents?.every((x) => x.embeddingStatus === "ready"), { tries: 40 });
+    eq("giving it back embeds every document again", [...new Set(again?.documents?.map((d) => d.embeddingStatus))], ["ready"]);
+
+    const failing = await admin.post("/api/knowledge", { name: "Failing", embeddingModelRowId: state.models["embed-fail"] });
+    const failDoc = await admin.post(`/api/knowledge/${failing.data?.collection?.id}/documents`, { title: "Still here", text: "This document stays searchable by its words." });
+    const failed = await until(async () => (await admin.get(`/api/knowledge/${failing.data?.collection?.id}`)).data?.documents?.[0], (d) => d?.embeddingStatus === "failed", { tries: 30 });
+    check("when the embedding model fails, the document says so", failed?.embeddingStatus === "failed" && /embedding service is down/.test(failed?.error ?? ""), [failed?.embeddingStatus, failed?.error]);
+    eq("  and is still found by its words", (await admin.post("/api/knowledge/search", { query: "searchable", collectionIds: [failing.data?.collection?.id] })).data?.hits?.[0]?.documentTitle, "Still here");
+    check("  (the document was accepted)", failDoc.status === 201, failDoc.error);
+    await admin.del(`/api/knowledge/${failing.data?.collection?.id}`);
+
+    const removed = await admin.del(`/api/knowledge/${col}/documents/${md.data?.document?.id}`);
+    const after = await admin.post("/api/knowledge/search", { query: "opening hours nine to five", collectionIds: [col] });
+    check("a removed document is no longer found", removed.status === 200 && !after.data?.hits?.some((h) => h.documentTitle === "hours"), after.data?.hits?.map((h) => h.documentTitle));
+    await bob.del(`/api/knowledge/${bobCol}`);
+    eq("a deleted collection is gone", (await bob.get(`/api/knowledge/${bobCol}`)).status, 404);
+  }
+
+  // ─── Agent tools and memory ────────────────────────────────────────────────
+
+  async function tools() {
+    begin("Agent tools: what the server is set up for");
+    const setup = await admin.get("/api/agents/tools");
+    eq("the sandbox and the search service are configured", [setup.data?.sandbox, setup.data?.search], [true, "Brave Search"]);
+    eq("every tool is available", setup.data?.tools?.filter((t) => !t.available).map((t) => t.name), []);
+    if (!made.collection) {
+      const c = await admin.post("/api/knowledge", { name: "Tools handbook", visibility: "shared" });
+      made.collection = c.data?.collection?.id;
+      await admin.post(`/api/knowledge/${made.collection}/documents`, { title: "Refund policy", text: "Refund policy. Returns are accepted within 30 days." });
+    }
+    const allTools = ["list_files", "read_file", "write_file", "edit_file", "delete_file", "run_command", "fetch_url", "http_request", "web_search"];
+    const smith = await agent("Toolsmith", "Engineer", { tools: allTools, maxSteps: 8, memoryEnabled: true, collectionIds: [made.collection] });
+    eq("an agent keeps its tools, its step limit, its memory setting and its collections", [smith.data?.agent?.tools, smith.data?.agent?.maxSteps, smith.data?.agent?.memoryEnabled, smith.data?.agent?.collectionIds], [allTools, 8, true, [made.collection]]);
+    eq("an unknown tool is refused", (await admin.post("/api/agents", { name: "X", role: "X", tools: ["format_disk"] })).status, 400);
+    eq("only an administrator gives agents tools", (await bob.patch(`/api/agents/${state.agents.Toolsmith}`, { tools: allTools })).status, 403);
+
+    begin("Agent tools: a run where the agent works in steps");
+    const wf = await workflow("Tools", [
+      { title: "Tool: files", objective: "Write the plan file.", role: "Engineer" },
+      { title: "Tool: web", objective: "Research.", role: "Engineer" },
+      { title: "Tool: command", objective: "Run the check.", role: "Engineer" },
+      { title: "Tool: forbidden", objective: "Try addresses it must not reach.", role: "Engineer" },
+      { title: "Tool: knowledge", objective: "Look up the refund policy.", role: "Engineer" },
+      { title: "Tool: memory", objective: "Keep a note.", role: "Engineer" },
+      { title: "Tool: loop", objective: "Never stops by itself.", role: "Engineer" },
+    ]);
+    const projectId = await project(admin, { title: "Tools project", workflowId: wf, maxParallel: 4 });
+    await mockReset();
+    const run = await runProject(admin, projectId);
+    eq("the run finishes", run.events.at(-1), { type: "done", status: "succeeded", at: run.events.at(-1)?.at });
+    const calls = run.events.filter((e) => e.type === "tool").map((e) => `${e.seq}:${e.call.name}${e.call.isError ? "!" : ""}`);
+    const of = (seq) => calls.filter((c) => c.startsWith(`${seq}:`)).map((c) => c.slice(2));
+
+    const files = taskOf(run.events, 1);
+    eq("files: written, read back, edited, listed, in that order", of(1), ["write_file", "read_file", "edit_file", "list_files", "read_file!"]);
+    eq("  the task counts its steps and its tool calls", [files?.steps, files?.toolCalls], [5, 5]);
+    check("  a path outside the workspace is refused, and the agent is told", /Path contains invalid characters|invalid/.test(files?.artifact ?? ""), files?.artifact);
+    const ws = await admin.get(`/api/projects/${projectId}/workspace`);
+    const wsFiles = ws.data?.files ?? [];
+    check("  the file is in the project's workspace, as edited", wsFiles.some((f) => f.path === "notes/plan.md"), wsFiles.map((f) => f.path));
+    const wsId = ws.data?.workspace?.id ?? ws.data?.id;
+    const planFile = wsFiles.find((f) => f.path === "notes/plan.md");
+    if (wsId && planFile) {
+      const content = await admin.get(`/api/workspaces/${wsId}/files/${planFile.id}`);
+      check("  with the edit applied", (content.data?.file?.content ?? content.data?.content ?? "").includes("Step one is done."), content.data);
+    }
+
+    const web = taskOf(run.events, 2);
+    eq("web: searched, then read the first result", of(2), ["web_search", "fetch_url"]);
+    check("  the page arrives as text, marked as coming from outside", /Content from outside/.test(web?.artifact ?? "") && /Title: The lighthouse keepers/.test(web.artifact) && !/document\.title/.test(web.artifact), web?.artifact);
+    const log = await mockLog();
+    const searchCall = log.find((l) => l.path.startsWith("/search/"));
+    check("  the search went to the configured service", searchCall?.path.includes("q=lighthouse+keepers") && searchCall.path.includes("count=3"), searchCall?.path);
+
+    const command = taskOf(run.events, 3);
+    eq("command: the file is written, the program run in the sandbox", of(3), ["write_file", "run_command", "run_command!"]);
+    const sandboxCalls = log.filter((l) => l.path === "/sandbox/run");
+    eq("  the sandbox got the workspace files and one program", [sandboxCalls.length, sandboxCalls[0]?.body?.command, sandboxCalls[0]?.body?.files?.some((f) => f.path === "check.js"), sandboxCalls[0]?.authorization], [1, "node check.js", true, "Bearer sandbox-mock-token"]);
+    check("  a command line with shell characters never reaches it", /Shell metacharacters/.test(command?.artifact ?? ""), command?.artifact);
+
+    const forbidden = taskOf(run.events, 4);
+    eq("forbidden: both requests are refused", of(4), ["fetch_url!", "http_request!"]);
+    check("  the agent is told why", /private network/.test(forbidden?.artifact ?? ""), forbidden?.artifact);
+    check("  nothing was sent to those addresses", !log.some((l) => l.path.includes("/admin") || l.path.includes("meta-data")), log.map((l) => l.path).filter((p) => /admin|meta/.test(p)));
+
+    const lookup = taskOf(run.events, 5);
+    eq("knowledge: the agent searches the collection it was given", of(5), ["search_knowledge"]);
+    check("  and gets the passage, with where it is from", /\[1\] Refund policy/.test(lookup?.artifact ?? ""), lookup?.artifact);
+
+    eq("memory: a note is kept, then found again", of(6), ["remember", "recall"]);
+    check("  the note comes back", /prefers short sentences/.test(taskOf(run.events, 6)?.artifact ?? ""), taskOf(run.events, 6)?.artifact);
+
+    const loop = taskOf(run.events, 7);
+    eq("loop: the agent is stopped at its step limit", [loop?.status, loop?.steps, loop?.toolCalls], ["succeeded", 8, 7]);
+    check("  after being told that it repeats itself", /three times in a row/.test(loop?.artifact ?? ""), loop?.artifact);
+
+    begin("Agent tools: the record of what an agent did");
+    const detail = await admin.get(`/api/projects/${projectId}`);
+    const taskIds = detail.data?.project?.tasks?.map((t) => t.id) ?? [];
+    eq("the project keeps the counts", detail.data?.project?.tasks?.map((t) => t.toolCalls), [5, 2, 3, 2, 1, 2, 7]);
+    const trace = await admin.get(`/api/projects/${projectId}/tasks/${taskIds[3]}/tool-calls`);
+    eq("each call is recorded with its result", trace.data?.calls?.map((c) => [c.name, c.isError]), [["fetch_url", true], ["http_request", true]]);
+    check("  a credential the agent sent in a header is not kept", trace.data?.calls?.[1]?.arguments?.includes("(not kept)") && !trace.data.calls[1].arguments.includes("secret-token-value"), trace.data?.calls?.[1]?.arguments);
+    eq("  another user cannot read it", (await bob.get(`/api/projects/${projectId}/tasks/${taskIds[3]}/tool-calls`)).status, 403);
+
+    begin("Agent memory: notes stay with the person whose project they are from");
+    const notes = await admin.get(`/api/agents/${state.agents.Toolsmith}/memories`);
+    eq("the note is listed for the agent", notes.data?.memories?.map((m) => [m.content, m.source, m.owner]), [["The client prefers short sentences and no exclamation marks.", "agent", "admin"]]);
+    const plainWf = await workflow("Plain", [{ title: "Write a line", objective: "One line.", role: "Engineer" }]);
+    const mine = await project(admin, { title: "Remembers", workflowId: plainWf });
+    const mineRun = await runProject(admin, mine);
+    check("in a later task of the same person, the agent has its notes", /\[with:notes\]/.test(taskOf(mineRun.events, 1)?.artifact ?? ""), taskOf(mineRun.events, 1)?.artifact);
+    const theirs = await project(bob, { title: "Someone else's", workflowId: plainWf });
+    const theirRun = await runProject(bob, theirs);
+    check("in another person's project, it does not", theirRun.events.at(-1)?.status === "succeeded" && !/notes/.test(taskOf(theirRun.events, 1)?.artifact ?? ""), taskOf(theirRun.events, 1)?.artifact);
+    eq("  and that person sees none of the notes", (await bob.get(`/api/agents/${state.agents.Toolsmith}/memories`)).data?.memories, []);
+    eq("only an administrator adds a note for everyone", (await bob.post(`/api/agents/${state.agents.Toolsmith}/memories`, { content: "x" })).status, 403);
+    const manual = await admin.post(`/api/agents/${state.agents.Toolsmith}/memories`, { content: "Prices are always in rupiah." });
+    eq("an administrator's note applies to everyone", [manual.status, (await bob.get(`/api/agents/${state.agents.Toolsmith}/memories`)).data?.memories?.map((m) => [m.content, m.source, m.owner])], [201, [["Prices are always in rupiah.", "manual", null]]]);
+    const theirSecond = await runProject(bob, theirs);
+    check("  the other person's next task gets it", /\[with:notes\]/.test(taskOf(theirSecond.events, 1)?.artifact ?? ""), taskOf(theirSecond.events, 1)?.artifact);
+    const noteId = notes.data?.memories?.[0]?.id;
+    eq("a user cannot delete someone else's note", (await bob.del(`/api/agents/${state.agents.Toolsmith}/memories/${noteId}`)).status, 404);
+    eq("its owner can", (await admin.del(`/api/agents/${state.agents.Toolsmith}/memories/${noteId}`)).status, 200);
+
+    begin("Agent tools: a model that does not take tools");
+    await agent("Fallback", "Fallbacker", { primaryModelRowId: state.models["chat-notools"], tools: ["list_files", "write_file"] });
+    const fbWf = await workflow("No tools", [{ title: "Tool: files", objective: "Would use tools.", role: "Fallbacker" }]);
+    const fb = await project(admin, { title: "No tools", workflowId: fbWf, managerModelRowId: ids.models.chat });
+    const fbRun = await runProject(admin, fb);
+    const fbTask = taskOf(fbRun.events, 1);
+    check("the task is done without tools instead of failing", fbTask?.status === "succeeded" && /OUTPUT of "Tool: files"/.test(fbTask.artifact ?? "") && !fbTask.toolCalls, [fbTask?.status, fbTask?.artifact]);
+    check("  and the run says so while it happens", fbRun.events.some((e) => e.type === "progress" && /did not accept tools/.test(e.message)), fbRun.events.filter((e) => e.type === "progress"));
+  }
+
+  // ─── Runs in the background ────────────────────────────────────────────────
+
+  async function runs() {
+    begin("Runs: they go on without the page that started them");
+    await agent("Scribe", "Scribe");
+    await agent("Clipper", "Clipper");
+    const wf = await workflow("Detach", [
+      { title: "Script", objective: "Write.", role: "Scribe" },
+      { title: "Clip", objective: "A clip.", role: "Clipper", kind: "video", media: { durationSeconds: 4 }, dependsOn: [1] },
+      { title: "Wrap", objective: "Wrap up.", role: "Scribe", dependsOn: [1] },
+    ]);
+    const projectId = await project(admin, { title: "Detach", workflowId: wf, videoModelRowId: ids.models.vid_openai, memory: true });
+    made.runProject = projectId;
+
+    // Start, read the first event, and hang up.
+    const hangUp = new AbortController();
+    const first = await admin.raw(`/api/projects/${projectId}/run`, { method: "POST", signal: hangUp.signal });
+    await first.body.getReader().read();
+    hangUp.abort();
+    eq("the run starts", first.status, 200);
+    const second = await admin.post(`/api/projects/${projectId}/run`);
+    eq("a second start while it runs is refused", [second.status, second.code], [409, "run_active"]);
+    await sleep(1500);
+    const midway = await admin.get(`/api/projects/${projectId}`);
+    check("with nobody connected, it keeps running", ["queued", "planning", "running"].includes(midway.data?.project?.status), midway.data?.project?.status);
+    const follow = await sse(admin, `/api/projects/${projectId}/events`);
+    eq("a page that connects later gets the state so far, then the rest", [follow.events.at(-1), finished(follow.events).filter((e) => e.status === "succeeded").map((e) => e.seq).sort()], [{ type: "done", status: "succeeded" }, [1, 2, 3]]);
+    check("  the plan comes with the tasks' ids", follow.events.find((e) => e.type === "plan")?.tasks?.every((t) => typeof t.id === "string"), follow.events.find((e) => e.type === "plan"));
+    const idle = await sse(admin, `/api/projects/${projectId}/events`);
+    check("when nothing runs, the stream is the result and ends at once", idle.events.at(-1)?.type === "done" && idle.events.some((e) => e.type === "final"), idle.events.map((e) => e.type));
+    eq("another user cannot follow it", (await bob.raw(`/api/projects/${projectId}/events`)).status, 403);
+
+    begin("Runs: an instruction for one run, and memory of earlier runs");
+    const again = await runProject(admin, projectId, { input: "Second time." });
+    const script = taskOf(again.events, 1);
+    check("the second run is told what the first delivered, and gets its instruction", /\[with:earlier-runs,run-input\]/.test(script?.artifact ?? ""), script?.artifact);
+    const history = await admin.get(`/api/projects/${projectId}/runs`);
+    eq("both runs are in the history, newest first", history.data?.runs?.map((r) => [r.status, r.trigger, r.input, r.hasDeliverable]), [["succeeded", "manual", "Second time.", true], ["succeeded", "manual", null, true]]);
+    const one = await admin.get(`/api/projects/${projectId}/runs/${history.data?.runs?.[1]?.id}`);
+    check("an earlier run keeps what it delivered", /FINAL DELIVERABLE/.test(one.data?.run?.deliverable ?? ""), one.data?.run);
+    eq("another user cannot read the history", (await bob.get(`/api/projects/${projectId}/runs`)).status, 403);
+    eq("an instruction over the limit is refused", (await admin.post(`/api/projects/${projectId}/run`, { input: "x".repeat(4001) })).status, 400);
+    const off = await admin.patch(`/api/projects/${projectId}`, { memory: false });
+    eq("the memory can be switched off", off.data?.project?.memory, false);
+    const forgetful = await runProject(admin, projectId);
+    check("  then a run is not told about earlier ones", /OUTPUT of "Script" \[deps:none\]$/.test(taskOf(forgetful.events, 1)?.artifact ?? ""), taskOf(forgetful.events, 1)?.artifact);
+    await admin.patch(`/api/projects/${projectId}`, { memory: true });
+
+    begin("Runs: videos finish without a page asking");
+    await mockReset();
+    const video = await admin.post("/api/media/videos", { modelRowId: ids.models.vid_openai, prompt: "nobody is watching", durationSeconds: 4 });
+    const done = await until(async () => (await admin.get(`/api/media/${video.data?.asset?.id}`)).data?.asset, (a) => a?.status !== "pending", { tries: 45, gapMs: 1000 });
+    eq("the background worker asks the provider and stores the file", [done?.status, done?.sizeBytes], ["ready", 300000]);
+    const bell = await admin.get("/api/notifications");
+    check("  and its owner is told", bell.data?.notifications?.some((n) => n.title === "Your video is ready" && n.link === "/dashboard/studio"), bell.data?.notifications?.map((n) => n.title));
+
+    begin("Runs: stopping one");
+    const slowWf = await workflow("Never ends", [{ title: "Clip", objective: "A clip.", role: "Clipper", kind: "video" }]);
+    const slow = await project(admin, { title: "Cancel me", workflowId: slowWf, videoModelRowId: ids.models["vid-slow"] });
+    const cut = new AbortController();
+    const started = await admin.raw(`/api/projects/${slow}/run`, { method: "POST", signal: cut.signal });
+    await started.body.getReader().read();
+    cut.abort();
+    await until(async () => (await admin.get(`/api/projects/${slow}`)).data?.project, (p) => p?.tasks?.[0]?.status === "running", { tries: 20, gapMs: 500 });
+    const cancel = await admin.post(`/api/projects/${slow}/cancel`);
+    eq("the stop is accepted", [cancel.status, cancel.data?.running], [200, true]);
+    const stopped = await until(async () => (await admin.get(`/api/projects/${slow}`)).data?.project, (p) => p?.status === "cancelled", { tries: 30, gapMs: 500 });
+    check("the run ends as cancelled, and its video task says why", stopped?.status === "cancelled" && /Cancelled while the video/.test(stopped.tasks?.[0]?.error ?? ""), [stopped?.status, stopped?.tasks?.[0]?.error]);
+    eq("stopping when nothing runs does nothing", (await admin.post(`/api/projects/${slow}/cancel`)).data?.running, false);
+    const pendingVideo = (await admin.get(`/api/media?projectId=${slow}`)).data?.assets?.[0];
+    if (pendingVideo) await admin.del(`/api/media/${pendingVideo.id}`);
+
+    begin("Schedules");
+    const tooOften = await admin.post(`/api/projects/${projectId}/schedules`, { cron: "* * * * *", timezone: "Asia/Jakarta" });
+    check("more often than every 5 minutes is refused", tooOften.status === 400 && /at most every 5 minutes/.test(tooOften.error ?? ""), tooOften.error);
+    const badZone = await admin.post(`/api/projects/${projectId}/schedules`, { cron: "0 8 * * 1-5", timezone: "Mars/Olympus" });
+    check("an unknown time zone is refused", badZone.status === 400 && /not a time zone/.test(badZone.error ?? ""), badZone.error);
+    eq("an expression that is not cron is refused", (await admin.post(`/api/projects/${projectId}/schedules`, { cron: "every morning", timezone: "UTC" })).status, 400);
+    eq("a day that never comes is refused", (await admin.post(`/api/projects/${projectId}/schedules`, { cron: "0 8 31 2 *", timezone: "UTC" })).status, 400);
+    const created = await admin.post(`/api/projects/${projectId}/schedules`, { cron: "0  8 * * 1-5", timezone: "Asia/Jakarta", input: "Scheduled." });
+    const s = created.data?.schedule;
+    eq("a schedule is created and described in words", [created.status, s?.cron, s?.description, s?.timezone, s?.enabled], [201, "0 8 * * 1-5", "Every weekday at 08:00", "Asia/Jakarta", true]);
+    // 08:00 in Jakarta is 01:00 UTC.
+    eq("its next time is counted in its time zone", new Date(s?.nextRunAt ?? 0).toISOString().slice(11, 16), "01:00");
+    eq("another user cannot add one", (await bob.post(`/api/projects/${projectId}/schedules`, { cron: "0 8 * * *", timezone: "UTC" })).status, 403);
+
+    const db = database();
+    db.prepare("UPDATE schedules SET next_run_at = ? WHERE id = ?").run(Date.now() - 1000, s.id);
+    const fired = await until(async () => (await admin.get(`/api/projects/${projectId}/schedules`)).data?.schedules?.[0], (x) => Boolean(x?.lastStatus), { tries: 20, gapMs: 1000 });
+    eq("when its time comes, the worker starts the run", [fired?.lastStatus, fired?.lastError], ["started", null]);
+    check("  and sets the next time", fired?.nextRunAt > Date.now(), fired?.nextRunAt);
+    await sse(admin, `/api/projects/${projectId}/events`);
+    const afterSchedule = await admin.get(`/api/projects/${projectId}/runs`);
+    eq("  the run is in the history as started by the schedule, with its instruction", [afterSchedule.data?.runs?.[0]?.trigger, afterSchedule.data?.runs?.[0]?.input, afterSchedule.data?.runs?.[0]?.status], ["schedule", "Scheduled.", "succeeded"]);
+    const told = await admin.get("/api/notifications");
+    check("  its owner is told how it went", told.data?.notifications?.some((n) => n.title === "Run finished: Detach"), told.data?.notifications?.map((n) => n.title));
+
+    db.prepare("UPDATE schedules SET next_run_at = ? WHERE id = ?").run(Date.now() - 20 * 60_000, s.id);
+    const late = await until(async () => (await admin.get(`/api/projects/${projectId}/schedules`)).data?.schedules?.[0], (x) => x?.lastStatus === "skipped", { tries: 20, gapMs: 1000 });
+    check("a time that passed long ago (the server was down) is skipped, not run late", late?.lastStatus === "skipped" && /not running at the scheduled time/.test(late.lastError ?? ""), [late?.lastStatus, late?.lastError]);
+    const offNow = await admin.patch(`/api/projects/${projectId}/schedules/${s.id}`, { enabled: false });
+    eq("a schedule can be switched off", [offNow.data?.schedule?.enabled, offNow.data?.schedule?.nextRunAt], [false, null]);
+    db.prepare("UPDATE schedules SET next_run_at = ? WHERE id = ?").run(Date.now() - 1000, s.id);
+    await sleep(7000);
+    eq("  then it starts nothing", (await admin.get(`/api/projects/${projectId}/runs`)).data?.runs?.length, afterSchedule.data?.runs?.length);
+    eq("another user cannot change it", (await bob.patch(`/api/projects/${projectId}/schedules/${s.id}`, { enabled: true })).status, 403);
+    eq("it can be deleted", [(await admin.del(`/api/projects/${projectId}/schedules/${s.id}`)).status, (await admin.get(`/api/projects/${projectId}/schedules`)).data?.schedules?.length], [200, 0]);
+
+    begin("Schedules: a project that asks for approval");
+    const gated = await project(admin, { title: "Needs a yes", workflowId: await workflow("One step", [{ title: "Only", objective: "One.", role: "Scribe" }]), requiresApproval: true });
+    const gs = await admin.post(`/api/projects/${gated}/schedules`, { cron: "0 9 * * *", timezone: "UTC" });
+    db.prepare("UPDATE schedules SET next_run_at = ? WHERE id = ?").run(Date.now() - 1000, gs.data?.schedule?.id);
+    const waiting = await until(async () => (await admin.get(`/api/projects/${gated}/schedules`)).data?.schedules?.[0], (x) => Boolean(x?.lastStatus), { tries: 20, gapMs: 1000 });
+    check("the run does not start; the schedule says what it waits for", waiting?.lastStatus === "skipped" && /approval/.test(waiting.lastError ?? ""), [waiting?.lastStatus, waiting?.lastError]);
+    eq("  the project waits for the approval", (await admin.get(`/api/projects/${gated}`)).data?.project?.status, "needs_approval");
+    check("  and its owner is told", (await admin.get("/api/notifications")).data?.notifications?.some((n) => n.title === "Run is waiting for approval: Needs a yes"), null);
+    await admin.del(`/api/projects/${gated}/schedules/${gs.data?.schedule?.id}`);
+
+    begin("Runs: picked up again after the server stopped");
+    // Leave the last run the way a server that was killed would: marked as
+    // running by a process that is gone, with its last task unfinished.
+    const lastRun = db.prepare("SELECT id FROM project_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1").get(projectId);
+    await mockReset();
+    db.transaction(() => {
+      db.prepare("UPDATE project_runs SET status = 'running', worker_id = 'a-process-that-is-gone', heartbeat_at = ?, finished_at = NULL WHERE id = ?").run(Date.now() - 5 * 60_000, lastRun.id);
+      db.prepare("UPDATE projects SET status = 'running', final_deliverable = NULL WHERE id = ?").run(projectId);
+      db.prepare("UPDATE project_tasks SET status = 'running', artifact = NULL WHERE project_id = ? AND seq = 3").run(projectId);
+    })();
+    const resumed = await until(async () => (await admin.get(`/api/projects/${projectId}`)).data?.project, (p) => p?.status !== "running", { tries: 40, gapMs: 1000 });
+    eq("the worker takes the run over and finishes it", [resumed?.status, resumed?.tasks?.map((t) => t.status)], ["succeeded", ["succeeded", "succeeded", "succeeded"]]);
+    const log = await mockLog();
+    const asked = log.filter((l) => l.path.endsWith("/chat/completions")).map((l) => (String(l.body?.messages?.at(-1)?.content ?? "").match(/^Task: (.*)$/m) ?? [])[1] ?? "manager");
+    eq("only the unfinished task is done again, then the summary and the review", asked, ["Wrap", "manager", "manager"]);
+    eq("no video is generated a second time", log.filter((l) => l.method === "POST" && /\/videos$/.test(l.path)).length, 0);
+    eq("the run records that it was picked up", db.prepare("SELECT resumes FROM project_runs WHERE id = ?").get(lastRun.id)?.resumes, 1);
+
+    begin("Runs: a project that an older version left running");
+    // Before 1.5 a project ran inside the request that started it. A server
+    // that stopped meanwhile left it "running", with no run to pick up.
+    const legacy = await project(admin, { title: "Left running", workflowId: wf, videoModelRowId: ids.models.vid_openai });
+    const outcome = (run) => run.events.find((e) => e.type === "done")?.status;
+    eq("it runs once", outcome(await runProject(admin, legacy)), "succeeded");
+    db.transaction(() => {
+      db.prepare("DELETE FROM project_runs WHERE project_id = ?").run(legacy);
+      db.prepare("UPDATE projects SET status = 'running', final_deliverable = NULL, updated_at = ? WHERE id = ?").run(Date.now() - 10 * 60_000, legacy);
+      db.prepare("UPDATE project_tasks SET status = 'running', artifact = NULL WHERE project_id = ? AND seq = 3").run(legacy);
+    })();
+    const released = await until(async () => (await admin.get(`/api/projects/${legacy}`)).data?.project, (p) => p?.status !== "running", { tries: 50, gapMs: 1000 });
+    eq("it is ended instead of looking busy for ever", [released?.status, released?.tasks?.map((t) => t.status)], ["failed", ["succeeded", "succeeded", "failed"]]);
+    check("  and says why", /server stopped/.test(released?.error ?? "") && /server stopped/.test(released?.tasks?.[2]?.error ?? ""), [released?.error, released?.tasks?.[2]?.error]);
+    eq("  it can be run again", outcome(await runProject(admin, legacy)), "succeeded");
+    db.close();
+  }
+
+  // ─── Notifications and the webhook ─────────────────────────────────────────
+
+  async function notificationChecks() {
+    begin("Notifications");
+    // Something to be told about, if the other parts did not run.
+    const wf = await workflow("Bell", [{ title: "Ring", objective: "Ring.", role: "Ringer" }]);
+    await agent("Ringer", "Ringer");
+    const projectId = await project(carol, { title: "Carol's bell", workflowId: wf });
+    await fetch(`${MOCK}/hook/reset`);
+
+    const saved = await carol.raw("/api/account/webhook", { method: "PUT", body: JSON.stringify({ url: `${MOCK}/hook/ok` }) });
+    const savedBody = await saved.json();
+    const secret = savedBody.secret;
+    check("a webhook is saved; its signing secret is shown once", saved.status === 200 && /^whsec_/.test(secret ?? "") && savedBody.webhook?.url === `${MOCK}/hook/ok`, savedBody);
+    const again = await (await carol.raw("/api/account/webhook", { method: "PUT", body: JSON.stringify({ url: `${MOCK}/hook/ok` }) })).json();
+    eq("  saving again does not show it", again.secret, null);
+    const shown = await carol.get("/api/account/webhook");
+    check("  and it is never in what the server answers later", !JSON.stringify(shown.data).includes(secret), shown.data);
+    const priv = await carol.raw("/api/account/webhook", { method: "PUT", body: JSON.stringify({ url: "http://10.0.0.5/hook" }) });
+    check("an address on a private network is refused", priv.status === 400 && /private network/.test((await priv.json()).error?.message ?? ""), priv.status);
+
+    const test = await carol.post("/api/account/webhook/test");
+    eq("a test message can be sent", test.status, 200);
+    let deliveries = await (await fetch(`${MOCK}/hook/log`)).json();
+    const d = deliveries.at(-1);
+    const [t, v1sig] = String(d?.signature ?? "").split(",");
+    const expected = createHmac("sha256", secret).update(`${t?.slice(2)}.${d?.raw}`).digest("hex");
+    eq("it arrives signed with the secret", [d?.event, v1sig?.slice(3)], ["system.info", expected]);
+    check("  with the message as text too, for chat tools", d?.body?.text?.includes("Test notification") && d.body.content === d.body.text, d?.body);
+
+    const run = await runProject(carol, projectId);
+    eq("a run finishes", run.events.at(-1)?.status, "succeeded");
+    const list = await carol.get("/api/notifications");
+    const note = list.data?.notifications?.find((n) => n.title === "Run finished: Carol's bell");
+    eq("the bell has it, unread, with a link to the project", [note?.level, note?.read, note?.link, list.data?.unread >= 1], ["success", false, `/dashboard/projects/${projectId}`, true]);
+    deliveries = await until(async () => (await fetch(`${MOCK}/hook/log`)).json(), (l) => l.some((x) => x.body?.title === "Run finished: Carol's bell"), { tries: 20, gapMs: 1000 });
+    const delivered = deliveries.find((x) => x.body?.title === "Run finished: Carol's bell");
+    check("the worker delivers it to the webhook, with a full link", delivered?.event === "run.success" && delivered.body.url === `${APP}/dashboard/projects/${projectId}`, delivered?.body);
+    check("  one user's notifications are not another's", !(await bob.get("/api/notifications")).data?.notifications?.some((n) => n.title.includes("Carol")), null);
+
+    const read = await carol.post("/api/notifications/read", { id: note?.id });
+    eq("one can be marked as read", [read.status, (await carol.get("/api/notifications")).data?.notifications?.find((n) => n.id === note?.id)?.read], [200, true]);
+    eq("all can be marked as read", (await carol.post("/api/notifications/read", {})).data?.unread, 0);
+    eq("the list can be cleared", [(await carol.del("/api/notifications")).status, (await carol.get("/api/notifications")).data?.notifications?.length], [200, 0]);
+
+    const rotated = await (await carol.raw("/api/account/webhook?rotate=1", { method: "PUT", body: JSON.stringify({ url: `${MOCK}/hook/fail` }) })).json();
+    check("a new secret can be made", /^whsec_/.test(rotated.secret ?? "") && rotated.secret !== secret, rotated.secret);
+    const failing = await carol.post("/api/account/webhook/test");
+    check("a receiver that fails: the test says so", failing.status === 502 && /answered 500/.test(failing.error ?? ""), `${failing.status} ${failing.error}`);
+    eq("  and the webhook remembers it", (await carol.get("/api/account/webhook")).data?.webhook?.lastStatus, "error");
+    eq("it can be removed", [(await carol.del("/api/account/webhook")).status, (await carol.get("/api/account/webhook")).data?.webhook], [200, null]);
+    eq("signed out: refused", (await ctx.anon.get("/api/notifications")).status, 401);
+  }
+
+  // ─── The public API ────────────────────────────────────────────────────────
+
+  async function publicApi() {
+    begin("API keys");
+    const created = await admin.post("/api/account/api-keys", { name: "CI", scopes: ["chat", "embeddings", "media", "projects"], rateLimitPerMinute: 600 });
+    const key = created.data?.secret;
+    check("a key is created and shown once", created.status === 201 && /^xn_[A-Za-z0-9_-]{40,}$/.test(key ?? "") && created.data.key.prefix === key.slice(0, 10), created.data?.key);
+    const listed = await admin.get("/api/account/api-keys");
+    check("  later only its first characters are shown", listed.data?.keys?.[0]?.prefix === key.slice(0, 10) && !JSON.stringify(listed.data).includes(key), listed.data?.keys?.[0]);
+    eq("a key without a scope is refused", (await admin.post("/api/account/api-keys", { name: "Nothing", scopes: [] })).status, 400);
+
+    eq("no key: 401, in the shape API clients read", [(await v1json("/models")).status, (await v1json("/models")).error?.type], [401, "authentication_error"]);
+    eq("a wrong key: 401", (await v1json("/models", { key: "xn_wrongwrongwrongwrongwrongwrongwrongwrongwr" })).error?.code, "invalid_api_key");
+    const cookieOnly = await admin.raw("/api/v1/models");
+    eq("a signed-in browser session is not a key", cookieOnly.status, 401);
+
+    begin("Public API: chat, in the OpenAI format");
+    const models = await v1json("/models", { key });
+    const names = models.data?.data?.map((m) => m.id) ?? [];
+    check("the models are listed under the names the API takes", names.includes("chat-mini") && names.includes("tts-1") && models.data.object === "list", names);
+    check("  a name that two providers have is listed with its provider", names.includes("Mock OpenAI-style/img-ok") && !names.includes("img-ok"), names.filter((n) => n.includes("img-ok")));
+    const chat = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "system", content: "Be brief." }, { role: "user", content: [{ type: "text", text: "Reply with the single word: ok" }] }] } });
+    eq("a completion", [chat.status, chat.data?.object, chat.data?.choices?.[0]?.message, chat.data?.choices?.[0]?.finish_reason, chat.data?.usage], [200, "chat.completion", { role: "assistant", content: "ok" }, "stop", { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 }]);
+    const streamed = await v1("/chat/completions", { key, method: "POST", body: { model: "chat-mini", stream: true, stream_options: { include_usage: true }, messages: [{ role: "user", content: "Reply with the single word: ok" }] } });
+    const streamText = await streamed.text();
+    const chunks = streamText.split("\n\n").filter(Boolean).map((b) => b.replace(/^data: /, ""));
+    const parsed = chunks.filter((c) => c !== "[DONE]").map((c) => JSON.parse(c));
+    eq("a streamed completion: pieces, the reason it stopped, the usage, then [DONE]", [streamed.headers.get("content-type")?.split(";")[0], parsed.map((c) => c.choices[0]?.delta?.content ?? "").join(""), parsed.find((c) => c.choices[0]?.finish_reason)?.choices[0].finish_reason, parsed.at(-1)?.usage?.total_tokens, chunks.at(-1)], ["text/event-stream", "ok", "stop", 30, "[DONE]"]);
+    const tool = { type: "function", function: { name: "write_file", description: "Write a file", parameters: { type: "object", properties: { path: { type: "string" } } } } };
+    const called = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "Task: Tool: files\n\ngo" }], tools: [tool] } });
+    const call = called.data?.choices?.[0]?.message?.tool_calls?.[0];
+    eq("the model's tool calls are passed on", [called.data?.choices?.[0]?.finish_reason, call?.type, call?.function?.name, JSON.parse(call?.function?.arguments ?? "{}").path], ["tool_calls", "function", "write_file", "notes/plan.md"]);
+    const answered = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", tools: [tool], messages: [{ role: "user", content: "Task: Tool: files\n\ngo" }, { role: "assistant", content: null, tool_calls: [call] }, { role: "tool", tool_call_id: call?.id, content: "Saved." }] } });
+    eq("  and the client's tool results go back to the model", [answered.status, answered.data?.choices?.[0]?.message?.content], [200, "DONE after 1 tool results. LAST: Saved."]);
+    const streamedCall = await v1("/chat/completions", { key, method: "POST", body: { model: "chat-mini", stream: true, messages: [{ role: "user", content: "Task: Tool: files\n\ngo" }], tools: [tool] } });
+    const callChunks = (await streamedCall.text()).split("\n\n").filter((b) => b && !b.includes("[DONE]")).map((b) => JSON.parse(b.replace(/^data: /, "")));
+    eq("  streamed, a tool call arrives whole", callChunks.find((c) => c.choices[0]?.delta?.tool_calls)?.choices[0].delta.tool_calls[0].function.name, "write_file");
+
+    const wrongKind = await v1json("/chat/completions", { key, method: "POST", body: { model: "tts-1", messages: [{ role: "user", content: "hi" }] } });
+    check("a speech model cannot chat", wrongKind.status === 400 && /not a chat model/.test(wrongKind.error?.message ?? ""), wrongKind.error);
+    eq("an unknown model: 404", [(await v1json("/chat/completions", { key, method: "POST", body: { model: "nope", messages: [{ role: "user", content: "hi" }] } })).error?.code], ["model_not_found"]);
+    const ambiguous = await v1json("/images/generations", { key, method: "POST", body: { model: "img-ok", prompt: "x" } });
+    check("a name that several providers have has to be said with its provider", ambiguous.status === 400 && ambiguous.error?.code === "model_ambiguous", ambiguous.error);
+    const bad = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [] } });
+    eq("a bad request names the field", [bad.status, bad.error?.type, bad.error?.param], [400, "invalid_request_error", "messages"]);
+    eq("a body that is not JSON", (await v1json("/chat/completions", { key, method: "POST", body: "{not json" })).status, 400);
+    eq("an image in a message is refused for now, clearly", (await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }] }] } })).status, 400);
+
+    begin("Public API: embeddings, images, speech, videos");
+    const emb = await v1json("/embeddings", { key, method: "POST", body: { model: "text-embedding-3-small", input: ["refund policy", "lighthouse"] } });
+    eq("embeddings", [emb.status, emb.data?.data?.length, emb.data?.data?.[1]?.index, emb.data?.data?.[0]?.embedding?.length, emb.data?.usage], [200, 2, 1, 24, { prompt_tokens: 14, total_tokens: 14 }]);
+    const b64 = await v1json("/embeddings", { key, method: "POST", body: { model: "text-embedding-3-small", input: "x", encoding_format: "base64" } });
+    eq("  as base64 of 32-bit floats when asked", Buffer.from(b64.data?.data?.[0]?.embedding ?? "", "base64").length, 24 * 4);
+    const img = await v1json("/images/generations", { key, method: "POST", body: { model: "Mock OpenAI-style/img-ok", prompt: "a lighthouse", n: 2 } });
+    check("images: the answer links the files", img.status === 200 && img.data?.data?.length === 2 && img.data.data.every((x) => x.url?.startsWith(`${APP}/api/v1/media/`)), img.data);
+    const content = await v1(img.data.data[0].url.replace(`${APP}/api/v1`, ""), { key });
+    eq("  which the key can fetch", [content.status, content.headers.get("content-type")], [200, "image/png"]);
+    await content.arrayBuffer();
+    eq("  and nobody without it", (await fetch(img.data.data[0].url)).status, 401);
+    const inline = await v1json("/images/generations", { key, method: "POST", body: { model: "Mock OpenAI-style/img-ok", prompt: "a lamp", response_format: "b64_json" } });
+    check("  or carries them, when asked", Buffer.from(inline.data?.data?.[0]?.b64_json ?? "", "base64").subarray(1, 4).toString() === "PNG", inline.status);
+    const spoken = await v1("/audio/speech", { key, method: "POST", body: { model: "tts-1", input: "Hello there, this is the API speaking.", voice: "alloy" } });
+    const spokenBytes = Buffer.from(await spoken.arrayBuffer());
+    eq("speech: the answer is the audio itself", [spoken.status, spoken.headers.get("content-type"), spokenBytes.subarray(0, 4).toString(), Boolean(spoken.headers.get("x-nexus-asset-id"))], [200, "audio/wav", "RIFF", true]);
+
+    const video = await v1json("/videos", { key, method: "POST", body: { model: "Mock OpenAI-style/vid-ok", prompt: "waves", seconds: "4" } });
+    eq("videos: started, in progress", [video.status, video.data?.object, video.data?.status, video.data?.content_url], [201, "video", "in_progress", null]);
+    // Asked every second, as a client would. Each request has to reach the
+    // provider anew: an answer kept from the first one would never change.
+    const finishedVideo = await until(async () => (await v1json(`/videos/${video.data?.id}`, { key })).data, (v) => v?.status !== "in_progress", { tries: 25, gapMs: 1000 });
+    eq("  asking again and again sees it finish", [finishedVideo?.status, finishedVideo?.content_url, finishedVideo?.seconds], ["completed", `${APP}/api/v1/videos/${video.data?.id}/content`, 4]);
+    const range = await v1(`/videos/${video.data?.id}/content`, { key, headers: { range: "bytes=0-99" } });
+    eq("  the file, with byte ranges", [range.status, range.headers.get("content-range"), (await range.arrayBuffer()).byteLength], [206, "bytes 0-99/300000", 100]);
+
+    begin("Public API: projects and runs");
+    await agent("Apiworker", "Apiworker");
+    const wf = await workflow("API", [{ title: "Only", objective: "One step.", role: "Apiworker" }]);
+    const projectId = await project(admin, { title: "From the API", workflowId: wf });
+    const projects = await v1json("/projects", { key });
+    check("the projects are listed", projects.data?.data?.some((p) => p.id === projectId && p.title === "From the API"), projects.data?.data?.map((p) => p.title));
+    const started = await v1json(`/projects/${projectId}/runs`, { key, method: "POST", body: { input: "From a program." } });
+    eq("a run is started: accepted, queued", [started.status, started.data?.object, started.data?.status, started.data?.trigger, started.data?.input], [202, "run", "queued", "api", "From a program."]);
+    eq("  a second start while it runs: 409", (await v1json(`/projects/${projectId}/runs`, { key, method: "POST" })).status, 409);
+    const finishedRun = await until(async () => (await v1json(`/runs/${started.data?.id}`, { key })).data, (r) => !["queued", "running"].includes(r?.status), { tries: 40, gapMs: 1000 });
+    eq("  it can be watched to its end", [finishedRun?.status, finishedRun?.tasks?.map((t) => [t.seq, t.status]), /FINAL DELIVERABLE/.test(finishedRun?.deliverable ?? "")], ["succeeded", [[1, "succeeded"]], true]);
+    check("  the task got the run's instruction", /\[with:run-input\]/.test(finishedRun?.tasks?.[0]?.output ?? ""), finishedRun?.tasks?.[0]?.output);
+    eq("  without a body, a run starts too", (await v1json(`/projects/${projectId}/runs`, { key, method: "POST" })).status, 202);
+    await until(async () => (await v1json(`/projects/${projectId}/runs`, { key })).data?.data?.[0], (r) => !["queued", "running"].includes(r?.status), { tries: 40 });
+    eq("  the runs are listed, newest first", (await v1json(`/projects/${projectId}/runs`, { key })).data?.data?.map((r) => r.trigger), ["api", "api"]);
+
+    begin("Public API: what a key is allowed");
+    const bobKey = (await bob.post("/api/account/api-keys", { name: "Bob", scopes: ["chat", "media", "projects"] })).data?.secret;
+    eq("another user's key cannot read this user's media", (await v1(img.data.data[0].url.replace(`${APP}/api/v1`, ""), { key: bobKey })).status, 403);
+    eq("  nor their runs: as if they did not exist", (await v1json(`/runs/${started.data?.id}`, { key: bobKey })).status, 404);
+    eq("  nor start their projects", (await v1json(`/projects/${projectId}/runs`, { key: bobKey, method: "POST" })).status, 403);
+    eq("  nor use a scope it was not given", [(await v1json("/embeddings", { key: bobKey, method: "POST", body: { model: "text-embedding-3-small", input: "x" } })).error?.code], ["insufficient_scope"]);
+
+    const narrow = await admin.post("/api/account/api-keys", { name: "Narrow", scopes: ["chat"], monthlyTokenLimit: 40, modelRowIds: [ids.models.chat] });
+    const narrowKey = narrow.data?.secret;
+    eq("a key for some models lists only those", (await v1json("/models", { key: narrowKey })).data?.data?.map((m) => m.id), ["chat-mini"]);
+    const ask = () => v1json("/chat/completions", { key: narrowKey, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "hi" }] } });
+    const spent = [(await ask()).status, (await ask()).status];
+    const over = await ask();
+    eq("a monthly token limit stops the key when it is used up", [spent, over.status, over.error?.code], [[200, 200], 429, "quota_exceeded"]);
+    const usage = (await admin.get("/api/account/api-keys")).data?.keys?.find((k) => k.id === narrow.data?.key?.id);
+    eq("  what it used is counted under the key", [usage?.monthTokens, Boolean(usage?.lastUsedAt)], [60, true]);
+    const ciUsage = (await admin.get("/api/account/api-keys")).data?.keys?.find((k) => k.id === created.data?.key?.id);
+    check("  a finished video's cost is counted under the key that started it", ciUsage?.monthCost >= 0.4, ciUsage?.monthCost);
+
+    const fast = (await admin.post("/api/account/api-keys", { name: "Slow lane", scopes: ["chat"], rateLimitPerMinute: 2 })).data?.secret;
+    const hits = [(await v1json("/models", { key: fast })).status, (await v1json("/models", { key: fast })).status, (await v1json("/models", { key: fast })).status];
+    eq("a requests-per-minute limit", hits, [200, 200, 429]);
+
+    const expiring = await admin.post("/api/account/api-keys", { name: "Short", scopes: ["chat"], expiresInDays: 1 });
+    const db = database();
+    db.prepare("UPDATE api_keys SET expires_at = ? WHERE id = ?").run(Date.now() - 1000, expiring.data?.key?.id);
+    db.close();
+    eq("an expired key stops working", (await v1json("/models", { key: expiring.data?.secret })).status, 401);
+    eq("another user cannot revoke a key", (await bob.del(`/api/account/api-keys/${narrow.data?.key?.id}`)).status, 404);
+    eq("its owner can; it stops working at once", [(await admin.del(`/api/account/api-keys/${narrow.data?.key?.id}`)).status, (await v1json("/models", { key: narrowKey })).status], [200, 401]);
+  }
+
+  // ─── Other adapters ────────────────────────────────────────────────────────
+
+  async function anthropicAdapter() {
+    begin("Anthropic adapter");
+    await mockReset();
+    const base = `${MOCK}/anthropic/v1`;
+    const created = await admin.post("/api/providers", { name: "Mock Anthropic", adapter: "anthropic", baseUrl: base, apiKey: ANTHROPIC_KEY });
+    check("an Anthropic provider is created", created.status === 201, created.error);
+    const ap = created.data?.provider?.id;
+    const test = await admin.post(`/api/providers/${ap}/test`);
+    check("the connection test works", test.status === 200 && test.data?.ok === true, test.data);
+    const all = ["claude-mock-opus", "claude-mock-haiku", "claude-mock-refuse", "claude-mock-overloaded"];
+    const discovered = await admin.post(`/api/providers/${ap}/models/discover`);
+    eq("its models are listed, across pages", discovered.data?.models, all);
+    const imported = await admin.post(`/api/providers/${ap}/models/discover`, { import: all });
+    const byId = new Map(((await admin.get(`/api/models?providerId=${ap}`)).data?.models ?? []).map((m) => [m.modelId, m]));
+    check("imported, they are chat models", imported.status === 200 && all.every((id) => byId.get(id)?.capabilities?.some((c) => c.capability === "text")), [...byId.values()].map((m) => [m.modelId, m.capabilities.map((c) => c.capability)]));
+    const achat = byId.get("claude-mock-opus")?.id;
+
+    const whole = await admin.post(`/api/models/${achat}/test`);
+    check("a reply taken whole (Test Model)", whole.status === 200 && whole.data?.ok === true, whole.data);
+    const chat = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: achat, systemPrompt: "Be brief.", messages: [{ role: "user", content: "Reply with the single word: ok" }] } });
+    eq("chat, streamed; input read from the cache counts as input", [chat.events.filter((e) => e.delta).map((e) => e.delta).join(""), chat.events.find((e) => e.done)?.usage], ["ok", { promptTokens: 25, completionTokens: 9 }]);
+
+    await agent("Claude", "Claudeworker", { primaryModelRowId: achat, tools: ["list_files", "read_file", "write_file", "edit_file"] });
+    const wf = await workflow("Anthropic tools", [{ title: "Tool: files", objective: "Write the plan file.", role: "Claudeworker" }]);
+    const projectId = await project(admin, { title: "Anthropic tools", workflowId: wf, managerModelRowId: achat });
+    const run = await runProject(admin, projectId);
+    const task = taskOf(run.events, 1);
+    eq("an agent on Anthropic works with tools", [run.events.at(-1)?.status, task?.status, task?.steps, task?.toolCalls], ["succeeded", "succeeded", 5, 5]);
+    eq("  its calls, in order", run.events.filter((e) => e.type === "tool").map((e) => `${e.call.name}${e.call.isError ? "!" : ""}`), ["write_file", "read_file", "edit_file", "list_files", "read_file!"]);
+    check("  what it says before a tool call is not its deliverable", /^DONE after 5 tool results/.test(task?.artifact ?? "") && !/I will use a tool/.test(task?.artifact ?? ""), task?.artifact);
+
+    const log = (await mockLog()).filter((l) => l.path.startsWith("/anthropic/"));
+    const sent = log.filter((l) => l.path.endsWith("/messages")).map((l) => l.body ?? {});
+    check("the key goes as a bearer token, with the API version", log.length > 0 && log.every((l) => l.authorization === `Bearer ${ANTHROPIC_KEY}` && !l.xApiKey && l.anthropicVersion === "2026-10-21"), log.map((l) => [l.path, l.anthropicVersion]));
+    check("every request has max_tokens and no temperature", sent.length > 0 && sent.every((b) => Number.isInteger(b.max_tokens) && b.temperature === undefined), sent.map((b) => [b.max_tokens, b.temperature]));
+    check("the system prompt goes in its own field, not as a message", sent.some((b) => typeof b.system === "string" && b.system.includes("Be brief.")) && sent.every((b) => (b.messages ?? []).every((m) => m.role !== "system")), sent.map((b) => typeof b.system));
+    const withResults = sent.find((b) => (b.messages ?? []).some((m) => Array.isArray(m.content) && m.content.some((c) => c.type === "tool_result")))?.messages ?? [];
+    const callTurn = withResults.find((m) => m.role === "assistant" && Array.isArray(m.content) && m.content.some((c) => c.type === "tool_use"));
+    const resultTurn = withResults[withResults.indexOf(callTurn) + 1];
+    eq("a tool call goes back with the model's thinking unchanged", callTurn?.content?.[0], { type: "thinking", thinking: "The task says which tool comes next.", signature: "sig-anthropic-mock" });
+    check("  and its result in the next turn, under the same id", resultTurn?.role === "user" && resultTurn?.content?.[0]?.type === "tool_result" && resultTurn.content[0].tool_use_id === callTurn?.content?.find((c) => c.type === "tool_use")?.id, [callTurn?.content, resultTurn?.content]);
+    const twoResults = sent.flatMap((b) => b.messages ?? []).find((m) => Array.isArray(m.content) && m.content.filter((c) => c.type === "tool_result").length === 2);
+    check("  two calls of one step are answered in one turn; a failed one is marked", twoResults?.content?.[1]?.is_error === true && twoResults?.content?.[0]?.is_error === undefined, twoResults?.content);
+
+    const apiKey = (await admin.post("/api/account/api-keys", { name: "Anthropic checks", scopes: ["chat"] })).data?.secret;
+    const tool = { type: "function", function: { name: "write_file", description: "Write a file", parameters: { type: "object", properties: { path: { type: "string" } } } } };
+    const ask = [{ role: "user", content: "Task: Tool: files\n\ngo" }];
+    const called = await v1json("/chat/completions", { key: apiKey, method: "POST", body: { model: "claude-mock-opus", messages: ask, tools: [tool] } });
+    const call = called.data?.choices?.[0]?.message?.tool_calls?.[0];
+    eq("through the API: a tool call arrives in OpenAI's format", [called.status, called.data?.choices?.[0]?.finish_reason, call?.type, call?.function?.name, JSON.parse(call?.function?.arguments ?? "{}").path], [200, "tool_calls", "function", "write_file", "notes/plan.md"]);
+    const answered = await v1json("/chat/completions", { key: apiKey, method: "POST", body: { model: "claude-mock-opus", tools: [tool], messages: [...ask, { role: "assistant", content: null, tool_calls: [call] }, { role: "tool", tool_call_id: call?.id, content: "Saved." }] } });
+    eq("  and the client's tool result goes back to the model", [answered.status, answered.data?.choices?.[0]?.message?.content, answered.data?.choices?.[0]?.finish_reason], [200, "DONE after 1 tool results. LAST: Saved.", "stop"]);
+    const streamedCall = await v1("/chat/completions", { key: apiKey, method: "POST", body: { model: "claude-mock-opus", stream: true, stream_options: { include_usage: true }, messages: ask, tools: [tool] } });
+    const callChunks = (await streamedCall.text()).split("\n\n").filter((b) => b && !b.includes("[DONE]")).map((b) => JSON.parse(b.replace(/^data: /, "")));
+    const streamedTool = callChunks.flatMap((c) => c.choices?.[0]?.delta?.tool_calls ?? []);
+    eq("  streamed: the call put together from its pieces, the reason, the usage", [streamedTool[0]?.function?.name, JSON.parse(streamedTool.map((t) => t.function?.arguments ?? "").join("") || "{}").path, callChunks.find((c) => c.choices?.[0]?.finish_reason)?.choices[0].finish_reason, callChunks.at(-1)?.usage?.prompt_tokens], ["write_file", "notes/plan.md", "tool_calls", 25]);
+
+    const refusedChat = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: byId.get("claude-mock-refuse")?.id, messages: [{ role: "user", content: "hi" }] } });
+    check("a refusal is shown with its reason, not as an empty reply", /declined this request: \[cyber\] This request is outside/.test(refusedChat.events.find((e) => e.error)?.error ?? ""), refusedChat.events);
+    const refusedWhole = await admin.post(`/api/models/${byId.get("claude-mock-refuse")?.id}/test`);
+    check("  also when the reply is taken whole", refusedWhole.data?.ok === false && /declined this request/.test(refusedWhole.data?.error ?? ""), refusedWhole.data);
+    const broken = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: byId.get("claude-mock-overloaded")?.id, messages: [{ role: "user", content: "hi" }] } });
+    check("a reply that breaks off: what arrived, then the provider's error", broken.events.some((e) => e.delta) && /overloaded_error: Overloaded/.test(broken.events.find((e) => e.error)?.error ?? ""), broken.events);
+    const busy = await admin.post(`/api/models/${byId.get("claude-mock-overloaded")?.id}/test`);
+    check("an error answer: the provider's message", busy.data?.ok === false && /Overloaded/.test(busy.data?.error ?? ""), busy.data);
+
+    await mockReset();
+    const byHeader = await admin.post("/api/providers", { name: "Anthropic, x-api-key", adapter: "anthropic", baseUrl: base, apiKey: ANTHROPIC_KEY, authType: "header", authHeaderName: "x-api-key", apiVersion: "2023-06-01" });
+    const headerTest = await admin.post(`/api/providers/${byHeader.data?.provider?.id}/test`);
+    const headerLog = (await mockLog()).filter((l) => l.path.startsWith("/anthropic/"));
+    check("the key can go in the x-api-key header instead, with another API version", headerTest.data?.ok === true && headerLog.length > 0 && headerLog.every((l) => l.xApiKey === ANTHROPIC_KEY && !l.authorization && l.anthropicVersion === "2023-06-01"), [headerTest.data, headerLog.map((l) => [l.xApiKey ? "x-api-key" : "", l.authorization ? "bearer" : "", l.anthropicVersion])]);
+    const wrongKey = await admin.post("/api/providers", { name: "Anthropic, wrong key", adapter: "anthropic", baseUrl: base, apiKey: "sk-ant-WRONG-0123456789abcdefghijklmnopqrstuv" });
+    const wrongTest = await admin.post(`/api/providers/${wrongKey.data?.provider?.id}/test`);
+    check("a wrong key: the provider's message, without the key", wrongTest.data?.ok === false && /invalid x-api-key/.test(wrongTest.data?.error ?? "") && !/sk-ant-WRONG/.test(JSON.stringify(wrongTest.data)), wrongTest.data);
+  }
+
+  async function adapters() {
+    await anthropicAdapter();
+
+    begin("Gemini adapter");
+    await mockReset();
+    const created = await admin.post("/api/providers", { name: "Mock Gemini", adapter: "gemini", baseUrl: `${MOCK}/gemini/v1beta`, apiKey: GEMINI_KEY });
+    check("a Gemini provider is created", created.status === 201, created.error);
+    const gp = created.data?.provider?.id;
+    const test = await admin.post(`/api/providers/${gp}/test`);
+    check("the connection test works", test.status === 200 && test.data?.ok === true, test.data);
+    const discovered = await admin.post(`/api/providers/${gp}/models/discover`);
+    eq("its models are listed, across pages", discovered.data?.models, ["gemini-mock-flash", "gemini-embedding-mock", "gemini-mock-flash-preview-tts", "gemini-mock-flash-image"]);
+    eq("  each with the type it is taken to be", Object.fromEntries(Object.entries(discovered.data?.suggested ?? {}).map(([id, s]) => [id, s.type])), {
+      "gemini-mock-flash": "chat",
+      "gemini-embedding-mock": "embedding",
+      "gemini-mock-flash-preview-tts": "speech",
+      "gemini-mock-flash-image": "image",
+    });
+    const imported = await admin.post(`/api/providers/${gp}/models/discover`, { import: ["gemini-mock-flash", "gemini-embedding-mock", "gemini-mock-flash-preview-tts", "gemini-mock-flash-image"] });
+    const byId = new Map(((await admin.get(`/api/models?providerId=${gp}`)).data?.models ?? []).map((m) => [m.modelId, m]));
+    check("imported, they get those capabilities, so an image model is no chat model", imported.status === 200 && byId.get("gemini-mock-flash-image")?.capabilities?.map((c) => c.capability).join() === "image_generation" && byId.get("gemini-embedding-mock")?.capabilities?.map((c) => c.capability).join() === "embeddings", [...byId.values()].map((m) => [m.modelId, m.capabilities.map((c) => c.capability)]));
+    const gchat = byId.get("gemini-mock-flash")?.id;
+
+    const chat = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: gchat, systemPrompt: "Be brief.", messages: [{ role: "user", content: "Reply with the single word: ok" }] } });
+    eq("chat, streamed", [chat.events.filter((e) => e.delta).map((e) => e.delta).join(""), chat.events.find((e) => e.done)?.usage], ["ok", { promptTokens: 11, completionTokens: 7 }]);
+    const speech = await admin.post("/api/media/speech", { modelRowId: byId.get("gemini-mock-flash-preview-tts")?.id, text: "Hello from Gemini.", voice: "Kore" });
+    eq("speech: the bare samples it sends become a WAV file", [speech.status, speech.data?.asset?.mimeType, speech.data?.asset?.durationSeconds], [201, "audio/wav", 1]);
+    const image = await admin.post("/api/media/images", { modelRowId: byId.get("gemini-mock-flash-image")?.id, prompt: "a lamp", aspectRatio: "9:16" });
+    eq("an image", [image.status, image.data?.assets?.[0]?.mimeType], [201, "image/png"]);
+    const col = await admin.post("/api/knowledge", { name: "Gemini notes", embeddingModelRowId: byId.get("gemini-embedding-mock")?.id });
+    await admin.post(`/api/knowledge/${col.data?.collection?.id}/documents`, { title: "Hours", text: "The shop is open from nine to five on weekdays." });
+    const embedded = await until(async () => (await admin.get(`/api/knowledge/${col.data?.collection?.id}`)).data?.documents?.[0], (d) => d?.embeddingStatus !== "pending", { tries: 30 });
+    eq("embeddings, for a knowledge collection", embedded?.embeddingStatus, "ready");
+    await admin.del(`/api/knowledge/${col.data?.collection?.id}`);
+
+    await agent("Gem", "Gemworker", { primaryModelRowId: gchat, tools: ["list_files", "read_file", "write_file", "edit_file"] });
+    const wf = await workflow("Gemini tools", [{ title: "Tool: files", objective: "Write the plan file.", role: "Gemworker" }]);
+    const projectId = await project(admin, { title: "Gemini tools", workflowId: wf, managerModelRowId: gchat });
+    const run = await runProject(admin, projectId);
+    const task = taskOf(run.events, 1);
+    eq("an agent on Gemini works with tools", [run.events.at(-1)?.status, task?.status, task?.steps, task?.toolCalls], ["succeeded", "succeeded", 5, 5]);
+
+    const log = (await mockLog()).filter((l) => l.path.startsWith("/gemini/"));
+    check("the key goes in the x-goog-api-key header, never as a bearer token or in the address", log.length > 0 && log.every((l) => l.xGoogApiKey === GEMINI_KEY && !l.authorization && !/key=/.test(l.path)), log.filter((l) => !l.xGoogApiKey || l.authorization).map((l) => l.path));
+    const toolTurn = log.filter((l) => /generateContent$/.test(l.path)).map((l) => l.body?.contents ?? []).find((c) => c.some((m) => m.parts?.some((p) => p.functionResponse)));
+    const modelTurn = toolTurn?.find((m) => m.role === "model" && m.parts?.some((p) => p.functionCall));
+    const resultTurn = toolTurn?.find((m) => m.parts?.some((p) => p.functionResponse));
+    check("a tool call goes back with its thought signature, and its result under the same id", modelTurn?.parts?.[0]?.thoughtSignature === "sig-mock" && resultTurn?.parts?.[0]?.functionResponse?.id === modelTurn.parts[0].functionCall.id, [modelTurn?.parts?.[0], resultTurn?.parts?.[0]]);
+
+    const wrongKey = await admin.post("/api/providers", { name: "Gemini, wrong key", adapter: "gemini", baseUrl: `${MOCK}/gemini/v1beta`, apiKey: "AIzaSyWRONG-0123456789-not-a-real-key" });
+    const wrongTest = await admin.post(`/api/providers/${wrongKey.data?.provider?.id}/test`);
+    check("a wrong key: the provider's message, without the key", wrongTest.data?.ok === false && /API key not valid/.test(wrongTest.data?.error ?? "") && !/AIzaSyWRONG/.test(JSON.stringify(wrongTest.data)), wrongTest.data);
+
+    begin("Custom HTTP adapter");
+    const config = {
+      chat: { path: "/api/chat", method: "POST", body: { model: "{{model}}", messages: "{{messages}}", stream: false, options: { temperature: "{{temperature}}" } }, responsePath: "message.content", promptTokensPath: "prompt_eval_count", completionTokensPath: "eval_count", errorPath: "error" },
+      models: { path: "/api/tags", listPath: "models", idPath: "name" },
+      healthPath: "/health",
+    };
+    const noConfig = await admin.post("/api/providers", { name: "Custom, empty", adapter: "custom-http", baseUrl: `${MOCK}/custom`, authType: "none" });
+    eq("without a configuration it is refused", noConfig.status, 400);
+    const badConfig = await admin.post("/api/providers", { name: "Custom, bad", adapter: "custom-http", baseUrl: `${MOCK}/custom`, authType: "none", config: JSON.stringify({ chat: { path: "/api/chat" } }) });
+    check("a configuration with a part missing says which", badConfig.status === 400 && /chat\.body/.test(badConfig.error ?? ""), badConfig.error);
+    const custom = await admin.post("/api/providers", { name: "Mock custom", adapter: "custom-http", baseUrl: `${MOCK}/custom`, authType: "header", authHeaderName: "x-custom-token", apiKey: "custom-secret-token", config: JSON.stringify(config) });
+    check("with one it is created", custom.status === 201 && custom.data?.provider?.config?.includes("message.content"), custom.error);
+    const cp = custom.data?.provider?.id;
+    check("  the connection test asks its health address", (await admin.post(`/api/providers/${cp}/test`)).data?.ok === true, null);
+    eq("  its models are read where the configuration says", (await admin.post(`/api/providers/${cp}/models/discover`)).data?.models, ["llama-mock:latest", "qwen-mock:7b"]);
+    const cm = (await admin.post("/api/models", { providerId: cp, modelId: "llama-mock:latest", capabilities: ["text"] })).data?.model?.id;
+    await mockReset();
+    const cchat = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: cm, messages: [{ role: "user", content: "Reply with the single word: ok" }], temperature: 0.2 } });
+    eq("chat: the answer and the token counts are read from the response", [cchat.events.filter((e) => e.delta).map((e) => e.delta).join(""), cchat.events.find((e) => e.done)?.usage], ["ok", { promptTokens: 9, completionTokens: 5 }]);
+    const sent = (await mockLog()).find((l) => l.path === "/custom/api/chat");
+    eq("  the request is written as configured", [sent?.body?.model, sent?.body?.stream, sent?.body?.options?.temperature, sent?.body?.messages?.at(-1)], ["llama-mock:latest", false, 0.2, { role: "user", content: "Reply with the single word: ok" }]);
+    const brokenModel = (await admin.post("/api/models", { providerId: cp, modelId: "broken", capabilities: ["text"] })).data?.model?.id;
+    const cerr = await sse(admin, "/api/chat", { method: "POST", body: { modelRowId: brokenModel, messages: [{ role: "user", content: "hi" }] } });
+    check("  an error in the response body is reported as one", /model 'broken' not found/.test(cerr.events.find((e) => e.error)?.error ?? ""), cerr.events);
+    const cleared = await admin.patch(`/api/providers/${cp}`, { config: "" });
+    eq("its configuration cannot be emptied", cleared.status, 400);
+
+    await agent("Custo", "Customworker", { primaryModelRowId: cm, tools: ["list_files", "write_file"] });
+    const cwf = await workflow("Custom tools", [{ title: "Tool: files", objective: "Would use tools.", role: "Customworker" }]);
+    const cproj = await project(admin, { title: "Custom tools", workflowId: cwf });
+    const crun = await runProject(admin, cproj);
+    const ctask = taskOf(crun.events, 1);
+    check("an agent on it answers without tools: such an API has none", ctask?.status === "succeeded" && !ctask.toolCalls && /OUTPUT of "Tool: files"/.test(ctask.artifact ?? ""), [ctask?.status, ctask?.artifact]);
+  }
+
+  // ─── The Reel, with everything ─────────────────────────────────────────────
+
+  async function reel() {
+    begin("Reel: keyframes, voice-over, final cut");
+    for (const [name, role] of [["Reel Director", "Creative Director"], ["Reel Artist", "Video Artist"], ["Reel Designer", "Designer"], ["Reel Writer", "Copywriter"]]) {
+      if (!ids.agents?.Clara) await agent(name, role);
+    }
+    const template = reelWorkflowTemplate({ scenes: 2, clipSeconds: 2, keyframes: true, voiceOver: true, voice: "alloy", join: true, subtitles: true });
+    const needs = templateNeeds(template.steps);
+    eq("the template: per scene a keyframe, a clip from it, a voice-over; then the cut", template.steps.map((s) => s.kind ?? "text"), ["text", "text", "image", "video", "audio", "image", "video", "audio", "render", "image", "text"]);
+    eq("  what it asks of a project", [needs.tasks, needs.media], [11, 7]);
+    const wf = await admin.post("/api/workflows", template);
+    check("it is accepted as a workflow", wf.status === 201, wf.error);
+    eq("  a clip keeps the step its picture comes from, the cut its subtitles", [wf.data?.workflow?.steps?.[3]?.media?.imageFrom, wf.data?.workflow?.steps?.[8]?.media], [3, { aspectRatio: "9:16", subtitles: true }]);
+    const base = { title: "Reel with everything", goal: "A Reel about a lighthouse.", managerModelRowId: ids.models.chat, workflowId: wf.data?.workflow?.id, imageModelRowId: ids.models.img_openai, videoModelRowId: state.models["vid-real"], maxParallel: 4 };
+    const noVoice = await admin.post("/api/projects", base);
+    check("without a speech model the project is refused", noVoice.status === 400 && /speech model/.test(noVoice.error ?? ""), noVoice.error);
+    const tooFew = await admin.post("/api/projects", { ...base, speechModelRowId: state.models.tts, maxTasks: 10 });
+    check("with a task limit below its steps, too", tooFew.status === 400 && /11 steps/.test(tooFew.error ?? ""), tooFew.error);
+    const created = await admin.post("/api/projects", { ...base, speechModelRowId: state.models.tts });
+    check("with one it is created", created.status === 201 && created.data?.project?.speechModelRowId === state.models.tts, created.error);
+    const projectId = created.data?.project?.id;
+
+    await mockReset();
+    const run = await runProject(admin, projectId);
+    if (!HAS_FFMPEG) {
+      check("without ffmpeg the run stops before anything is generated, and says why", run.events.at(-1)?.status === "failed" && /needs ffmpeg/.test(run.events.find((e) => e.type === "error")?.message ?? ""), run.events.find((e) => e.type === "error"));
+      eq("  nothing was asked of a provider", (await mockLog()).filter((l) => l.method === "POST").length, 0);
+      return;
+    }
+    eq("the run finishes", run.events.at(-1)?.status, "succeeded");
+    const done = finished(run.events).sort((a, b) => a.seq - b.seq);
+    eq("every task succeeds", done.map((t) => t.status), Array(11).fill("succeeded"));
+    eq("each creative task has its file", done.map((t) => (t.assets ?? []).map((a) => `${a.kind}/${a.source}/${a.status}`).join()), ["", "", "image/provider/ready", "video/provider/ready", "audio/provider/ready", "image/provider/ready", "video/provider/ready", "audio/provider/ready", "video/render/ready", "image/provider/ready", ""]);
+
+    const log = await mockLog();
+    const videoCalls = log.filter((l) => l.method === "POST" && /\/videos$/.test(l.path));
+    check("each clip starts from its keyframe: the picture is sent with the request", videoCalls.length === 2 && videoCalls.every((l) => String(l.body?.input_reference?.image_url ?? "").startsWith("data:image/png;base64,")), videoCalls.map((l) => Object.keys(l.body ?? {})));
+    const speechCalls = log.filter((l) => l.path === "/openai/v1/audio/speech");
+    eq("each voice-over is the agent's line, without its wrapping, in the chosen voice", speechCalls.map((l) => [l.body?.input, l.body?.voice]).sort(), [["Welcome to the lighthouse. This is Scene 1 voice-over.", "alloy"], ["Welcome to the lighthouse. This is Scene 2 voice-over.", "alloy"]]);
+    const cut = done[8];
+    eq("the final cut is the two clips, one after the other", [cut.assets?.[0]?.durationSeconds, cut.assets?.[0]?.mimeType], [4, "video/mp4"]);
+    check("  and says what it was made from", /Joined video from 2 clips, with voice-over and subtitles \(4s\)/.test(cut.artifact ?? ""), cut.artifact);
+    check("the summary knows that some results are media it cannot see", /mentions-media=true/.test(run.events.find((e) => e.type === "final")?.deliverable ?? ""), run.events.find((e) => e.type === "final"));
+    const library = await admin.get(`/api/media?projectId=${projectId}`);
+    eq("everything is in the project's library", library.data?.assets?.map((a) => a.kind).sort(), ["audio", "audio", "image", "image", "image", "video", "video", "video"]);
+
+    begin("Reel: the AI Manager can plan the same kinds");
+    const planned = await project(admin, { title: "Planned with voice", imageModelRowId: ids.models.img_openai, videoModelRowId: state.models["vid-real"], speechModelRowId: state.models.tts });
+    await mockReset();
+    await runProject(admin, planned);
+    const planPrompt = (await mockLog()).find((l) => l.path.endsWith("/chat/completions") && String(l.body?.messages?.[0]?.content).includes("AI Manager of an engineering team"))?.body?.messages?.[0]?.content ?? "";
+    check("the manager is offered voice-overs, pictures to start clips from, and the join", /"audio"/.test(planPrompt) && /imageFrom/.test(planPrompt) && /"kind":"render"/.test(planPrompt), planPrompt.slice(0, 200));
+  }
+
+  const parts = { speech, render, knowledge, tools, runs, notifications: notificationChecks, api: publicApi, adapters, reel };
+  for (const [name, part] of Object.entries(parts)) {
+    if (wants(name)) await part();
+  }
+}

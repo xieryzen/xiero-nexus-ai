@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Alert, Badge, Button, Card, Field, Input } from "@/components/ui";
 import { Icon } from "@/components/icons";
 
@@ -100,7 +100,7 @@ export function GitPanel({ projectId, initial }: { projectId: string; initial: R
           </div>
           {remote.lastPushSha && (
             <p className="text-xs text-ink-3">
-              Last push {remote.lastPushAt ? formatRelative(remote.lastPushAt) : ""} · <span className="mono">{remote.lastPushSha.slice(0, 7)}</span>
+              Last push {remote.lastPushAt ? <RelativeTime at={remote.lastPushAt} /> : ""} · <span className="mono">{remote.lastPushSha.slice(0, 7)}</span>
             </p>
           )}
           <div className="flex items-center gap-2">

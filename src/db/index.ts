@@ -68,14 +68,31 @@ function ensureBootstrapAdmin(db: DB) {
   );
 }
 
-let cached: DB | null = null;
 function getDb(): DB {
+  // One connection per process, also when this module is loaded in more than
+  // one server bundle (the request handlers and the background worker).
   if (globalThis.__nexusDb) return globalThis.__nexusDb;
-  if (cached) return cached;
   const instance = create();
-  cached = instance;
-  if (!env.isProd) globalThis.__nexusDb = instance;
+  globalThis.__nexusDb = instance;
+  // The background worker normally starts with the server (instrumentation.ts).
+  // Starting it here as well covers a host where that hook does not run; a
+  // second start does nothing.
+  void import("@/lib/worker")
+    .then((worker) => worker.ensureWorker())
+    .catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error("[xiero-nexus] could not start the background worker:", err);
+    });
   return instance;
+}
+
+/**
+ * Open the database now: apply the migrations and start the background
+ * worker. Called when the server starts (src/instrumentation.ts), so that
+ * queued work goes on before the first request arrives.
+ */
+export function openDatabase(): void {
+  getDb();
 }
 
 /**

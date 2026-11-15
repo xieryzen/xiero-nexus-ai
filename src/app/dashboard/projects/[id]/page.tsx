@@ -6,6 +6,8 @@ import { requirePageUser } from "@/lib/auth";
 import { serializeAsset } from "@/lib/media/dto";
 import { assetsForProject } from "@/lib/media/service";
 import { chatModels } from "@/lib/model-options";
+import { listRuns, serializeRun } from "@/lib/runs";
+import { listSchedules, serializeSchedule } from "@/lib/schedules";
 import { serializeProject } from "@/lib/workforce";
 import { ProjectRunner } from "@/components/projects/project-runner";
 
@@ -33,7 +35,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
 
   const canRun = usableModels && agentsWithModel > 0;
 
-  // The models its image / video tasks generate with, by name.
+  // The models its creative tasks generate with, by name.
   const modelLabel = (id: string | null): string | null => {
     if (!id) return null;
     const m = db.select({ modelId: models.modelId, displayName: models.displayName }).from(models).where(eq(models.id, id)).get();
@@ -49,6 +51,9 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       initialAssets={assetsForProject(project.id).map((a) => serializeAsset(a))}
       imageModelLabel={modelLabel(project.imageModelRowId)}
       videoModelLabel={modelLabel(project.videoModelRowId)}
+      speechModelLabel={modelLabel(project.speechModelRowId)}
+      initialSchedules={listSchedules(project.id).map(serializeSchedule)}
+      initialRuns={listRuns(project.id, 30).map(serializeRun)}
     />
   );
 }

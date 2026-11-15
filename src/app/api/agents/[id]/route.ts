@@ -4,8 +4,10 @@ import { agents, models } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { memoryCounts } from "@/lib/agent/memory";
 import { Errors } from "@/lib/errors";
 import { modelIsMediaOnly } from "@/lib/gateway";
+import { collectionIdsForAgent, setAgentCollections } from "@/lib/knowledge/service";
 import { getClientMeta } from "@/lib/request";
 import { serializeAgent } from "@/lib/workforce";
 import { agentUpdateSchema } from "@/lib/validation";
@@ -18,7 +20,7 @@ function assertModelExists(id: string | null | undefined) {
   if (!m) throw Errors.badRequest("Selected model does not exist");
   // An agent thinks in text, also when its task is to write an image prompt.
   if (modelIsMediaOnly(id)) {
-    throw Errors.badRequest("An image or video model cannot be an agent's model. Choose a chat model.");
+    throw Errors.badRequest("A media or embedding model cannot be an agent's model. Choose a chat model.");
   }
 }
 
@@ -38,12 +40,31 @@ export const PATCH = handle(async (req, { params }) => {
   if (body.primaryModelRowId !== undefined) patch.primaryModelRowId = body.primaryModelRowId;
   if (body.fallbackModelRowId !== undefined) patch.fallbackModelRowId = body.fallbackModelRowId;
   if (body.requiredCapability !== undefined) patch.requiredCapability = body.requiredCapability;
+  if (body.tools !== undefined) patch.tools = JSON.stringify(body.tools);
+  if (body.maxSteps !== undefined) patch.maxSteps = body.maxSteps;
+  if (body.memoryEnabled !== undefined) patch.memoryEnabled = body.memoryEnabled;
 
+  // Checked first: it can refuse, and then nothing is changed.
+  if (body.collectionIds !== undefined) setAgentCollections(existing.id, body.collectionIds);
   db.update(agents).set(patch).where(eq(agents.id, existing.id)).run();
-  audit({ actorUserId: user.id, action: "agent.update", targetType: "agent", targetId: existing.id, ip, userAgent });
+  audit({
+    actorUserId: user.id,
+    action: "agent.update",
+    targetType: "agent",
+    targetId: existing.id,
+    // What an agent may do is worth a line in the log of its own.
+    metadata: body.tools !== undefined ? { tools: body.tools } : undefined,
+    ip,
+    userAgent,
+  });
 
   const fresh = db.select().from(agents).where(eq(agents.id, existing.id)).get()!;
-  return json({ agent: serializeAgent(fresh) });
+  return json({
+    agent: serializeAgent(fresh, undefined, {
+      collectionIds: collectionIdsForAgent(fresh.id),
+      memoryCount: memoryCounts().get(fresh.id),
+    }),
+  });
 });
 
 export const DELETE = handle(async (req, { params }) => {

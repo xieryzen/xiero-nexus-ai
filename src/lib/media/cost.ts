@@ -41,3 +41,12 @@ export function computeVideoCost(
   if (model.pricePerSecond == null || seconds == null || !(seconds > 0)) return null;
   return seconds * model.pricePerSecond;
 }
+
+/** Speech is priced by the length of the text that is spoken. */
+export function computeSpeechCost(
+  model: { pricePerMChars: number | null },
+  characters: number,
+): number | null {
+  if (model.pricePerMChars == null || !(characters > 0)) return null;
+  return (characters / 1_000_000) * model.pricePerMChars;
+}

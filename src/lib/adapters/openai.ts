@@ -1,7 +1,7 @@
 import "server-only";
 import { AppError, sanitizeUpstreamError } from "../errors";
 import { safeFetch } from "../http-client";
-import { MAX_IMAGE_BYTES } from "../media/files";
+import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, pcmFormatFromMime } from "../media/files";
 import { readBodyCapped } from "../media/http";
 import {
   buildImageRequest,
@@ -11,17 +11,29 @@ import {
   parseImageResponse,
   parseVideoJob,
   resolveMediaApi,
+  upstreamErrorText,
   videoDownloadPlan,
   videoStatusPath,
   type ParsedVideoJob,
 } from "./media-protocol";
+import {
+  buildChatBody,
+  buildEmbeddingsBody,
+  buildSpeechBody,
+  createChatStream,
+  parseChatResponse,
+  parseEmbeddingsResponse,
+  parseModelList,
+} from "./openai-protocol";
 import type {
   ChatRequest,
   ChatResult,
+  EmbedResult,
   ListedModel,
   MediaDownload,
   ProviderAdapter,
   ProviderContext,
+  SpeechResult,
 } from "./types";
 
 function base(ctx: ProviderContext): string {
@@ -49,11 +61,16 @@ async function readError(res: Response): Promise<never> {
     /* ignore */
   }
   throw new AppError(
-    res.status === 401 || res.status === 403 ? 502 : 502,
+    502,
     "upstream_error",
     `Provider responded ${res.status}: ${sanitizeUpstreamError(detail || res.statusText)}`,
   );
 }
+
+/** Largest answer accepted for a chat completion or a model list. */
+const CHAT_JSON_MAX_BYTES = 32 * 1024 * 1024;
+/** Texts sent to the embeddings endpoint in one request. */
+const EMBED_BATCH = 64;
 
 /** Largest JSON answer accepted from a job endpoint (create / status). */
 const JOB_JSON_MAX_BYTES = 1024 * 1024;
@@ -106,8 +123,10 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     "structured_output",
     "vision",
     "streaming",
+    "embeddings",
     "image_generation",
     "video_generation",
+    "speech_generation",
   ],
   canDiscoverModels: true,
 
@@ -118,11 +137,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
     );
     if (!res.ok) await readError(res);
-    const json = (await res.json()) as { data?: { id?: string }[] };
-    const data = Array.isArray(json.data) ? json.data : [];
-    return data
-      .filter((m): m is { id: string } => typeof m.id === "string")
-      .map((m) => ({ id: m.id }));
+    return parseModelList(await readJson(res, CHAT_JSON_MAX_BYTES));
   },
 
   async testConnection(ctx): Promise<void> {
@@ -132,6 +147,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
     );
     if (!res.ok) await readError(res);
+    void res.body?.cancel().catch(() => undefined);
   },
 
   async chat(ctx, req: ChatRequest): Promise<ChatResult> {
@@ -140,36 +156,12 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
       {
         method: "POST",
         headers: headers(ctx),
-        body: JSON.stringify({
-          model: req.model,
-          messages: req.messages,
-          temperature: req.temperature,
-          stream: false,
-        }),
+        body: JSON.stringify(buildChatBody(req, { stream: false })),
       },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
     );
     if (!res.ok) await readError(res);
-    const json = (await res.json()) as {
-      choices?: { message?: { content?: string }; finish_reason?: string }[];
-      usage?: {
-        prompt_tokens?: number;
-        completion_tokens?: number;
-        total_tokens?: number;
-      };
-    };
-    const choice = json.choices?.[0];
-    return {
-      content: choice?.message?.content ?? "",
-      finishReason: choice?.finish_reason,
-      usage: json.usage
-        ? {
-            promptTokens: json.usage.prompt_tokens,
-            completionTokens: json.usage.completion_tokens,
-            totalTokens: json.usage.total_tokens,
-          }
-        : undefined,
-    };
+    return parseChatResponse(await readJson(res, CHAT_JSON_MAX_BYTES));
   },
 
   async chatStream(ctx, req, onDelta): Promise<ChatResult> {
@@ -178,13 +170,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
       {
         method: "POST",
         headers: headers(ctx),
-        body: JSON.stringify({
-          model: req.model,
-          messages: req.messages,
-          temperature: req.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-        }),
+        body: JSON.stringify(buildChatBody(req, { stream: true })),
       },
       { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
     );
@@ -195,63 +181,85 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    const stream = createChatStream(onDelta);
     let buffer = "";
-    let content = "";
-    let usage: ChatResult["usage"];
-    let finishReason: string | undefined;
-
-    const handleData = (payload: string) => {
-      if (payload === "[DONE]") return;
-      try {
-        const chunk = JSON.parse(payload) as {
-          choices?: {
-            delta?: { content?: string };
-            finish_reason?: string | null;
-          }[];
-          usage?: {
-            prompt_tokens?: number;
-            completion_tokens?: number;
-            total_tokens?: number;
-          } | null;
-        };
-        const delta = chunk.choices?.[0]?.delta?.content;
-        if (delta) {
-          content += delta;
-          onDelta(delta);
-        }
-        const fr = chunk.choices?.[0]?.finish_reason;
-        if (fr) finishReason = fr;
-        if (chunk.usage) {
-          usage = {
-            promptTokens: chunk.usage.prompt_tokens,
-            completionTokens: chunk.usage.completion_tokens,
-            totalTokens: chunk.usage.total_tokens,
-          };
-        }
-      } catch {
-        /* ignore malformed keep-alive lines */
-      }
+    const feed = (line: string) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("data:")) stream.handle(trimmed.slice(5).trim());
     };
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith("data:")) {
-          handleData(trimmed.slice(5).trim());
+    try {
+      for (;;) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch {
+          throw new AppError(502, "network_error", "Provider stream was interrupted");
         }
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) feed(line);
       }
+      feed(buffer);
+    } catch (err) {
+      void reader.cancel().catch(() => undefined);
+      throw err;
     }
-    if (buffer.trim().startsWith("data:")) {
-      handleData(buffer.trim().slice(5).trim());
-    }
+    return stream.result();
+  },
 
-    return { content, usage, finishReason };
+  async embed(ctx, req): Promise<EmbedResult> {
+    const vectors: number[][] = [];
+    let promptTokens: number | undefined;
+    for (let i = 0; i < req.input.length; i += EMBED_BATCH) {
+      const batch = req.input.slice(i, i + EMBED_BATCH);
+      const res = await safeFetch(
+        `${base(ctx)}/embeddings`,
+        {
+          method: "POST",
+          headers: headers(ctx),
+          body: JSON.stringify(
+            buildEmbeddingsBody({ model: req.model, input: batch, dimensions: req.dimensions }),
+          ),
+        },
+        { timeoutMs: ctx.timeoutMs, allowHosts: ctx.allowHosts },
+      );
+      if (!res.ok) await readError(res);
+      const parsed = parseEmbeddingsResponse(await readJson(res, CHAT_JSON_MAX_BYTES), batch.length);
+      vectors.push(...parsed.vectors);
+      if (parsed.promptTokens !== undefined) promptTokens = (promptTokens ?? 0) + parsed.promptTokens;
+    }
+    return { vectors, promptTokens };
+  },
+
+  async generateSpeech(ctx, req, opts): Promise<SpeechResult> {
+    const res = await safeFetch(
+      `${base(ctx)}/audio/speech`,
+      { method: "POST", headers: headers(ctx), body: JSON.stringify(buildSpeechBody(req)) },
+      { timeoutMs: opts.timeoutMs, allowHosts: ctx.allowHosts },
+    );
+    if (!res.ok) await readError(res);
+    const type = res.headers.get("content-type");
+    const bytes = await readBodyCapped(res, { maxBytes: MAX_AUDIO_BYTES, timeoutMs: BODY_TIMEOUT_MS });
+    if (type && /\bjson\b/i.test(type)) {
+      // Not audio: an error that came with a success status, most likely.
+      let detail: string | undefined;
+      try {
+        detail = upstreamErrorText(JSON.parse(bytes.toString("utf8")));
+      } catch {
+        /* not JSON after all */
+      }
+      throw new AppError(
+        502,
+        "upstream_error",
+        detail ? `Provider error: ${sanitizeUpstreamError(detail)}` : "The provider answered without audio",
+      );
+    }
+    // Bare samples are announced by the content type ("audio/pcm", "audio/L16;rate=24000").
+    const pcm = pcmFormatFromMime(type);
+    return pcm ? { bytes, pcm } : { bytes };
   },
 
   // ── Media. The request style depends on the provider: see media-protocol.ts.

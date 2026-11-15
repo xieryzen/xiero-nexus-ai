@@ -66,6 +66,8 @@ export function serializeProvider(p: Provider) {
     authHeaderName: p.authHeaderName,
     apiVersion: p.apiVersion,
     mediaApi: p.mediaApi,
+    // How to talk to the API (custom-http adapter). It holds no credentials.
+    config: p.config,
     timeoutMs: p.timeoutMs,
     extraHeaders,
     status: p.status,

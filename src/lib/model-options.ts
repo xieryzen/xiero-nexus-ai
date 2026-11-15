@@ -23,6 +23,9 @@ export interface UsableModel {
   capabilities: Capability[];
   pricePerImage: number | null;
   pricePerSecond: number | null;
+  pricePerMChars: number | null;
+  /** Whether its provider's adapter can pass tools on to the model. */
+  tools: boolean;
 }
 
 export function usableModels(): UsableModel[] {
@@ -33,6 +36,7 @@ export function usableModels(): UsableModel[] {
       displayName: models.displayName,
       pricePerImage: models.pricePerImage,
       pricePerSecond: models.pricePerSecond,
+      pricePerMChars: models.pricePerMChars,
       providerName: providers.name,
       adapter: providers.adapter,
       baseUrl: providers.baseUrl,
@@ -63,10 +67,12 @@ export function usableModels(): UsableModel[] {
     capabilities: caps.get(m.id) ?? [],
     pricePerImage: m.pricePerImage,
     pricePerSecond: m.pricePerSecond,
+    pricePerMChars: m.pricePerMChars,
+    tools: getAdapter(m.adapter).supports.includes("tool_calling"),
   }));
 }
 
-/** Models that can answer a chat request: everything except image / video models. */
+/** Models that can answer a chat request: everything except media and embedding models. */
 export function chatModels(all: UsableModel[] = usableModels()): UsableModel[] {
   return all.filter((m) => !isMediaOnly(m.capabilities));
 }
@@ -75,27 +81,46 @@ export interface MediaModelOption {
   id: string;
   /** "<name> · <provider>" */
   label: string;
-  /** The request style its provider speaks, which decides the options it takes. */
+  /**
+   * The request style its provider speaks, which decides the sizing options
+   * it takes. A Gemini model takes an aspect ratio and a resolution, as the
+   * xAI style does.
+   */
   mediaApi: MediaApi;
-  /** Price per image (image models) or per second (video models), if set. */
+  /**
+   * Price per image (image models), per second (video models) or per million
+   * characters (speech models), if set.
+   */
   price: number | null;
 }
 
-/** Models marked for image or video generation, on an adapter that can do it. */
+/** Models marked for image, video or speech generation, on an adapter that can do it. */
 export function mediaModelOptions(
-  kind: "image" | "video",
+  kind: "image" | "video" | "audio",
   all: UsableModel[] = usableModels(),
 ): MediaModelOption[] {
   return all
     .filter((m) => m.capabilities.includes(MEDIA_CAPABILITY[kind]))
     .filter((m) => {
       const adapter = getAdapter(m.adapter);
-      return kind === "image" ? Boolean(adapter.generateImages) : Boolean(adapter.startVideo);
+      return kind === "image"
+        ? Boolean(adapter.generateImages)
+        : kind === "video"
+          ? Boolean(adapter.startVideo)
+          : Boolean(adapter.generateSpeech);
     })
     .map((m) => ({
       id: m.id,
       label: `${m.name} · ${m.providerName}`,
-      mediaApi: resolveMediaApi(m.mediaApiSetting, m.baseUrl),
-      price: kind === "image" ? m.pricePerImage : m.pricePerSecond,
+      mediaApi: m.adapter === "openai-compatible" ? resolveMediaApi(m.mediaApiSetting, m.baseUrl) : "xai",
+      price: kind === "image" ? m.pricePerImage : kind === "video" ? m.pricePerSecond : m.pricePerMChars,
     }));
+}
+
+/** Models marked for embeddings, on an adapter that has them. For knowledge collections. */
+export function embeddingModelOptions(all: UsableModel[] = usableModels()): { id: string; label: string }[] {
+  return all
+    .filter((m) => m.capabilities.includes("embeddings"))
+    .filter((m) => Boolean(getAdapter(m.adapter).embed))
+    .map((m) => ({ id: m.id, label: `${m.name} · ${m.providerName}` }));
 }

@@ -11,6 +11,7 @@ export const CAPABILITIES = [
   "audio",
   "image_generation",
   "video_generation",
+  "speech_generation",
   "embeddings",
   "streaming",
 ] as const;
@@ -26,6 +27,7 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
   audio: "Audio",
   image_generation: "Image generation",
   video_generation: "Video generation",
+  speech_generation: "Speech generation",
   embeddings: "Embeddings",
   streaming: "Streaming",
 };
@@ -34,18 +36,28 @@ export const CAPABILITY_LABELS: Record<Capability, string> = {
 export const MEDIA_CAPABILITY = {
   image: "image_generation",
   video: "video_generation",
+  audio: "speech_generation",
 } as const satisfies Record<string, Capability>;
 
+/** Capabilities of models that do one job other than answering in text. */
+const NON_CHAT_CAPABILITIES: readonly Capability[] = [
+  "image_generation",
+  "video_generation",
+  "speech_generation",
+  "embeddings",
+];
+
 /**
- * True for a model that only generates media: it is marked for image or video
- * generation and not for text. Such a model cannot answer a chat request, so
- * it is left out of chat, agents, the AI Manager and automatic routing.
+ * True for a model that cannot answer a chat request: it is marked for image,
+ * video or speech generation or for embeddings, and not for text. Such a model
+ * is left out of chat, agents, the AI Manager and automatic routing.
  *
- * A model with no capabilities at all (as imported by discovery) is treated as
- * a chat model, as before.
+ * A model with no capabilities at all is treated as a chat model, as before.
+ * (The name is from v1.4, when image and video models were the only such
+ * models.)
  */
 export function isMediaOnly(capabilities: readonly string[]): boolean {
-  const generatesMedia =
-    capabilities.includes("image_generation") || capabilities.includes("video_generation");
-  return generatesMedia && !capabilities.includes("text");
+  return (
+    NON_CHAT_CAPABILITIES.some((c) => capabilities.includes(c)) && !capabilities.includes("text")
+  );
 }

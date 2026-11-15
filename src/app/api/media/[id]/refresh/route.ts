@@ -9,9 +9,10 @@ export const maxDuration = 300;
 
 /**
  * Ask the provider about a pending video and store the file once it is
- * finished. The page calls this every few seconds while a video is pending.
- * `checkError` says why the provider could not be asked this time; the asset
- * is then unchanged.
+ * finished. The background worker does this by itself; a page that is open
+ * calls it as well, to show the result as soon as it is there. `checkError`
+ * says why the provider could not be asked this time; the asset is then
+ * unchanged. A video being joined on this server is returned as it is.
  */
 export const POST = handle(async (_req, { params }) => {
   const user = requireUser();

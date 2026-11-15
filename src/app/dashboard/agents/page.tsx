@@ -1,7 +1,10 @@
 import { asc } from "drizzle-orm";
 import { db } from "@/db";
 import { agents as agentsTable, teams } from "@/db/schema";
+import { memoryCounts } from "@/lib/agent/memory";
+import { toolStatus } from "@/lib/agent/tools";
 import { getCurrentUser } from "@/lib/auth";
+import { agentCollectionMap, sharedCollections } from "@/lib/knowledge/service";
 import { chatModels } from "@/lib/model-options";
 import { serializeAgents, serializeTeam } from "@/lib/workforce";
 import { PageHeader } from "@/components/ui";
@@ -18,18 +21,30 @@ export default function AgentsPage() {
   const agentRows = db.select().from(agentsTable).orderBy(asc(agentsTable.name)).all();
   const teamRows = db.select().from(teams).orderBy(asc(teams.name)).all();
 
-  // Agents think in text: image / video models are not offered here.
+  // Agents think in text: only chat models are offered here.
   const modelOptions: ModelOption[] = chatModels().map((m) => ({
     id: m.id,
     label: `${m.name} · ${m.providerName}`,
+    tools: m.tools,
   }));
 
-  const serializedAgents = serializeAgents(agentRows);
+  const serializedAgents = serializeAgents(agentRows, {
+    collections: agentCollectionMap(),
+    // An administrator sees how many notes there are; everyone else, their own.
+    memories: memoryCounts(isAdmin ? undefined : user?.id),
+  });
+  const status = toolStatus();
 
   return (
     <div className="space-y-6">
       <PageHeader title="Agents & Teams" description="Define the specialists the AI Manager can delegate to." />
-      <AgentsManager initialAgents={serializedAgents} models={modelOptions} isAdmin={isAdmin} />
+      <AgentsManager
+        initialAgents={serializedAgents}
+        models={modelOptions}
+        toolSetup={{ sandbox: status.sandbox, search: status.search }}
+        collections={sharedCollections()}
+        isAdmin={isAdmin}
+      />
       <TeamsManager
         initialTeams={teamRows.map(serializeTeam)}
         agents={serializedAgents.map((a) => ({ id: a.id, name: a.name, role: a.role }))}

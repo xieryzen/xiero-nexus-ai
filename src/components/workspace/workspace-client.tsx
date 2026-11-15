@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiFetch, ApiError } from "@/lib/client";
-import { formatRelative } from "@/lib/format";
+import { RelativeTime } from "@/components/time";
 import { Alert, Badge, Button, Card, EmptyState, Input, Spinner, Textarea, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
 
@@ -271,7 +271,7 @@ export function WorkspaceClient({
                   <span className="mono truncate text-ink-2">{r.command}</span>
                   <span className="flex shrink-0 items-center gap-2">
                     <Badge tone={r.status === "ok" ? "ok" : "danger"}>{r.exitCode ?? r.status}</Badge>
-                    <span className="text-xs text-ink-3">{formatRelative(r.createdAt)}</span>
+                    <RelativeTime at={r.createdAt} className="text-xs text-ink-3" />
                   </span>
                 </li>
               ))}
@@ -296,7 +296,7 @@ export function WorkspaceClient({
               <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
                 <div className="min-w-0">
                   <span className="truncate text-ink">{s.message || "(no message)"}</span>
-                  <span className="ml-2 text-xs text-ink-3">{s.fileCount} files · {formatRelative(s.createdAt)}</span>
+                  <span className="ml-2 text-xs text-ink-3">{s.fileCount} files · <RelativeTime at={s.createdAt} /></span>
                 </div>
                 <Button variant="ghost" onClick={() => restore(s.id)}>
                   <Icon name="refresh" /> Restore

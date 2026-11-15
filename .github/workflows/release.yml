@@ -6,6 +6,10 @@ name: Build and release
 #   - dev-build, replaced each time with the newest commit
 # Pull requests get the same checks and bundles, without publishing.
 # How to cut a release: RELEASING.md.
+#
+# No job calls a real provider or a real Pterodactyl: the end-to-end checks
+# talk to the mock provider in scripts/e2e, and the host scripts are tried on
+# a made-up Wings host (scripts/host/test).
 
 on:
   push:
@@ -22,6 +26,9 @@ concurrency:
 
 env:
   NEXT_TELEMETRY_DISABLED: "1"
+  # The release whose bundle is upgraded to the one just built, to see that an
+  # existing installation survives the upgrade.
+  UPGRADE_FROM: v1.4.0
 
 jobs:
   check:
@@ -38,11 +45,33 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
+      - name: Shell scripts
+        run: shellcheck -x -S warning scripts/*.sh scripts/host/*.sh scripts/host/test/*.sh scripts/host/test/docker
+      - name: Disk report on a made-up host
+        run: bash scripts/host/test/report.sh
+
+  e2e:
+    name: End-to-end checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      # Joining clips is checked for real when there is an ffmpeg, and for its
+      # explanation of what is missing when there is none.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:e2e
 
   bundle:
     name: Bundle for Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       matrix:
         node: [20, 22]
@@ -59,6 +88,13 @@ jobs:
         run: BUILD_SHA="${GITHUB_SHA::7}" npm run package
       - name: Smoke-test the bundle
         run: bash scripts/smoke-test-bundle.sh
+      - name: Upgrade ${{ env.UPGRADE_FROM }} to this bundle on a made-up Pterodactyl host
+        run: |
+          asset="xiero-nexus-ai-linux-x64-node${{ matrix.node }}.zip"
+          gh release download "${UPGRADE_FROM}" --repo "${GITHUB_REPOSITORY}" --pattern "${asset}" --dir "${RUNNER_TEMP}/previous"
+          OLD_ZIP="${RUNNER_TEMP}/previous/${asset}" NEW_ZIP="dist/${asset}" bash scripts/host/test/run.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
       - uses: actions/upload-artifact@v7
         with:
           name: bundle-node${{ matrix.node }}
@@ -68,7 +104,7 @@ jobs:
 
   release:
     name: Publish releases
-    needs: [check, bundle]
+    needs: [check, e2e, bundle]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

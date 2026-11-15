@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { formatNumber } from "@/lib/format";
 import { Alert, Button, EmptyState, Select, Spinner, cn } from "@/components/ui";
@@ -11,12 +12,37 @@ export interface ChatModelOption {
   providerName: string;
 }
 
+export interface ChatCollectionOption {
+  id: string;
+  name: string;
+  documentCount: number;
+}
+
+/** A passage of the knowledge base that was put in front of the model. */
+interface Source {
+  n: number;
+  documentTitle: string;
+  collectionName: string;
+  excerpt: string;
+}
+
 interface Msg {
   role: "user" | "assistant";
   content: string;
+  /** Assistant: what was looked up for this answer. Empty when nothing matched. */
+  sources?: Source[];
+  /** Assistant: why nothing could be looked up. */
+  knowledgeError?: string | null;
 }
 
-export function ChatClient({ models }: { models: ChatModelOption[] }) {
+export function ChatClient({
+  models,
+  collections,
+}: {
+  models: ChatModelOption[];
+  /** Knowledge collections the user can read. */
+  collections: ChatCollectionOption[];
+}) {
   const [modelId, setModelId] = useState(models[0]?.id ?? "");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [showSystem, setShowSystem] = useState(false);
@@ -26,6 +52,8 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [usage, setUsage] = useState<{ promptTokens: number; completionTokens: number } | null>(null);
+  const [collectionIds, setCollectionIds] = useState<string[]>([]);
+  const [showKnowledge, setShowKnowledge] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -55,7 +83,9 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
         body: JSON.stringify({
           modelRowId: modelId,
           systemPrompt: systemPrompt.trim() || undefined,
-          messages: nextMessages,
+          // Only what was said: the sources of earlier answers are not sent back.
+          messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
+          collectionIds: collectionIds.length > 0 ? collectionIds : undefined,
         }),
       });
 
@@ -69,6 +99,8 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
       let buffer = "";
       let acc = "";
       let streamError: string | null = null;
+      let sources: Source[] | undefined;
+      let knowledgeError: string | null = null;
 
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -88,8 +120,13 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
               done?: boolean;
               error?: string;
               usage?: { promptTokens: number; completionTokens: number };
+              sources?: Source[];
+              knowledgeError?: string | null;
             };
-            if (evt.delta) {
+            if (Array.isArray(evt.sources)) {
+              sources = evt.sources;
+              knowledgeError = evt.knowledgeError ?? null;
+            } else if (evt.delta) {
               acc += evt.delta;
               setDraft(acc);
             } else if (evt.error) {
@@ -107,7 +144,7 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
         setError(streamError);
         // keep the user's message; drop the (empty) assistant turn
       } else {
-        setMessages((prev) => [...prev, { role: "assistant", content: acc }]);
+        setMessages((prev) => [...prev, { role: "assistant", content: acc, sources, knowledgeError }]);
       }
     } catch (err) {
       if (!(err instanceof DOMException && err.name === "AbortError")) {
@@ -157,6 +194,9 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
           <Button variant="ghost" onClick={() => setShowSystem((s) => !s)}>
             System prompt
           </Button>
+          <Button variant="ghost" onClick={() => setShowKnowledge((s) => !s)} aria-expanded={showKnowledge}>
+            <Icon name="knowledge" size={16} /> Knowledge{collectionIds.length > 0 ? ` (${collectionIds.length})` : ""}
+          </Button>
           <Button variant="ghost" onClick={clear} disabled={streaming || messages.length === 0}>
             Clear
           </Button>
@@ -172,6 +212,47 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
         />
       )}
 
+      {showKnowledge && (
+        <div className="mb-3 rounded-md border border-line bg-surface-2/40 p-3">
+          {collections.length === 0 ? (
+            <p className="text-sm text-ink-3">
+              No knowledge collection yet. Add documents on the{" "}
+              <Link href="/dashboard/knowledge" className="text-signal hover:underline">
+                Knowledge
+              </Link>{" "}
+              page, then answers here can be based on them.
+            </p>
+          ) : (
+            <>
+              <p className="text-xs text-ink-3">
+                Before each answer, the passages of the ticked collections that fit your question are put in front of
+                the model, and the answer names the ones it used.
+              </p>
+              <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5">
+                {collections.map((c) => (
+                  <li key={c.id}>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-2">
+                      <input
+                        type="checkbox"
+                        className="accent-current"
+                        checked={collectionIds.includes(c.id)}
+                        onChange={() =>
+                          setCollectionIds((ids) => (ids.includes(c.id) ? ids.filter((x) => x !== c.id) : [...ids, c.id].slice(0, 10)))
+                        }
+                      />
+                      {c.name}
+                      <span className="text-xs text-ink-3">
+                        {c.documentCount} {c.documentCount === 1 ? "document" : "documents"}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Transcript */}
       <div
         ref={scrollRef}
@@ -184,7 +265,12 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
           </div>
         )}
         {messages.map((m, i) => (
-          <Bubble key={i} role={m.role} content={m.content} />
+          <div key={i}>
+            <Bubble role={m.role} content={m.content} />
+            {m.role === "assistant" && (m.sources || m.knowledgeError) && (
+              <Sources sources={m.sources ?? []} error={m.knowledgeError ?? null} />
+            )}
+          </div>
         ))}
         {streaming && <Bubble role="assistant" content={draft} streaming />}
       </div>
@@ -228,6 +314,37 @@ export function ChatClient({ models }: { models: ChatModelOption[] }) {
           </Button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** What was looked up in the knowledge base for an answer. */
+function Sources({ sources, error }: { sources: Source[]; error: string | null }) {
+  const [open, setOpen] = useState(false);
+  if (error) {
+    return <p className="mt-1.5 max-w-[85%] text-xs text-warn">The knowledge base was not searched: {error}</p>;
+  }
+  if (sources.length === 0) {
+    return <p className="mt-1.5 max-w-[85%] text-xs text-ink-3">Nothing in the chosen collections matched this question.</p>;
+  }
+  return (
+    <div className="mt-1.5 max-w-[85%] text-xs text-ink-3">
+      <button type="button" className="font-medium text-signal hover:underline" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {open ? "Hide" : "Show"} the {sources.length} {sources.length === 1 ? "passage that was" : "passages that were"} looked up
+      </button>
+      {open && (
+        <ol className="mt-1.5 space-y-1.5">
+          {sources.map((s) => (
+            <li key={s.n} className="rounded border border-line bg-surface-2/60 px-2.5 py-1.5">
+              <p className="text-ink-2">
+                <span className="mono text-ink-3">[{s.n}]</span> {s.documentTitle}
+                <span className="text-ink-3"> · {s.collectionName}</span>
+              </p>
+              <p className="mt-0.5 whitespace-pre-wrap">{s.excerpt}</p>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

@@ -5,7 +5,14 @@ import {
   RESOLUTION_PATTERN,
   SIZE_PATTERN,
 } from "../adapters/media-protocol";
-import { TASK_KINDS, type TaskKind } from "../creative/prompt";
+import {
+  MAX_SPEECH_SPEED,
+  MIN_SPEECH_SPEED,
+  TASK_KINDS,
+  VOICE_PATTERN,
+  type MediaOptions,
+  type TaskKind,
+} from "../creative/prompt";
 
 /**
  * Plan parsing for the AI Manager. Pure + dependency-free so it can be
@@ -15,9 +22,9 @@ import { TASK_KINDS, type TaskKind } from "../creative/prompt";
 export { TASK_KINDS };
 
 /**
- * Options of an image / video task. A plan is written by a model, so each
- * field is read leniently: a value that does not fit is dropped rather than
- * failing the whole plan.
+ * Options of a creative task. A plan is written by a model, so each field is
+ * read leniently: a value that does not fit is dropped rather than failing
+ * the whole plan.
  */
 export const plannedMediaSchema = z
   .object({
@@ -25,19 +32,26 @@ export const plannedMediaSchema = z
     durationSeconds: z.coerce.number().int().min(1).max(MAX_VIDEO_SECONDS).optional().catch(undefined),
     resolution: z.string().regex(RESOLUTION_PATTERN).optional().catch(undefined),
     size: z.string().regex(SIZE_PATTERN).optional().catch(undefined),
+    voice: z.string().regex(VOICE_PATTERN).optional().catch(undefined),
+    speed: z.coerce.number().min(MIN_SPEECH_SPEED).max(MAX_SPEECH_SPEED).optional().catch(undefined),
+    imageFrom: z.coerce.number().int().positive().optional().catch(undefined),
+    subtitles: z.boolean().optional().catch(undefined),
+    keepClipAudio: z.boolean().optional().catch(undefined),
+    fit: z.enum(["contain", "cover"]).optional().catch(undefined),
   })
   .transform((media) => {
     // Leave out the fields that were dropped, instead of keeping them as undefined.
-    const out: {
-      aspectRatio?: string;
-      durationSeconds?: number;
-      resolution?: string;
-      size?: string;
-    } = {};
+    const out: MediaOptions = {};
     if (media.aspectRatio !== undefined) out.aspectRatio = media.aspectRatio;
     if (media.durationSeconds !== undefined) out.durationSeconds = media.durationSeconds;
     if (media.resolution !== undefined) out.resolution = media.resolution;
     if (media.size !== undefined) out.size = media.size;
+    if (media.voice !== undefined) out.voice = media.voice;
+    if (media.speed !== undefined) out.speed = media.speed;
+    if (media.imageFrom !== undefined) out.imageFrom = media.imageFrom;
+    if (media.subtitles !== undefined) out.subtitles = media.subtitles;
+    if (media.keepClipAudio !== undefined) out.keepClipAudio = media.keepClipAudio;
+    if (media.fit !== undefined) out.fit = media.fit;
     return out;
   });
 
@@ -50,13 +64,13 @@ export const plannedTaskSchema = z.object({
   dependsOn: z.array(z.number().int().positive()).max(20).optional().default([]),
   // Optional: save this task's artifact to the workspace at this relative path.
   outputFile: z.string().max(256).optional(),
-  // What the task delivers. Anything other than "image" / "video" is text.
+  // What the task delivers. Anything that is not one of the kinds is text.
   kind: z.enum(TASK_KINDS).catch("text"),
   media: plannedMediaSchema.optional().catch(undefined),
 });
 
 export const planSchema = z.object({
-  tasks: z.array(plannedTaskSchema).min(1).max(50),
+  tasks: z.array(plannedTaskSchema).min(1).max(80),
 });
 
 export type PlannedTask = z.infer<typeof plannedTaskSchema>;
@@ -114,16 +128,29 @@ export function parsePlan(raw: string, maxTasks = 12): ParsedPlan {
   const sorted = parsed.data.tasks.slice(0, maxTasks);
   const remap = new Map<number, number>();
   sorted.forEach((t, i) => remap.set(t.seq, i + 1));
+  const kindOf = new Map(sorted.map((t, i) => [i + 1, t.kind] as const));
   const tasks = sorted.map((t, i) => {
     const newSeq = i + 1;
-    const deps = [
-      ...new Set(
-        (t.dependsOn ?? [])
-          .map((d) => remap.get(d))
-          .filter((d): d is number => typeof d === "number" && d < newSeq),
-      ),
-    ];
-    return { ...t, seq: newSeq, dependsOn: deps };
+    const deps = new Set(
+      (t.dependsOn ?? [])
+        .map((d) => remap.get(d))
+        .filter((d): d is number => typeof d === "number" && d < newSeq),
+    );
+    // The picture a video starts from: an earlier image task, which the video
+    // then also depends on. Anything else is dropped, and the clip is
+    // generated from its prompt alone.
+    let media = t.media;
+    if (media?.imageFrom !== undefined) {
+      const from = remap.get(media.imageFrom);
+      if (t.kind === "video" && from !== undefined && from < newSeq && kindOf.get(from) === "image") {
+        media = { ...media, imageFrom: from };
+        deps.add(from);
+      } else {
+        const { imageFrom: _dropped, ...rest } = media;
+        media = rest;
+      }
+    }
+    return { ...t, seq: newSeq, dependsOn: [...deps].sort((a, b) => a - b), media };
   });
   return { ok: true, tasks };
 }
@@ -168,19 +195,25 @@ export function topoOrder(tasks: { seq: number; dependsOn: number[] }[]): number
   return order;
 }
 
-// ─── Creative tasks (v1.4) ───────────────────────────────────────────────────
+// ─── Creative tasks ──────────────────────────────────────────────────────────
 
-/** Which kinds of media a project can generate: it needs a model for each. */
+/**
+ * What a project can make besides text: it needs a model for images, videos
+ * and voice-overs, and ffmpeg on the server to join clips.
+ */
 export interface MediaAvailability {
   image: boolean;
   video: boolean;
+  audio: boolean;
+  render: boolean;
 }
 
 /**
- * Turn the image / video tasks a run cannot generate into text tasks, so the
- * agent still writes something useful instead of the task failing: tasks of a
- * kind the project has no model for, and tasks beyond `limit`, the number of
- * images and videos one run may generate (counted in task order).
+ * Turn the creative tasks a run cannot do into text tasks, so the agent still
+ * writes something useful instead of the task failing: tasks of a kind the
+ * project has no model for, and tasks beyond `limit`, the number of images,
+ * videos and voice-overs one run may generate (counted in task order). Joining
+ * clips costs nothing at a provider and does not count.
  * Returns the adjusted tasks and the seqs that were changed.
  */
 export function downgradeUnavailableMedia<T extends { seq: number; kind: TaskKind }>(
@@ -192,7 +225,9 @@ export function downgradeUnavailableMedia<T extends { seq: number; kind: TaskKin
   let kept = 0;
   const out = tasks.map((t) => {
     if (t.kind === "text") return t;
-    if (available[t.kind] && kept < limit) {
+    if (t.kind === "render") {
+      if (available.render) return t;
+    } else if (available[t.kind] && kept < limit) {
       kept++;
       return t;
     }
@@ -202,12 +237,31 @@ export function downgradeUnavailableMedia<T extends { seq: number; kind: TaskKin
   return { tasks: out, downgraded };
 }
 
-/** How many images and videos a plan would generate. */
-export function countMediaTasks(tasks: { kind: TaskKind }[]): { image: number; video: number } {
-  return {
-    image: tasks.filter((t) => t.kind === "image").length,
-    video: tasks.filter((t) => t.kind === "video").length,
-  };
+/** How many tasks of each creative kind a plan has. */
+export function countMediaTasks(tasks: { kind: TaskKind }[]): {
+  image: number;
+  video: number;
+  audio: number;
+  render: number;
+} {
+  const count = (kind: TaskKind) => tasks.filter((t) => t.kind === kind).length;
+  return { image: count("image"), video: count("video"), audio: count("audio"), render: count("render") };
+}
+
+/**
+ * What a render task joins: the videos among the tasks it depends on, in task
+ * order, or their images when there is no video, and the voice-overs among
+ * them. A render task without dependencies takes every earlier task.
+ */
+export function renderInputs(
+  task: { seq: number; dependsOn: number[] },
+  all: { seq: number; kind: TaskKind }[],
+): { clips: number[]; voiceOvers: number[] } {
+  const earlier = all.filter((t) => t.seq < task.seq).sort((a, b) => a.seq - b.seq);
+  const pool = task.dependsOn.length > 0 ? earlier.filter((t) => task.dependsOn.includes(t.seq)) : earlier;
+  const of = (kind: TaskKind) => pool.filter((t) => t.kind === kind).map((t) => t.seq);
+  const videos = of("video");
+  return { clips: videos.length > 0 ? videos : of("image"), voiceOvers: of("audio") };
 }
 
 /** Longest piece of one earlier task's output handed to a later task. */

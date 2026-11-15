@@ -4,12 +4,9 @@
  * For multi-instance deployments, back this with a shared store.
  */
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
+import { runtime } from "./runtime";
 
-const buckets = new Map<string, Bucket>();
+const buckets = runtime().buckets;
 
 export interface RateResult {
   ok: boolean;

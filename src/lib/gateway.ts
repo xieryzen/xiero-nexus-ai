@@ -10,8 +10,17 @@ import {
   type Provider,
 } from "@/db/schema";
 import { getAdapter } from "./adapters";
-import { isMediaOnly } from "./capabilities";
-import type { ChatMessage, ChatRequest, ChatResult, ProviderContext } from "./adapters/types";
+import { isMediaOnly, type Capability } from "./capabilities";
+import type {
+  ChatMessage,
+  ChatRequest,
+  ChatResult,
+  EmbedResult,
+  ListedModel,
+  ProviderContext,
+  ToolChoice,
+  ToolDefinition,
+} from "./adapters/types";
 import { AppError, Errors } from "./errors";
 import { decryptSecret } from "./secrets";
 
@@ -57,6 +66,7 @@ export function buildContext(
     authHeaderName: provider.authHeaderName,
     apiVersion: provider.apiVersion,
     mediaApi: provider.mediaApi,
+    config: provider.config,
     extraHeaders,
     timeoutMs: provider.timeoutMs,
     allowHosts: allowedPrivateHosts(),
@@ -85,15 +95,12 @@ export function resolveEnabledModel(modelRowId: string): ResolvedModel {
   return { model, provider };
 }
 
-/** True when the model is marked for image / video generation and not for text. */
+/**
+ * True when the model cannot answer a chat request: it is marked for image,
+ * video or speech generation or for embeddings, and not for text.
+ */
 export function modelIsMediaOnly(modelRowId: string): boolean {
-  const capabilities = db
-    .select({ capability: modelCapabilities.capability })
-    .from(modelCapabilities)
-    .where(eq(modelCapabilities.modelRowId, modelRowId))
-    .all()
-    .map((c) => c.capability);
-  return isMediaOnly(capabilities);
+  return isMediaOnly(modelCapabilitiesOf(modelRowId));
 }
 
 /**
@@ -104,7 +111,7 @@ export function resolveChatModel(modelRowId: string): ResolvedModel {
   const resolved = resolveEnabledModel(modelRowId);
   if (modelIsMediaOnly(modelRowId)) {
     throw Errors.badRequest(
-      `${resolved.model.displayName || resolved.model.modelId} only generates images or videos and cannot answer a chat request`,
+      `${resolved.model.displayName || resolved.model.modelId} is not a chat model (it is marked for images, video, speech or embeddings) and cannot answer a chat request`,
     );
   }
   return resolved;
@@ -125,10 +132,10 @@ export async function testProviderConnection(
   await adapter.testConnection(buildContext(provider, key));
 }
 
-/** List upstream models for discovery. */
+/** List upstream models for discovery, with what the provider says about each. */
 export async function discoverProviderModels(
   provider: Provider,
-): Promise<string[]> {
+): Promise<ListedModel[]> {
   const adapter = getAdapter(provider.adapter);
   if (!adapter.canDiscoverModels) {
     throw Errors.badRequest("This adapter does not support model discovery");
@@ -138,8 +145,7 @@ export async function discoverProviderModels(
   if (provider.authType !== "none" && !key) {
     throw Errors.badRequest("No API key configured for this provider");
   }
-  const listed = await adapter.listModels(buildContext(provider, key));
-  return listed.map((m) => m.id);
+  return adapter.listModels(buildContext(provider, key));
 }
 
 /** The context for calling a provider with its stored credential. */
@@ -152,19 +158,32 @@ export function contextFor(provider: Provider): ProviderContext {
   return buildContext(provider, key);
 }
 
+export interface ChatOptions {
+  temperature?: number;
+  tools?: ToolDefinition[];
+  toolChoice?: ToolChoice;
+  maxTokens?: number;
+}
+
+function chatRequest(resolved: ResolvedModel, messages: ChatMessage[], opts: ChatOptions): ChatRequest {
+  return {
+    model: resolved.model.modelId,
+    messages,
+    temperature: opts.temperature,
+    tools: opts.tools?.length ? opts.tools : undefined,
+    toolChoice: opts.tools?.length ? opts.toolChoice : undefined,
+    maxTokens: opts.maxTokens,
+  };
+}
+
 /** Non-streaming chat completion through the resolved provider/model. */
 export async function gatewayChat(
   resolved: ResolvedModel,
   messages: ChatMessage[],
-  opts: { temperature?: number } = {},
+  opts: ChatOptions = {},
 ): Promise<ChatResult> {
   const adapter = getAdapter(resolved.provider.adapter);
-  const req: ChatRequest = {
-    model: resolved.model.modelId,
-    messages,
-    temperature: opts.temperature,
-  };
-  return adapter.chat(contextFor(resolved.provider), req);
+  return adapter.chat(contextFor(resolved.provider), chatRequest(resolved, messages, opts));
 }
 
 /** Streaming chat completion; forwards text deltas to `onDelta`. */
@@ -172,15 +191,64 @@ export async function gatewayChatStream(
   resolved: ResolvedModel,
   messages: ChatMessage[],
   onDelta: (text: string) => void,
-  opts: { temperature?: number } = {},
+  opts: ChatOptions = {},
 ): Promise<ChatResult> {
   const adapter = getAdapter(resolved.provider.adapter);
-  const req: ChatRequest = {
+  return adapter.chatStream(
+    contextFor(resolved.provider),
+    chatRequest(resolved, messages, opts),
+    onDelta,
+  );
+}
+
+/** The capabilities an administrator ticked for a model. */
+export function modelCapabilitiesOf(modelRowId: string): Capability[] {
+  return db
+    .select({ capability: modelCapabilities.capability })
+    .from(modelCapabilities)
+    .where(eq(modelCapabilities.modelRowId, modelRowId))
+    .all()
+    .map((c) => c.capability);
+}
+
+/**
+ * An enabled model marked for embeddings, on an adapter that has them, or a
+ * safe error.
+ */
+export function resolveEmbeddingModel(modelRowId: string): ResolvedModel {
+  const resolved = resolveEnabledModel(modelRowId);
+  if (!modelCapabilitiesOf(modelRowId).includes("embeddings")) {
+    throw Errors.badRequest(
+      "This model is not marked for embeddings. An administrator can add that capability on the Models page.",
+    );
+  }
+  const adapter = getAdapter(resolved.provider.adapter);
+  if (!adapter.embed) {
+    throw Errors.badRequest(`The ${adapter.label} adapter has no embeddings API.`);
+  }
+  return resolved;
+}
+
+/** Embed texts with a model. Resolves to one vector per text, in order. */
+export async function gatewayEmbed(
+  resolved: ResolvedModel,
+  input: string[],
+  opts: { dimensions?: number } = {},
+): Promise<EmbedResult> {
+  const adapter = getAdapter(resolved.provider.adapter);
+  if (!adapter.embed) {
+    throw Errors.badRequest(`The ${adapter.label} adapter has no embeddings API.`);
+  }
+  if (input.length === 0) return { vectors: [] };
+  const result = await adapter.embed(contextFor(resolved.provider), {
     model: resolved.model.modelId,
-    messages,
-    temperature: opts.temperature,
-  };
-  return adapter.chatStream(contextFor(resolved.provider), req, onDelta);
+    input,
+    dimensions: opts.dimensions,
+  });
+  if (result.vectors.length !== input.length) {
+    throw new AppError(502, "upstream_error", "Provider returned fewer embeddings than texts");
+  }
+  return result;
 }
 
 export { AppError };

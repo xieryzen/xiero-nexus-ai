@@ -4,9 +4,11 @@ Every push to `main` is checked, built and published by GitHub Actions
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)). You choose
 the version; the automation does the rest:
 
-1. Typecheck, lint and unit tests.
-2. Ready-to-run bundles are built for Node.js 20 and 22 (Linux x64), and each
-   bundle is started and signed in to before it is published.
+1. Typecheck, lint, unit tests, the end-to-end checks against the mock
+   provider, and the tests of the scripts in `scripts/host/`.
+2. Ready-to-run bundles are built for Node.js 20 and 22 (Linux x64). Each
+   bundle is started and signed in to, and the bundle of v1.4.0 is upgraded
+   to it on a made-up Pterodactyl host, before anything is published.
 3. A GitHub Release named `v<version>` is published, **once per version**, with
    the bundles and their checksums attached.
 4. The `dev-build` entry is replaced so it always holds the newest commit.
@@ -146,8 +148,8 @@ Before you open it, decide how people reach it:
 
 Good to know:
 
-- `.env` and `data/` (the SQLite database, and generated images and videos
-  in `data/media/`) live inside `xiero-nexus-ai/`.
+- `.env` and `data/` (the SQLite database, and generated images, voice-overs
+  and videos in `data/media/`) live inside `xiero-nexus-ai/`.
   **Keep `SECRET_ENCRYPTION_KEY` safe**: stored provider keys and 2FA secrets
   cannot be read without it.
 - The port is `PORT` from the environment, else the port a hosting panel
@@ -155,10 +157,23 @@ Good to know:
 - To keep it running after you log out, start it under a process manager, for
   example `pm2 start start.js --name xiero-nexus`.
 - `cat VERSION` shows the version, commit and Node.js version of an install.
+- `GET /api/health` answers `{"status":"ok"}` without signing in when the
+  server and its database work. Point an uptime check at it.
+- Set `APP_URL` in `.env` to the address people open. Links in webhook
+  messages and the file links the API returns are built from it.
+- Joining clips into one video needs `ffmpeg` 4.2 or newer on the machine
+  (`apt install ffmpeg`), or `FFMPEG_PATH` in `.env`. Everything else works
+  without it.
+- Stopping: the app ends within a few seconds of `SIGTERM` or Ctrl+C, and the
+  next start goes on with the runs that were in progress.
 
 ### On Pterodactyl
 
-1. Use a Node.js egg and note its Node.js version (20 or 22).
+1. Use a Node.js egg and note its Node.js version (20 or 22). Its Docker
+   image must be one that is built on Debian or Ubuntu, such as
+   `ghcr.io/parkervcp/yolks:nodejs_22`, which the common Node.js eggs use.
+   The images `ghcr.io/pterodactyl/yolks:nodejs_*` are built on Alpine, where
+   the published bundles do not run (see [Other platforms](#other-platforms)).
 2. Upload the matching zip to the server's files and unarchive it. A
    `xiero-nexus-ai` folder appears.
 3. In that folder, copy `.env.example` to `.env` and set
@@ -171,6 +186,11 @@ Good to know:
 
 The bundle has no `package.json` on purpose, so the egg does not run
 `npm install` against it.
+
+Joining clips into one video needs ffmpeg inside the server's container. The
+`yolks` Node.js images include it; the status page (Observability) says
+whether this server has it. If not, see `--ffmpeg` in
+[scripts/host](scripts/host#upgrading-pterodactyl-upgradesh).
 
 ## Upgrade
 
@@ -194,27 +214,62 @@ The backup copies generated images and videos too (`data/media/`), which can
 be large. If `MEDIA_PATH` points somewhere else, that folder is untouched by
 an upgrade and only the database needs the copy.
 
-On Pterodactyl: stop the server, back up or archive `xiero-nexus-ai/data`,
-delete `xiero-nexus-ai/.next` and `xiero-nexus-ai/node_modules`, upload the new
-zip, unarchive it, start the server.
+### Upgrading on Pterodactyl
+
+**With root on the node** (the machine that runs Wings), one script does all
+of it: it stops the server, backs up the database, `.env` and the old program
+files, installs the new release, starts the server, waits until it answers,
+and puts the old version back by itself when it does not.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/pterodactyl-upgrade.sh
+sudo bash pterodactyl-upgrade.sh --server <short id> --dry-run     # shows the plan, changes nothing
+sudo bash pterodactyl-upgrade.sh --server <short id>
+```
+
+The short ID is the one in the panel's address of the server. Options, what
+is backed up where, and how to go back are in
+[scripts/host/README.md](scripts/host/README.md). The script was tested
+against a stand-in for Wings, not on a real node: do the dry run first and
+read the plan.
+
+**Through the panel only:** stop the server, back up or archive
+`xiero-nexus-ai/data`, delete `xiero-nexus-ai/.next` and
+`xiero-nexus-ai/node_modules`, upload the new zip, unarchive it, start the
+server.
+
+### From 1.4 to 1.5
+
+- Back up `data/` before the first start of 1.5: it updates the database, and
+  1.4 cannot open that database afterwards.
+- A project that 1.4 was running when it was stopped is ended about a minute
+  after 1.5 starts, with the message "The server stopped while this project
+  was running. Run it again."
+- Nothing has to be configured. The new settings (`FFMPEG_PATH`,
+  `SEARCH_PROVIDER`, `RUN_CONCURRENCY` and others) are optional and described
+  in `.env.example`; an existing `.env` keeps working as it is.
 
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of
 `xiero-nexus-ai/data`, then repeat the upgrade steps with the older version's
-link (`.../releases/download/v1.3.0/...`). Restoring the backup matters because
+link (`.../releases/download/v1.4.0/...`). Restoring the backup matters because
 the newer version may have changed the database.
+
+After an upgrade with `pterodactyl-upgrade.sh`, the command it printed at the
+end does both: `sudo bash pterodactyl-upgrade.sh --server <id> --restore
+<backup folder>`.
 
 ## Other platforms
 
-Published bundles are for Linux x64 with glibc (Debian, Ubuntu and the usual
-Pterodactyl Node.js images). For ARM, Alpine or macOS, build a bundle on that
-machine:
+Published bundles are for Linux x64 with glibc: Debian, Ubuntu, and the
+Docker images built on them. For ARM, Alpine (musl) or macOS, build a bundle
+on that machine:
 
 ```bash
 git clone https://github.com/xieryzen/xiero-nexus-ai.git
 cd xiero-nexus-ai
-git checkout v1.4.0                 # the version you want
+git checkout v1.5.0                 # the version you want
 npm ci
 npm run build:standalone
 npm run package                     # → dist/xiero-nexus-ai-<platform>-node<major>.zip
@@ -248,10 +303,12 @@ The scripts need bash, `zip` and `unzip`; on Windows use WSL.
 
 | File | Role |
 |---|---|
-| `.github/workflows/release.yml` | The pipeline: check, bundle, publish |
+| `.github/workflows/release.yml` | The pipeline: check, end-to-end, bundle, publish |
 | `scripts/release-info.mjs` | Reads version, tag and channel from `package.json`; extracts release notes |
 | `scripts/package-release.sh` | Turns a standalone build into a bundle zip |
 | `scripts/bundle-start.js` | Becomes `start.js` in the bundle |
-| `scripts/smoke-test-bundle.sh` | Starts a bundle and signs in to it |
+| `scripts/smoke-test-bundle.sh` | Starts a bundle, signs in to it, and stops it |
+| `scripts/e2e/` | The mock provider and the end-to-end checks (`npm run test:e2e`) |
+| `scripts/host/` | For a Pterodactyl node: the upgrade script, the disk report, and their tests |
 | `scripts/publish-release.sh` | Creates the GitHub releases |
 | `scripts/get-release.mjs` | Downloads a release by channel or version |
