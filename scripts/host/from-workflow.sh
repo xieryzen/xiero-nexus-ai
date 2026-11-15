@@ -117,7 +117,10 @@ if [ "${lines}" -gt 0 ]; then
       blob="$(jq -Rs '{content: ., encoding: "utf-8"}' "${sealed}" | gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --input - --jq .sha 2> /dev/null || true)"
     fi
     if [[ "${blob}" =~ ^[0-9a-f]{40,64}$ ]]; then
-      notice "Sealed output" "${blob}"
+      # One character at a time: the log hides whatever looks like a secret
+      # of the repository, and a short one (a port number) can be part of
+      # this name by chance. The reader takes the dots out again.
+      notice "Sealed output" "$(printf '%s' "${blob}" | sed 's/./&./g; s/\.$//')"
       echo "The output was sealed for the holder of the output key: scripts/host/sealed-output.sh read <key.pem> ${GITHUB_RUN_ID:-<run id>}"
     else
       printf '::warning title=Sealed output::%s\n' "The output could not be sealed and stored. It is still on the node."

@@ -90,7 +90,7 @@ case "${1:-}" in
     repo="${GITHUB_REPOSITORY:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
     blob=""
     for job in $(gh api "repos/${repo}/actions/runs/${run}/jobs" --jq '.jobs[].id'); do
-      blob="$(gh api "repos/${repo}/check-runs/${job}/annotations" --jq '.[] | select(.title == "Sealed output") | .message' | head -n 1)"
+      blob="$(gh api "repos/${repo}/check-runs/${job}/annotations" --jq '.[] | select(.title == "Sealed output") | .message' | head -n 1 | tr -d '.')"
       [ -z "${blob}" ] || break
     done
     [[ "${blob}" =~ ^[0-9a-f]{40,64}$ ]] || die "run ${run} sealed no output. It does so when it is started with an output_key."
