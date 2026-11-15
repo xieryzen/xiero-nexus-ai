@@ -1,0 +1,438 @@
+#!/usr/bin/env bash
+# Tests of workforce.py and workforce.sh, and of workforce.json itself, against
+# the app: the built app (npm run build) is started on a database of its own,
+# with the mock providers of the end-to-end tests in place of Anthropic and
+# Gemini, and the programs sign in to it the way they sign in on a node.
+#
+#   npm run build && bash scripts/host/test/workforce.sh
+#
+# The file that is checked is the committed workforce.json, with the names of
+# its models changed to the ones the mock has: every agent, team and workflow
+# of it goes through the app's own checks, and both workflows are run to the
+# end in a project with the limits a new project has.
+#
+# SHOW=1 prints what was said each time. APP_PORT, MOCK_PORT and CDN_PORT
+# choose other ports. Needs node, python3, curl; joining clips is checked
+# where there is an ffmpeg.
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+host="${here}/.."
+root="$(cd "${host}/../.." && pwd)"
+APP_PORT="${APP_PORT:-3110}"
+MOCK_PORT="${MOCK_PORT:-4020}"
+CDN_PORT="${CDN_PORT:-4021}"
+APP="http://127.0.0.1:${APP_PORT}"
+MOCK="http://127.0.0.1:${MOCK_PORT}"
+PASS="correct-horse-battery-staple"
+UUID="0a11ce00-1111-4222-8333-444455556666"
+
+annotate() { # error|notice TEXT
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    local text="${2//'%'/%25}"
+    text="${text//$'\n'/%0A}"
+    echo "::$1 title=The workforce from a file::${text}"
+  fi
+}
+for tool in node python3 curl; do
+  command -v "${tool}" > /dev/null 2>&1 || { echo "error: this test needs \"${tool}\"." >&2; annotate error "there is no ${tool} on this machine"; exit 1; }
+done
+if [ ! -f "${root}/.next/BUILD_ID" ]; then
+  echo "error: the app is not built. Run \"npm run build\" first." >&2
+  annotate error "the app is not built"
+  exit 1
+fi
+FFMPEG="$(command -v "${FFMPEG_PATH:-ffmpeg}" 2> /dev/null || true)"
+
+WORK="$(mktemp -d)"
+OUT="${WORK}/out.txt"
+VOLUMES="${WORK}/volumes"
+passed=0
+failed=0
+failures=()
+details=()
+SECTION=""
+ENDED=""
+PIDS=()
+
+cleanup() {
+  local code=$?
+  for pid in ${PIDS[@]+"${PIDS[@]}"}; do kill "${pid}" 2> /dev/null || true; done
+  wait 2> /dev/null || true
+  if [ -z "${ENDED}" ]; then
+    echo "The test stopped before its end (exit ${code})."
+    [ ! -f "${WORK}/app.log" ] || tail -n 15 "${WORK}/app.log"
+    annotate error "the test stopped before its end, in \"${SECTION}\""
+  fi
+  rm -rf "${WORK}"
+}
+trap cleanup EXIT
+
+section() {
+  SECTION="$1"
+  printf '\n%s\n' "$1"
+}
+ok() {
+  passed=$((passed + 1))
+  printf '  ok   %s\n' "$1"
+}
+bad() {
+  failed=$((failed + 1))
+  failures+=("$1")
+  details+=("${SECTION}: $1${2:+ [$2]}")
+  printf '  FAIL %s\n' "$1"
+  if [ -n "${2:-}" ]; then printf '         %s\n' "$2"; fi
+}
+check() { # NAME COMMAND...
+  local name="$1"
+  shift
+  if "$@" > /dev/null 2>&1; then ok "${name}"; else bad "${name}" "$*"; fi
+}
+check_not() {
+  local name="$1"
+  shift
+  if "$@" > /dev/null 2>&1; then bad "${name}" "$*"; else ok "${name}"; fi
+}
+is() { # NAME WANTED GOT
+  if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "wanted \"$2\", got \"$3\""; fi
+}
+says() { grep -qF -- "$1" "${OUT}"; }
+line() { grep -qE -- "$1" "${OUT}"; }
+
+# The app, as the administrator: the app thinks it is behind https, as on a
+# node, so its cookie is for https only and is handed over here by hand, the
+# way workforce.py does it.
+SESSION=""
+api() { # METHOD PATH [BODY]
+  curl -sS -m 300 -H "cookie: ${SESSION}" -H 'content-type: application/json' -X "$1" ${3:+-d "$3"} "${APP}$2"
+}
+# One value out of what the app has: a Python expression over "d", the parsed answer.
+ask() { # PATH EXPRESSION
+  api GET "$1" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(eval(sys.argv[1]))' "$2" 2> /dev/null || echo "?"
+}
+# Straight from the database, for what no page of the app shows.
+db() { # SQL
+  python3 -c 'import sqlite3, sys
+rows = sqlite3.connect(sys.argv[1]).execute(sys.argv[2]).fetchall()
+print("\n".join(" ".join(str(v) for v in row) for row in rows))' "${WORK}/nexus.db" "$1"
+}
+# How many agents, teams, workflows and models the app has.
+counts() {
+  printf '%s agents, %s teams, %s workflows, %s models' "$(ask /api/agents 'len(d["agents"])')" "$(ask /api/teams 'len(d["teams"])')" \
+    "$(ask /api/workflows 'len(d["workflows"])')" "$(ask /api/models 'len(d["models"])')"
+}
+
+# workforce.py against the app; what it said is in ${OUT}, how it ended in ${CODE}.
+CODE=0
+run() { # [NAME=VALUE...] -- OPTIONS
+  local settings=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    settings+=("$1")
+    shift
+  done
+  [ "$#" -eq 0 ] || shift
+  CODE=0
+  env NEXUS_PASSWORD="${PASS}" ${settings[@]+"${settings[@]}"} python3 "${host}/workforce.py" --url "${APP}" "$@" > "${OUT}" 2>&1 < /dev/null || CODE=$?
+  if [ "${SHOW:-}" = "1" ]; then sed 's/^/    | /' "${OUT}"; fi
+}
+
+# ── The file: the committed one, on the models of the mock ───────────────────
+
+FILE="${WORK}/workforce.json"
+python3 - "${host}/workforce.json" "${FILE}" << 'PYTHON_END'
+import json, sys
+
+real = json.load(open(sys.argv[1], encoding="utf-8"))
+models = real["models"]
+kind = lambda slot: models[slot].get("capabilities") or []
+chat = dict((slot, m) for slot, m in models.items() if m["model"].startswith("claude-") or (
+    "image_generation" not in kind(slot) and "tts" not in m["model"]))
+# Two Claude models and one Gemini model are what the mock has: the others take the place of one of these.
+stand_in = {}
+claude = [slot for slot, m in chat.items() if m["provider"] == "anthropic"]
+gemini = [slot for slot, m in chat.items() if m["provider"] == "gemini"]
+agents_use = [a[key] for a in real["agents"] for key in ("primary", "fallback") if a.get(key)]
+claude.sort(key=lambda slot: -agents_use.count(slot))
+gemini.sort(key=lambda slot: -agents_use.count(slot))
+local = {}
+for slot, name in zip(claude[:2], ["claude-mock-opus", "claude-mock-haiku"]):
+    local[slot] = dict(models[slot], model=name, displayName="Mock of " + models[slot]["model"])
+for slot in claude[2:]:
+    stand_in[slot] = claude[0]
+local[gemini[0]] = dict(models[gemini[0]], model="gemini-mock-flash")
+for slot in gemini[1:]:
+    stand_in[slot] = gemini[0]
+for slot, m in models.items():
+    if "image_generation" in kind(slot):
+        local[slot] = dict(m, model="gemini-mock-flash-image")
+    elif "tts" in m["model"]:
+        local[slot] = dict(m, model="gemini-mock-flash-preview-tts")
+real["models"] = local
+for agent in real["agents"]:
+    for key in ("primary", "fallback"):
+        if agent.get(key):
+            agent[key] = stand_in.get(agent[key], agent[key])
+json.dump(real, open(sys.argv[2], "w", encoding="utf-8"), indent=1)
+PYTHON_END
+count_of() { python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))[sys.argv[2]]))' "${FILE}" "$1"; }
+AGENTS="$(count_of agents)"
+TEAMS="$(count_of teams)"
+WORKFLOWS="$(count_of workflows)"
+MODELS="$(count_of models)"
+
+# ── The app and the providers ────────────────────────────────────────────────
+
+section "The app, with the mock providers"
+(cd "${root}" && exec node scripts/e2e/mock-provider.mjs "${MOCK_PORT}" "${CDN_PORT}") > "${WORK}/mock.log" 2>&1 &
+PIDS+=("$!")
+(cd "${root}" && exec env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DATABASE_PATH="${WORK}/nexus.db" MEDIA_PATH="${WORK}/media" \
+  SECRET_ENCRYPTION_KEY="$(head -c 32 /dev/urandom | base64)" APP_URL="https://nexus.example.test" COOKIE_SECURE="" \
+  ALLOW_PRIVATE_PROVIDER_HOSTS=127.0.0.1 BOOTSTRAP_ADMIN_EMAIL="boss@example.test" BOOTSTRAP_ADMIN_USERNAME="boss" BOOTSTRAP_ADMIN_PASSWORD="${PASS}" \
+  SANDBOX_URL="" SEARCH_PROVIDER="" FFMPEG_PATH="${FFMPEG:-${WORK}/no-ffmpeg-here}" RUN_CONCURRENCY="" NEXUS_WORKER="" \
+  node node_modules/next/dist/bin/next start -p "${APP_PORT}" -H 127.0.0.1) > "${WORK}/app.log" 2>&1 &
+PIDS+=("$!")
+for _ in $(seq 1 240); do
+  [ "$(curl -s -o /dev/null -m 2 -w '%{http_code}' "${APP}/api/health" 2> /dev/null)" = "200" ] && break
+  sleep 0.5
+done
+is "the app answers" "200" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "${APP}/api/health")"
+curl -sS -m 30 -o /dev/null -D "${WORK}/login.head" -H 'content-type: application/json' \
+  -d "{\"identifier\":\"boss\",\"password\":\"${PASS}\"}" "${APP}/api/auth/login" || true
+SESSION="$(tr -d '\r' < "${WORK}/login.head" | sed -n 's/^[Ss]et-[Cc]ookie: \(nexus_session=[^;]*\).*/\1/p' | head -n 1)"
+is "the administrator of the first start can sign in" "boss" "$(ask /api/account/me 'd["user"]["username"]')"
+api POST /api/providers "{\"name\":\"Gemini\",\"adapter\":\"gemini\",\"baseUrl\":\"${MOCK}/gemini/v1beta\",\"apiKey\":\"AIzaSyMOCK-0123456789-not-a-real-key\"}" > /dev/null
+api POST /api/providers "{\"name\":\"Claude\",\"adapter\":\"anthropic\",\"baseUrl\":\"${MOCK}/anthropic/v1\",\"apiKey\":\"sk-ant-mock-0123456789abcdefghijklmnopqrstuvwxyz\"}" > /dev/null
+is "it has the two providers and nothing else" "2 providers, 0 agents, 0 teams, 0 workflows, 0 models" "$(ask /api/providers 'len(d["providers"])') providers, $(counts)"
+SESSIONS="$(db 'select count(*) from sessions')"
+
+# ── Options and signing in ───────────────────────────────────────────────────
+
+section "Options, and signing in"
+run -- --help
+is "--help ends well" "0" "${CODE}"
+check "and names the options" says "--inventory-only"
+check_not "without the code of the program" says "import "
+run -- --no-such-option
+is "an unknown option is refused" "2" "${CODE}"
+run -- --file "${WORK}/not-there.json" --dry-run
+is "a file that is not there is refused" "2" "${CODE}"
+printf '{"agents":[{"name":"A","role":"B","primary":"nowhere"}]}' > "${WORK}/wrong.json"
+run -- --file "${WORK}/wrong.json" --dry-run
+is "a file that names a model it does not have is refused" "2" "${CODE}"
+run NEXUS_PASSWORD= -- --inventory-only
+is "without a password it does not start" "2" "${CODE}"
+tried="$(db "select count(*) from audit_logs where action like 'auth.login%'")"
+run NEXUS_PASSWORD=not-the-password -- --user boss --inventory-only
+is "a wrong password ends with 3" "3" "${CODE}"
+is "after one attempt" "$((tried + 1))" "$(db "select count(*) from audit_logs where action like 'auth.login%'")"
+check_not "the password is not in what it says" says "not-the-password"
+CODE=0
+NEXUS_PASSWORD="${PASS}" python3 "${host}/workforce.py" --url "http://127.0.0.1:$((APP_PORT + 7))" --inventory-only > "${OUT}" 2>&1 || CODE=$?
+is "an app that does not answer ends with 4" "4" "${CODE}"
+
+# ── Looking ──────────────────────────────────────────────────────────────────
+
+section "What the app has, and what the file would change"
+run -- --user boss --inventory-only
+is "the inventory ends well" "0" "${CODE}"
+check "it says who is signed in" says '"boss", an administrator'
+check "it names the providers" line 'Claude \(anthropic\)'
+check "and the models they list that are not in the app" line 'not in the app, image: gemini-mock-flash-image'
+check "and how long a provider is waited for" says "waits up to 60 s for an answer"
+run -- --user boss --file "${FILE}" --dry-run --test
+is "a dry run ends well" "0" "${CODE}"
+check "it says what it would add" line '\+ Agent "Manager" \(Project Manager\): add it'
+check "and that nothing was changed" says "Dry run: nothing was changed."
+check "and that no model was tried" says "no model was tried"
+check "a provider that differs is reported and left alone" line 'Provider "Claude" differs from the file .*--update changes it'
+is "nothing was changed" "0 agents, 0 teams, 0 workflows, 0 models" "$(counts)"
+is "no model was asked anything" "0" "$(db "select count(*) from usage_records")"
+is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
+check_not "the password is not in what it says" says "${PASS}"
+
+# ── Doing ────────────────────────────────────────────────────────────────────
+
+section "Making the workforce of the file"
+if [ -n "${FFMPEG}" ]; then MEDIA=(--test-media); else MEDIA=(); fi
+run -- --user boss --file "${FILE}" --yes --test ${MEDIA[@]+"${MEDIA[@]}"}
+is "it ends well" "0" "${CODE}"
+is "the app has what the file says" "${AGENTS} agents, ${TEAMS} teams, ${WORKFLOWS} workflows, ${MODELS} models" "$(counts)"
+check "it read that back" says "everything the file asks for is there"
+check "every chat model said its word" line 'ok +Mock of claude-[a-z0-9-]+ \("claude-[a-z]+"\) said "ok"'
+check_not "no check failed" says "FAILED"
+is "a Claude model has the capabilities of the file" "streaming structured_output text tool_calling vision" \
+  "$(ask /api/models '" ".join(sorted(c["capability"] for m in d["models"] if m["modelId"] == "claude-mock-opus" for c in m["capabilities"]))')"
+is "and its price" "True" "$(ask /api/models 'all(m["inputPricePerMTok"] and m["outputPricePerMTok"] and m["contextWindow"] == 1000000 for m in d["models"] if m["modelId"].startswith("claude-"))')"
+is "the image model makes images only" "image_generation" \
+  "$(ask /api/models '" ".join(sorted(c["capability"] for m in d["models"] if m["modelId"] == "gemini-mock-flash-image" for c in m["capabilities"]))')"
+is "every agent has a model with each provider" "${AGENTS}" \
+  "$(api GET /api/models > "${WORK}/models.json"; api GET /api/providers > "${WORK}/providers.json"; api GET /api/agents | python3 -c 'import json, sys
+agents = json.load(sys.stdin)["agents"]
+models = dict((m["id"], m["providerId"]) for m in json.load(open(sys.argv[1]))["models"])
+print(sum(1 for a in agents if a["primaryModelRowId"] and a["fallbackModelRowId"] and models[a["primaryModelRowId"]] != models[a["fallbackModelRowId"]]))' "${WORK}/models.json")"
+is "a tool that this server cannot run is left out" "0" "$(ask /api/agents 'sum(1 for a in d["agents"] for t in a["tools"] if t in ("run_command", "web_search"))')"
+is "the first 160 characters of every agent say what it is for" "${AGENTS}" "$(ask /api/agents 'sum(1 for a in d["agents"] if len(a["instructions"].split(chr(10))[0]) <= 160 and a["instructions"].split(chr(10))[0].endswith("."))')"
+is "the providers were left as they were" "60000 60000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"])')"
+if [ -n "${FFMPEG}" ]; then
+  check "a picture and a sentence were made and joined" says "joined into one video"
+  is "and deleted again" "0" "$(ask /api/media 'len(d["assets"])')"
+else
+  echo "  --   no ffmpeg here: the picture and the sentence were not tried"
+fi
+is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
+check "what it did is in the audit log, under the administrator's name" test "$(db "select count(*) from audit_logs a join users u on u.id = a.actor_user_id where u.username = 'boss' and a.action like 'agent.%'")" -ge "${AGENTS}"
+
+section "A second time"
+before="$(db 'select count(*) from audit_logs')"
+run -- --user boss --file "${FILE}" --yes
+is "it ends well" "0" "${CODE}"
+check "there is nothing to do" says "Nothing to do: the app has everything the file asks for."
+is "and nothing was added twice" "${AGENTS} agents, ${TEAMS} teams, ${WORKFLOWS} workflows, ${MODELS} models" "$(counts)"
+is "the only things in the audit log are its sign-in and sign-out" "$((before + 2))" "$(db 'select count(*) from audit_logs')"
+
+# ── What is there already ────────────────────────────────────────────────────
+
+section "What is there is left as it is, unless --update is given"
+QA_ID="$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "QA"][0]')"
+api PATCH "/api/agents/${QA_ID}" '{"instructions":"Changed by hand.","maxSteps":3}' > /dev/null
+api POST /api/agents '{"name":"Intern","role":"Helper","instructions":"Made by hand."}' > /dev/null
+run -- --user boss --file "${FILE}" --yes
+is "it ends well" "0" "${CODE}"
+check "an agent that was changed by hand is reported" line 'Agent "QA" is in the app and differs from the file \(.*instructions.*\)'
+is "and left as it is" "Changed by hand. 3" "$(ask "/api/agents" '[a["instructions"] + " " + str(a["maxSteps"]) for a in d["agents"] if a["name"] == "QA"][0]')"
+run -- --user boss --file "${FILE}" --yes --update
+is "with --update it ends well" "0" "${CODE}"
+check "it says what it changes" line 'done +Agent "QA": change it to what the file says'
+check_not "the agent is as the file says again" test "$(ask /api/agents '[a["instructions"] for a in d["agents"] if a["name"] == "QA"][0]')" = "Changed by hand."
+is "under the ID it had" "${QA_ID}" "$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "QA"][0]')"
+is "the providers are waited for as long as the file says" "300000 300000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"])')"
+is "and still have their keys" "True" "$(ask /api/providers 'all(p.get("credential") for p in d["providers"])')"
+is "an agent the file does not name is still there" "1" "$(ask /api/agents 'sum(1 for a in d["agents"] if a["name"] == "Intern")')"
+run -- --user boss --file "${FILE}" --yes --update --test-all
+is "every chat model of the app answers, through the providers as they are now" "0" "${CODE}"
+check_not "nothing is left to change" line '^  \+ '
+
+section "Only a part of the file"
+python3 - "${FILE}" "${WORK}/more.json" << 'PYTHON_END'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["agents"].append(dict(d["agents"][0], name="Second Manager"))
+d["teams"].append({"name": "Second Team", "description": "", "agents": ["Second Manager"]})
+json.dump(d, open(sys.argv[2], "w"))
+PYTHON_END
+run -- --user boss --file "${WORK}/more.json" --yes --only teams
+is "a team whose agent is not there yet is not made" "1" "${CODE}"
+check "it says which agent is missing" says "Second Manager"
+is "nothing was added" "$((AGENTS + 1)) agents, ${TEAMS} teams" "$(ask /api/agents 'len(d["agents"])') agents, $(ask /api/teams 'len(d["teams"])') teams"
+run -- --user boss --file "${WORK}/more.json" --yes --only agents,teams
+is "with the agents it ends well" "0" "${CODE}"
+is "both are there" "$((AGENTS + 2)) agents, $((TEAMS + 1)) teams" "$(ask /api/agents 'len(d["agents"])') agents, $(ask /api/teams 'len(d["teams"])') teams"
+
+# ── The workflows of the file, in a project ──────────────────────────────────
+
+section "The workflows of the file, run in a project with the limits of a new one"
+project() { # WORKFLOW TEAM [image and speech models]
+  python3 - "${WORK}" "$1" "$2" "${3:-}" << 'PYTHON_END'
+import json, sys
+work, workflow, team, media = sys.argv[1:5]
+models = dict((m["modelId"], m["id"]) for m in json.load(open(work + "/models.json"))["models"])
+teams = dict((t["name"], t["id"]) for t in json.load(open(work + "/teams.json"))["teams"])
+flows = dict((w["name"], w["id"]) for w in json.load(open(work + "/workflows.json"))["workflows"])
+body = {"title": workflow, "goal": "A small coffee cart is the best start of the day.", "managerModelRowId": models["gemini-mock-flash"],
+        "workflowId": flows[workflow], "teamId": teams[team]}
+if media:
+    body.update(imageModelRowId=models["gemini-mock-flash-image"], speechModelRowId=models["gemini-mock-flash-preview-tts"])
+print(json.dumps(body))
+PYTHON_END
+}
+api GET /api/models > "${WORK}/models.json"
+api GET /api/teams > "${WORK}/teams.json"
+api GET /api/workflows > "${WORK}/workflows.json"
+# How a run ended: the project's status, how many of its tasks succeeded, and who did each.
+ended() { # PROJECT
+  api GET /api/agents > "${WORK}/agents.json"
+  api GET "/api/projects/$1" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+agents = dict((a["id"], a["name"]) for a in json.load(open(sys.argv[1]))["agents"])
+tasks = d.get("tasks") or d.get("project", {}).get("tasks") or []
+print("%s; %d of %d tasks succeeded; %s" % (d["project"]["status"], sum(1 for t in tasks if t["status"] == "succeeded"), len(tasks),
+      ", ".join("%s: %s" % (t["title"], agents.get(t.get("agentId"), "nobody")) for t in tasks)))' "${WORK}/agents.json"
+}
+if [ -n "${FFMPEG}" ]; then
+  made="$(api POST /api/projects "$(project "Short Reels" "Short Reels Team" media)")"
+  REEL="$(printf '%s' "${made}" | python3 -c 'import json, sys; d = json.load(sys.stdin)["project"]; print(d["id"], d["maxTasks"], d["maxMedia"])' 2> /dev/null || echo "? ? ?")"
+  is "a new project allows 12 tasks and 10 generated files" "12 10" "${REEL#* }"
+  api POST "/api/projects/${REEL%% *}/run" > /dev/null
+  result="$(ended "${REEL%% *}")"
+  is "the reel is made: every step succeeds" "succeeded; 12 of 12 tasks succeeded" "${result%;*}"
+  check "the script is written by Short Reels, the pictures by the Designer, the caption by the Copywriter" \
+    grep -qE 'Script and storyboard: Short Reels, Scene 1 picture: Designer, Scene 1 voice-over: Short Reels, .*Cover image: Designer, Caption and hashtags: Copywriter' <<< "${result}"
+  is "the final cut is one video of the four pictures under their voice-overs" "ready video/mp4 True" \
+    "$(ask "/api/media?projectId=${REEL%% *}" '[" ".join([a["status"], a["mimeType"], str(a["durationSeconds"] >= 4)]) for a in d["assets"] if a["kind"] == "video"][0]')"
+  is "with five pictures and four voice-overs beside it" "5 4" \
+    "$(ask "/api/media?projectId=${REEL%% *}" 'str(sum(1 for a in d["assets"] if a["kind"] == "image")) + " " + str(sum(1 for a in d["assets"] if a["kind"] == "audio"))')"
+else
+  echo "  --   no ffmpeg here: the reel was not made"
+fi
+made="$(api POST /api/projects "$(project "Software delivery" "Software Team")")"
+DELIVERY="$(printf '%s' "${made}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["project"]["id"])' 2> /dev/null || echo "?")"
+api POST "/api/projects/${DELIVERY}/run" > /dev/null
+result="$(ended "${DELIVERY}")"
+is "the software is delivered: every step succeeds" "succeeded; 10 of 10 tasks succeeded" "${result%;*}"
+check "each step is done by the agent it names" \
+  grep -qE 'Product brief: CEO, Delivery plan: Manager, UX and UI design: Designer, API and data design: Backend, Backend implementation: Backend, Frontend implementation: Frontend, Test plan and automated tests: Tester, Security review: Security Engineer, QA review: QA, Release plan: DevOps' <<< "${result}"
+
+# ── On a node ────────────────────────────────────────────────────────────────
+
+section "workforce.sh finds the app of a server"
+mkdir -p "${VOLUMES}/${UUID}/xiero-nexus-ai" "${VOLUMES}/11111111-2222-4333-8444-555555555555"
+printf 'version=1.5.0\n' > "${VOLUMES}/${UUID}/xiero-nexus-ai/VERSION"
+: > "${VOLUMES}/${UUID}/xiero-nexus-ai/start.js"
+: > "${VOLUMES}/${UUID}/xiero-nexus-ai/server.js"
+printf '# The settings of the app\nAPP_URL=https://nexus.example.test\nBOOTSTRAP_ADMIN_USERNAME=boss\nBOOTSTRAP_ADMIN_PASSWORD="%s"\n' "${PASS}" > "${VOLUMES}/${UUID}/xiero-nexus-ai/.env"
+node_run() { # [NAME=VALUE...] -- OPTIONS
+  local settings=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    settings+=("$1")
+    shift
+  done
+  [ "$#" -eq 0 ] || shift
+  CODE=0
+  env -u NEXUS_PASSWORD PATH="${here}:${PATH}" FAKE_DOCKER_PORTS="0.0.0.0:${APP_PORT} :::${APP_PORT}" FAKE_SERVER_PORT="${APP_PORT}" ${settings[@]+"${settings[@]}"} \
+    bash "${host}/workforce.sh" --volumes "${VOLUMES}" "$@" > "${OUT}" 2>&1 < /dev/null || CODE=$?
+  if [ "${SHOW:-}" = "1" ]; then sed 's/^/    | /' "${OUT}"; fi
+}
+node_run -- --file "${FILE}" --dry-run
+is "the one server that has the app, by itself" "0" "${CODE}"
+check "signed in with the administrator and the password of its .env" says '"boss", an administrator'
+check "at the port Docker passes on" says "http://127.0.0.1:${APP_PORT}"
+check_not "the password is not in what it says" says "${PASS}"
+node_run -- --server 0a11ce00 --file "${FILE}" --inventory-only
+is "by the first characters of its ID" "0" "${CODE}"
+node_run -- --server deadbeef --file "${FILE}" --dry-run
+is "a server that is not there is refused" "2" "${CODE}"
+node_run -- --server 11111111 --file "${FILE}" --dry-run
+is "and one without the app" "2" "${CODE}"
+check "with the reason" says "has no Xiero Nexus AI bundle"
+node_run FAKE_DOCKER_PORTS= -- --file "${FILE}" --dry-run
+is "a server that is not running is refused" "2" "${CODE}"
+check "with what to do" says "--url http://127.0.0.1:<port>"
+sed -i 's/^BOOTSTRAP_ADMIN_PASSWORD=.*/BOOTSTRAP_ADMIN_PASSWORD=changed-in-the-app-since/' "${VOLUMES}/${UUID}/xiero-nexus-ai/.env"
+node_run -- --file "${FILE}" --dry-run
+is "a password in .env that is no longer right ends with 3" "3" "${CODE}"
+check "and says why that happens" says "stops being right when it is changed in the app"
+node_run NEXUS_PASSWORD="${PASS}" -- --file "${FILE}" --dry-run
+is "NEXUS_PASSWORD goes before the one in .env" "0" "${CODE}"
+is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
+
+ENDED=yes
+summary="${passed} passed, ${failed} failed (the workforce from a file$([ -n "${FFMPEG}" ] || printf ', without ffmpeg'))"
+printf '\n%s\n' "${summary}"
+if [ "${failed}" -gt 0 ]; then
+  printf '  ✗ %s\n' "${failures[@]}"
+  annotate error "${summary}"$'\n'"$(printf '%s\n' "${details[@]}")"
+  exit 1
+fi
+annotate notice "${summary}"

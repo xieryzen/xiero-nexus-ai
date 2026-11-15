@@ -18,6 +18,11 @@
 #                 (nginx-site.sh --dry-run). Changes nothing.
 #   site          the public address: a site in the node's nginx with a
 #                 certificate from Let's Encrypt (nginx-site.sh --yes).
+#   workforce-plan  what the app has (models, agents, teams, workflows) and
+#                 what workforce.json asks for that is not there yet
+#                 (workforce.sh --dry-run). Changes nothing.
+#   workforce     adds that to the app, signed in as its administrator
+#                 (workforce.sh --yes).
 #   last-log      what the last run on the node said and how it ended.
 #
 # Anything after "--" is given to the host script as it is:
@@ -72,7 +77,7 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,58p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -97,12 +102,13 @@ case "${ACTION}" in
   install-plan | install) REMOTE_SCRIPT="pterodactyl-install.sh" ;;
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
   site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
+  workforce-plan | workforce) REMOTE_SCRIPT="workforce.sh" ;;
   last-log) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, last-log." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -132,6 +138,10 @@ case "${ACTION}" in
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
     [ -z "${APP_URL}" ] || ARGS+=(--site "${APP_URL}")
     if [ "${ACTION}" = "site-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  workforce-plan | workforce)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    if [ "${ACTION}" = "workforce-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
     ;;
 esac
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})
@@ -318,7 +328,8 @@ find "${dir}" -maxdepth 1 -name 'run.*' -mmin +1440 -exec rm -rf {} + 2> /dev/nu
 run="$(mktemp -d "${dir}/run.XXXXXX")"
 if ! base64 -d << 'PAYLOAD' | tar -xzf - -C "${run}"; then
 REMOTE
-  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh | base64
+  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh \
+    workforce.sh workforce.py workforce.json | base64
   cat << 'REMOTE'
 PAYLOAD
   echo "error: the scripts did not arrive whole on the node."

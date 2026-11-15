@@ -9,6 +9,7 @@ not part of a release bundle and the app never runs them.
 | [`pterodactyl-install.sh`](pterodactyl-install.sh) | Put the app on a server that does not have it yet: the bundle, its `.env`, and the file the server starts. |
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
 | [`nginx-site.sh`](nginx-site.sh) | Give the app its public address: a site in the node's nginx with a certificate from Let's Encrypt, without touching the other sites. |
+| [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: models, agents, teams and workflows. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
 | [`over-ssh.sh`](over-ssh.sh) | Run one of them on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
@@ -18,7 +19,8 @@ from the source of Wings 1.12; no test here talks to a real Wings. Outside
 the tests they have been used on one real node (Debian 13, Docker 29, the
 Node.js egg of ptero-eggs, nginx 1.26), in November 2026: an installation,
 the check, the disk report, one upgrade, which installed the version that was
-there again, and the site in nginx with its certificate. **Going back by
+there again, the site in nginx with its certificate, and the workforce of
+`workforce.json`. **Going back by
 itself after a new version does not come up has only run against the
 stand-in**, and so has taking a site out of nginx again after a step failed.
 So do the dry run first and read the plan; the upgrade keeps a backup outside
@@ -27,7 +29,7 @@ the server's files, and `--restore` puts it back.
 Get them on the node:
 
 ```bash
-for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh node-check.sh; do
+for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh node-check.sh workforce.sh workforce.py workforce.json; do
   curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/${name}"
 done
 ```
@@ -316,6 +318,112 @@ Good to know:
   by certbot's own timer has not happened anywhere yet: the first one is due
   a month before the certificate ends.
 
+## The workforce: `workforce.sh` and `workforce.json`
+
+An app that was just installed has providers at most: no agents, no teams, no
+workflows. [`workforce.json`](workforce.json) says what the workforce of this
+repository's server is, and `workforce.sh` puts it into the running app, the
+way an administrator would by hand on its pages:
+
+```bash
+sudo bash workforce.sh --server 1a2b3c4d --dry-run     # what the app has, what would be added
+sudo bash workforce.sh --server 1a2b3c4d --yes --test  # add it, then ask each chat model for one word
+```
+
+`workforce.sh` finds the port the server's app answers on and the app's
+`.env`; [`workforce.py`](workforce.py) (Python 3.8 or newer, nothing else to
+install) signs in as the administrator of the first start, with the password
+in that `.env`, and works through the app's own API. So every change is in
+the app's audit log under that administrator's name, and nothing on the node
+is changed. The password is not printed and is on no command line; one
+sign-in is tried and no more; the session is ended before the program exits.
+The password in `.env` is the one of the first start: once it is changed in
+the app, give the current one as `NEXUS_PASSWORD`. An account with two-step
+sign-in cannot be used.
+
+It adds what is missing and leaves the rest:
+
+- A model the file names is taken into the app from the provider's list, with
+  the capabilities and prices of the file. One that is in the app already
+  gets the capabilities it lacks, and the prices and name it has none of.
+- An agent, a team or a workflow is added when none of that name is there.
+  One that is there and differs from the file is reported and left as it is;
+  `--update` changes it to what the file says, under the ID it has.
+- A provider is never added (the program has no keys). The file can say how
+  long the app waits for its answer; that too is changed with `--update` only.
+- Nothing is ever deleted. What the file does not name is not touched.
+- A tool the server cannot run (`run_command` without a sandbox runner,
+  `web_search` without a search service) is left out of an agent, and said.
+
+`--test` asks each chat model of the file for one word, and `--test-all`
+every chat model in the app; `--test-media` has the image model make one
+picture and the speech model say one sentence, joins them where the server
+has ffmpeg, and deletes the three files again. **These are requests the
+providers bill**, small ones. They are the only way to know that a model can
+be used: a provider lists models that its key may not call. A failed test
+ends the run with 1 and says what the provider answered; the workforce stays.
+
+Without the node, against any app that can be reached:
+
+```bash
+NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example.com --user admin --dry-run
+```
+
+### The file
+
+```json
+{
+  "providers": { "gemini": { "timeoutMs": 300000 } },
+  "models": {
+    "writer": { "provider": "anthropic", "model": "claude-sonnet-5-5", "displayName": "Claude Sonnet 5.5",
+                "capabilities": ["text", "tool_calling", "vision"], "contextWindow": 1000000,
+                "inputPricePerMTok": 2, "outputPricePerMTok": 10 },
+    "spare":  { "provider": "gemini", "model": "gemini-4-hydrogen" },
+    "pictures": { "provider": "gemini", "model": "gemini-nano-banana-2.1", "capabilities": ["image_generation"], "pricePerImage": 0.0336 }
+  },
+  "agents": [
+    { "name": "Copywriter", "role": "Copywriter", "primary": "writer", "fallback": "spare",
+      "tools": ["read_file", "write_file"], "maxSteps": 8, "memory": true,
+      "instructions": ["Writes captions and headlines in the brand's voice.", "", "How you work:", "- ..."] }
+  ],
+  "teams": [ { "name": "Content", "description": "...", "agents": ["Copywriter"] } ],
+  "workflows": [ { "name": "Post", "description": "...", "steps": [
+    { "title": "Caption", "role": "Copywriter", "objective": "...", "acceptanceCriteria": "..." },
+    { "title": "Picture", "role": "Copywriter", "kind": "image", "media": { "aspectRatio": "9:16" }, "dependsOn": [1], "objective": "..." }
+  ] } ]
+}
+```
+
+- **`providers`**: a provider by its name in the app, or by its kind
+  (`anthropic`, `gemini`, `openai-compatible`, `custom-http`) when the app has
+  one of that kind. `timeoutMs` is how long the app waits for an answer
+  (1,000 to 300,000). An agent's request is answered in one piece, so a model
+  that thinks before it writes needs more than the 60 seconds a new provider
+  has.
+- **`models`**: a name of your choice for each model, used by the agents
+  below. `provider` as above, `model` as the provider names it. Optional:
+  `capabilities`, `displayName`, `contextWindow`, and the prices
+  `inputPricePerMTok`, `outputPricePerMTok`, `pricePerImage`,
+  `pricePerSecond`, `pricePerMChars`. Give `capabilities` where the provider's
+  list does not say what a model is: Gemini lists its Nano Banana image
+  models like chat models, and Anthropic lists names only.
+- **`agents`**: `name`, `role`, `primary` and, optionally, `fallback` (model
+  names from above), `instructions` (text, or a list of lines), `tools`,
+  `maxSteps` (1 to 40), `memory`, `temperature`. The AI Manager sees the
+  first 160 characters of the instructions when it shares out tasks: say
+  there what the agent is for. A model that only makes images, speech or
+  embeddings cannot be an agent's model.
+- **`teams`**: `name`, `description`, `agents` (names).
+- **`workflows`**: `name`, `description`, `steps`. A step has `title`,
+  `objective`, `role` (the name of an agent, or a role), and optionally
+  `acceptanceCriteria`, `dependsOn` (numbers of earlier steps), `outputFile`,
+  `kind` (`text`, `image`, `video`, `audio`, `render`) and `media`
+  (`aspectRatio`, `durationSeconds`, `voice`, `subtitles`, `imageFrom`, ...),
+  as on the Workflows page. A new project allows 12 tasks and 10 generated
+  files: a workflow within that runs without changing a project's limits.
+
+What [`workforce.json`](workforce.json) holds is said in its `about`.
+
 ## Tidying up: `disk-report.sh`
 
 ```bash
@@ -394,6 +502,10 @@ bash scripts/host/over-ssh.sh install -- --move-aside
 # The public address (DEPLOY_APP_URL=https://nexus.example.com):
 bash scripts/host/over-ssh.sh site-plan    # changes nothing
 bash scripts/host/over-ssh.sh site
+
+# The workforce of workforce.json:
+bash scripts/host/over-ssh.sh workforce-plan            # changes nothing
+bash scripts/host/over-ssh.sh workforce -- --test
 ```
 
 `check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
@@ -432,7 +544,10 @@ Options for the host script go after `--`, for example
 The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml)
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
-`install-plan`, `install`, `site-plan`, `site`, `disk-report` or `last-log`.
+`install-plan`, `install`, `site-plan`, `site`, `workforce-plan`, `workforce`,
+`disk-report` or `last-log`. For the last two before those, the workflow runs
+the `workforce.json` of the branch it is started on; more options, such as
+`--update` or `--test`, go in **options**.
 
 It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 
@@ -493,6 +608,11 @@ bash scripts/host/test/over-ssh.sh
 # The public address (about a minute): starts the machine's nginx program in
 # a temporary folder, on ports 8480 and 8443. NGINX_BIN names another one.
 bash scripts/host/test/site.sh
+
+# The workforce (under a minute, after "npm run build"): starts the built app
+# with the mock providers of the end-to-end tests, puts the committed
+# workforce.json into it, and runs both of its workflows in a project.
+bash scripts/host/test/workforce.sh
 ```
 
 `test/fake-wings.mjs` stands in for Wings and for the server's container: it

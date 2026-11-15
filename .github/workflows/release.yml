@@ -86,6 +86,10 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run test:e2e
+      # scripts/host/workforce.json and the programs that put it into an app,
+      # against the app that was just built and the same mock providers.
+      - name: The workforce from a file
+        run: bash scripts/host/test/workforce.sh
         env:
           E2E_REQUIRE_FFMPEG: "1"
 

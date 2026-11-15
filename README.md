@@ -715,6 +715,11 @@ it adds the site to the node's nginx with a certificate from Let's Encrypt,
 passed on to the server's port, and leaves the other sites of that nginx as
 they are.
 
+A new installation has no agents. [`scripts/host/workforce.sh`](scripts/host#the-workforce-workforcesh-and-workforcejson)
+puts the workforce of a file into the running app (models with their prices,
+agents, teams and workflows), signed in as its administrator, and can ask
+each model for one word to see whether the provider's key may call it.
+
 The same folder has a read-only disk report for tidying up a node, and a way
 to run all of these without signing in to the node yourself: `over-ssh.sh`
 from another machine, or the workflow **Deploy to a Pterodactyl node** from

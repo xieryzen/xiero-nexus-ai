@@ -155,6 +155,7 @@ for word in "$@"; do printf 'arg=[%s]\n' "${word}"; done
 echo "MY_SETTING=[${MY_SETTING:-}]"
 echo "stdin=$(wc -c | tr -d ' ')"
 echo "who=$(id -un)"
+echo "beside=$(cd "$(dirname "$0")" && ls | tr '\n' ' ')"
 echo "a line for stderr" >&2
 if [ -n "${STAND_IN_SLEEP:-}" ]; then sleep "${STAND_IN_SLEEP}"; fi
 echo "the end"
@@ -164,6 +165,10 @@ cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/pterodactyl-install
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/disk-report.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/node-check.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/nginx-site.sh"
+cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/workforce.sh"
+# What workforce.sh works with travels with it.
+echo "# a stand-in" > "${WORK}/scripts/workforce.py"
+echo "{}" > "${WORK}/scripts/workforce.json"
 
 # An ssh that says which process it is, for the test that cuts a connection.
 REAL_SSH="$(command -v ssh)"
@@ -286,6 +291,12 @@ check "site-plan: runs nginx-site.sh" said "ran=nginx-site.sh"
 check "  with the server, the site and --dry-run" args_are --server 0a11ce00 --site https://site.example.com --dry-run
 DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote site -- --max-body 64m || true
 check "site: --yes, and what came after \"--\"" args_are --server 0a11ce00 --site https://site.example.com --yes --max-body 64m
+DEPLOY_SERVER=0a11ce00 remote workforce-plan || true
+check "workforce-plan: runs workforce.sh" said "ran=workforce.sh"
+check "  with the server and --dry-run" args_are --server 0a11ce00 --dry-run
+check "  its program and its file are next to it on the node" said "workforce.json workforce.py workforce.sh"
+DEPLOY_SERVER=0a11ce00 remote workforce -- --update --test || true
+check "workforce: --yes, and what came after \"--\"" args_are --server 0a11ce00 --yes --update --test
 DEPLOY_ENV=$'MY_SETTING=a value with spaces\n\nSTAND_IN_EXIT=0' remote plan || true
 check "DEPLOY_ENV reaches the script" said "MY_SETTING=[a value with spaces]"
 check "the script has nothing to read" said "stdin=0"
@@ -562,6 +573,10 @@ code=0
 workflow "{\"inputs\":{\"action\":\"site-plan\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "the plan for it ends well" 0 "${code}"
 check_not "  and does not ask the site: nothing was changed" logged "title=The site"
+code=0
+workflow "{\"inputs\":{\"action\":\"workforce\",\"options\":\"--update --test\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "the workforce of the app, from the workflow, ends well" 0 "${code}"
+check_not "  the site is not asked: it was not touched" logged "title=The site"
 code=0
 DEPLOY_ENV="STAND_IN_EXIT=3" workflow "{\"inputs\":{\"action\":\"upgrade\",\"app_url\":\"${SITE}\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "an upgrade that fails: the run fails with its code" 3 "${code}"
