@@ -5,7 +5,7 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.5.0] - 2026-11-15
 
 Runs that go on in the background, tools and memory for agents, a knowledge
 base, voice-over and joined videos, two more provider adapters, and an API.
