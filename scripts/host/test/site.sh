@@ -45,6 +45,9 @@ BUILT_WITH="$("${NGINX_BIN}" -V 2>&1)"
 if [ "$(printf '%s\n1.25.1\n' "${NGINX_VERSION}" | sort -V | head -n 1)" = "1.25.1" ]; then H2_ALONE=yes; else H2_ALONE=no; fi
 if [ -e /proc/net/if_inet6 ] && ip -6 addr show lo 2> /dev/null | grep -q '::1'; then HAS_V6=yes; else HAS_V6=no; fi
 if curl -V | grep -qw HTTP2; then CURL_H2=yes; else CURL_H2=no; fi
+# From 1.27.4, nginx keeps a certificate it has when the file is the same
+# file with the same time as before.
+if [ "$(printf '%s\n1.27.4\n' "${NGINX_VERSION}" | sort -V | head -n 1)" = "1.27.4" ]; then KEEPS_CERTIFICATES=yes; else KEEPS_CERTIFICATES=no; fi
 
 WORK="$(mktemp -d)"
 [ "$(id -u)" != "0" ] || chmod 755 "${WORK}"
@@ -231,13 +234,18 @@ if [ "${got}" != "${token}.made-up" ]; then
   echo "  Detail: Invalid response from http://${domain}/.well-known/acme-challenge/${token}"
   exit 1
 fi
+# Kept the way certbot keeps them: every certificate is a new set of files in
+# archive/, and the names in live/ are links that are switched over to it.
 live="${config}/live/${domain}"
-mkdir -p "${live}" "${config}/renewal"
-openssl req -new -newkey rsa:2048 -nodes -subj "/CN=${domain}" -keyout "${live}/privkey.pem" -out "${live}/request.pem" 2> /dev/null
-openssl x509 -req -in "${live}/request.pem" -CA "${FAKE_CA}/ca.pem" -CAkey "${FAKE_CA}/ca.key" -CAcreateserial -days "${FAKE_CERT_DAYS:-90}" \
-  -extfile <(printf 'subjectAltName=DNS:%s\n' "${FAKE_CERT_NAME:-${domain}}") -out "${live}/cert.pem" 2> /dev/null
-cat "${live}/cert.pem" "${FAKE_CA}/ca.pem" > "${live}/fullchain.pem"
-rm -f "${live}/request.pem"
+archive="${config}/archive/${domain}"
+mkdir -p "${live}" "${archive}" "${config}/renewal"
+number="$(($(find "${archive}" -name 'cert*.pem' | wc -l) + 1))"
+openssl req -new -newkey rsa:2048 -nodes -subj "/CN=${domain}" -keyout "${archive}/privkey${number}.pem" -out "${archive}/request.pem" 2> /dev/null
+openssl x509 -req -in "${archive}/request.pem" -CA "${FAKE_CA}/ca.pem" -CAkey "${FAKE_CA}/ca.key" -CAcreateserial -days "${FAKE_CERT_DAYS:-90}" \
+  -extfile <(printf 'subjectAltName=DNS:%s\n' "${FAKE_CERT_NAME:-${domain}}") -out "${archive}/cert${number}.pem" 2> /dev/null
+cat "${archive}/cert${number}.pem" "${FAKE_CA}/ca.pem" > "${archive}/fullchain${number}.pem"
+rm -f "${archive}/request.pem"
+for part in privkey cert fullchain; do ln -sfn "../../archive/${domain}/${part}${number}.pem" "${live}/${part}.pem"; done
 printf 'authenticator = webroot\nrenew_hook = %s\n[[webroot_map]]\n%s = %s\n' "${hook}" "${domain}" "${webroot}" > "${config}/renewal/${domain}.conf"
 # The hook, as certbot runs it once a certificate was made.
 if [ -n "${hook}" ]; then sh -c "${hook}"; fi
@@ -370,7 +378,8 @@ machine() { # NAME INCLUDES...
     printf '}\n'
   } > "${PREFIX}/nginx.conf"
   # The nginx of the test: the real program, with this folder as its own. A
-  # test can make it refuse a configuration with a site in it, or warn.
+  # test can make it refuse a configuration with a site in it, warn about
+  # one, or not hear that it is to read its configuration again.
   cat > "${STUB}/nginx" << EOF
 #!/usr/bin/env bash
 if [ "\${1:-}" = "-t" ] && grep -RqsF -- "\${FAKE_NGINX_REFUSES:-nothing-is-refused}" "${PREFIX}/sites-enabled" "${PREFIX}/conf.d"; then
@@ -381,6 +390,7 @@ fi
 if [ "\${1:-}" = "-t" ] && grep -RqsF -- "\${FAKE_NGINX_WARNS:-nothing-is-warned-about}" "${PREFIX}/sites-enabled" "${PREFIX}/conf.d"; then
   echo 'nginx: [warn] a warning made up by the test in ${PREFIX}/nginx.conf:1' >&2
 fi
+if [ "\${1:-}" = "-s" ] && [ -n "\${FAKE_NGINX_IGNORES_RELOAD:-}" ]; then exit 0; fi
 exec "${NGINX_BIN}" -p "${PREFIX}/" -c "${PREFIX}/nginx.conf" -e "${PREFIX}/logs/error.log" "\$@"
 EOF
   chmod +x "${STUB}/nginx"
@@ -416,6 +426,19 @@ run() {
   if [ -n "${SHOW:-}" ]; then sed 's/^/      | /' "${OUT}"; fi
 }
 asked_for_certificates() { grep -c '^certonly' "${CALLS}" 2> /dev/null || true; }
+# A certificate from a folder, put where certbot keeps the site's, the way
+# certbot does it: new files, and the names in live/ switched over to them.
+put_in_place() { # FOLDER with privkey.pem, cert.pem and fullchain.pem
+  local archive="${LE}/archive/nexus.test" live="${LE}/live/nexus.test" number part
+  mkdir -p "${archive}" "${live}"
+  number="$(($(find "${archive}" -name 'cert*.pem' | wc -l) + 1))"
+  for part in privkey cert fullchain; do
+    cp "$1/${part}.pem" "${archive}/${part}${number}.pem"
+    ln -sfn "../../archive/nexus.test/${part}${number}.pem" "${live}/${part}.pem"
+  done
+}
+# certbot's certificates gone; its account stays.
+forget_certificates() { rm -rf "${LE}/live" "${LE}/archive" "${LE}/renewal"; }
 
 # A visitor: every name of the test leads to this machine.
 visit() { # curl options and a URL
@@ -589,6 +612,12 @@ is "nginx warns about something new with the file: it ends badly" "1" "${CODE}"
 check "  saying what the warning is" says "a warning made up by the test"
 check "  nginx was never reloaded" not_reloaded
 failed_safely "  no file is left, and the other sites answer as before"
+run FAKE_NGINX_IGNORES_RELOAD=1 XIERO_NGINX_RELOAD_WAIT=2 -- --site nexus.test --upstream "${APP}" --agree-tos --yes
+is "nginx does not take the configuration it was told to take: it ends badly" "1" "${CODE}"
+check "  saying so" says "2 seconds later it still answers with the processes it had: it did not take it"
+check "  and that the file is taken out again" says "is taken out again."
+failed_safely "  no file is left, and the other sites answer as before"
+note
 run FAKE_CERTBOT_FAILS=1 -- --site nexus.test --upstream "${APP}" --agree-tos --yes
 is "certbot gets no certificate: it ends badly" "1" "${CODE}"
 check "  with what certbot said" says "Detail: made up by the test"
@@ -601,7 +630,7 @@ is "certbot comes back with a certificate for another name: it ends badly" "1" "
 check "  saying so" says "certbot ended well, but there is no certificate for nexus.test"
 eventually gives 301 "http://nexus.test:${HTTP_PORT}/" || true
 failed_safely "  no file is left, and the other sites answer as before"
-rm -rf "${LE}/live/nexus.test" "${LE}/renewal/nexus.test.conf"
+forget_certificates
 run FAKE_CERTBOT_THEN="curl -s -o /dev/null ${APP}/__down" -- --site nexus.test --upstream "${APP}" --agree-tos --yes
 is "the app stops answering before the site is done: it ends badly" "1" "${CODE}"
 check "  saying what the site gave" says "${SITE}/api/health, asked on this machine, did not give 200 but: 500"
@@ -753,10 +782,37 @@ check "  and the run warns" says "warning: certbot has no renewal settings for t
 cp "${WORK}/renewal.kept" "${LE}/renewal/nexus.test.conf"
 check "none of this changed a file of nginx" unchanged
 
+begin "A certificate whose file was overwritten in place"
+# Another certificate in the same files, which still carry the time they had.
+certificate nexus.test "${WORK}/other"
+cp "$(readlink -f "${LE}/live/nexus.test/cert.pem")" "${WORK}/had.pem"
+for part in privkey cert fullchain; do
+  file="$(readlink -f "${LE}/live/nexus.test/${part}.pem")"
+  was="$(stat -c %Y "${file}")"
+  cat "${WORK}/other/${part}.pem" > "${file}"
+  touch -d "@${was}" "${file}"
+done
+run -- --site nexus.test --upstream "${APP}" --max-body 8m --yes
+is "it ends well" "0" "${CODE}"
+if [ "${KEEPS_CERTIFICATES}" = "yes" ]; then
+  check "this nginx goes on showing the certificate it had" shows nexus.test "${WORK}/had.pem"
+  check "the script says that it is not the one in the file" says "warning: that certificate is not the one in ${LE}/live/nexus.test/fullchain.pem: nginx kept the one it had"
+  check "  and how to have nginx take it" says "touch ${LE}/live/nexus.test/fullchain.pem ${LE}/live/nexus.test/privkey.pem && ${STUB}/nginx -s reload"
+  check_not "  and does not say until when the one in the file runs as if it were shown" says "the certificate is accepted: it is for nexus.test and runs until"
+  touch "${LE}/live/nexus.test/fullchain.pem" "${LE}/live/nexus.test/privkey.pem"
+  reload_nginx
+  check "doing that makes nginx show the one in the file" eventually shows nexus.test "${WORK}/other/cert.pem"
+else
+  check "this nginx reads the file again: it shows the new one" eventually shows nexus.test "${WORK}/other/cert.pem"
+  check_not "and the script has nothing to warn about" says "is not the one in"
+  check "  it says until when the certificate runs" says "the certificate is accepted: it is for nexus.test and runs until"
+fi
+
 begin "A certificate that ends soon"
 certificate nexus.test "${WORK}/short" 12
-cp "${WORK}/short/fullchain.pem" "${WORK}/short/privkey.pem" "${LE}/live/nexus.test/"
+put_in_place "${WORK}/short"
 reload_nginx
+check "(the site shows the one that ends soon)" eventually shows nexus.test "${WORK}/short/cert.pem"
 run -- --site nexus.test --upstream "${APP}" --dry-run
 check "the plan says that it ends soon" says "the one that is there ends soon or is for another name: certbot 4.0.0 asks Let's Encrypt for one"
 check "  with the account that is there" says "with the account certbot has on this machine"
@@ -819,7 +875,7 @@ check "an ID that is none is refused" says "is not a server ID"
 # ═════════════════════════════════════════════════════════════════════════════
 
 begin "Where nginx would read the new file first"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine first "sites-enabled/*"
 neighbour panel.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl"
 start_nginx
@@ -842,7 +898,7 @@ check_not "taking it out removes the file" test -e "${PREFIX}/sites-available/zz
 check_not "  and the link" test -L "${PREFIX}/sites-enabled/zz-nexus.test.conf"
 
 begin "Where a site says that it is the one for unknown names"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine named "sites-enabled/*"
 neighbour panel.test sites-available "${HTTP_PORT} default_server" "${HTTPS_PORT} ssl default_server"
 start_nginx
@@ -853,7 +909,7 @@ check "the file keeps its name: the order does not matter there" test -f "${PREF
 is "the other site and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get panel.test)"
 
 begin "Where no name would put the file after the others"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine last "sites-enabled/*"
 neighbour zzz.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl" "zzz.conf"
 start_nginx
@@ -872,7 +928,7 @@ is "the other site and a name nobody has get what they got before" "${OTHERS_BEF
 # ═════════════════════════════════════════════════════════════════════════════
 
 begin "An nginx that keeps its sites in conf.d"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine confd "conf.d/*.conf"
 rmdir "${PREFIX}/sites-available" "${PREFIX}/sites-enabled"
 neighbour agent.test conf.d "${HTTP_PORT}" "${HTTPS_PORT} ssl"
@@ -897,7 +953,7 @@ check "saying that it cannot tell where the sites are" says "includes neither si
 check "nothing was changed" unchanged
 
 begin "Sites that listen on one address by itself"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine addresses "sites-enabled/*"
 neighbour agent.test sites-available "127.0.0.1:${HTTP_PORT}" "127.0.0.1:${HTTPS_PORT} ssl"
 neighbour panel.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl"
@@ -911,7 +967,7 @@ is "the site answers" '{"status":"ok"}' "$(visit "${SITE}/api/health")"
 is "the other sites and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get agent.test panel.test)"
 
 begin "Sites that have HTTP/2 as a word of \"listen\""
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine http2 "sites-enabled/*"
 neighbour agent.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl http2"
 neighbour panel.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl http2"
@@ -927,7 +983,7 @@ if [ "${CURL_H2}" = "yes" ]; then is "HTTP/2 is offered" "2" "$(visit -o /dev/nu
 is "the other sites and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get agent.test panel.test)"
 
 begin "An nginx that warns about every certificate already"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 FOR_ALL_SITES="ssl_stapling on;" machine stapling "sites-enabled/*"
 neighbour agent.test sites-available "${HTTP_PORT}" "${HTTPS_PORT} ssl"
 start_nginx
@@ -941,7 +997,7 @@ is "the site answers" '{"status":"ok"}' "$(visit "${SITE}/api/health")"
 is "the other site and a name nobody has get what they got before" "${OTHERS_BEFORE}" "$(others_get agent.test)"
 
 begin "An nginx that has no sites yet"
-rm -rf "${LE}/live" "${LE}/renewal"
+forget_certificates
 machine empty "conf.d/*.conf" "sites-enabled/*"
 start_nginx
 run -- --site nexus.test --upstream "${APP}" --yes

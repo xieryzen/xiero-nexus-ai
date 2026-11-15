@@ -298,6 +298,12 @@ Good to know:
   reach the app, close that port to the outside: in the firewall (for a port
   Docker passes on, the rule belongs in the `DOCKER-USER` chain), or with an
   allocation on `127.0.0.1` in the panel. This script does neither.
+- A certificate that is there already and good is used as it is, whoever
+  put it there. nginx 1.27.4 and newer keep a certificate across a reload
+  when its file is the same file with the same time as before; certbot
+  writes new files, so its certificates are taken. At the end the script
+  compares what nginx shows with what is in the file, and says so, and what
+  to do, when they are not the same.
 - It works with nginx only, and with the layouts `sites-enabled` and
   `conf.d`. With Apache, Caddy or a tunnel in front, set the site up there
   and pass on the same things.
@@ -537,13 +543,16 @@ panel has them, and looks at what a visitor gets. The app is a few lines of
 Node.js. certbot is a stand-in that does what certbot and Let's Encrypt do
 between them: it asks the site for a file it has put into the folder for
 that, and only then makes a certificate, signed by an authority made up for
-the test. It covers the dry run; everything the script refuses; each step
-failing, with nginx as it was afterwards, also when the script is stopped in
-the middle; two runs at once; what reaches the app (the name, https, the
-visitor's address whatever the visitor claims); an answer that arrives bit by
-bit; uploads; a second run; a certificate that ends soon; `--remove`; and for
-every case that the other sites, and a name no site has, get exactly what
-they got before: the same answer, the same certificate, the same protocol.
+the test, and kept the way certbot keeps certificates: new files each time,
+behind links. It covers the dry run; everything the script refuses; each
+step failing, with nginx as it was afterwards, also when nginx does not take
+the configuration or the script is stopped in the middle; two runs at once;
+what reaches the app (the name, https, the visitor's address whatever the
+visitor claims); an answer that arrives bit by bit; uploads; a second run; a
+certificate that ends soon, and one whose file was overwritten in place;
+`--remove`; and for every case that the other sites, and a name no site has,
+get exactly what they got before: the same answer, the same certificate, the
+same protocol.
 It does so for nginx laid out the Debian way and with `conf.d`, for sites
 that listen on one address, with and without `default_server`, with HTTP/2
 either way, and where nginx would read the new file first. It has passed
