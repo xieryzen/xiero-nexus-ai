@@ -1,0 +1,107 @@
+name: Deploy to a Pterodactyl node
+
+# Runs one of the host scripts (scripts/host) on the machine that runs Wings,
+# over SSH. Started by hand only: Actions, "Deploy to a Pterodactyl node",
+# "Run workflow".
+#
+#   check        sign in and say what is on the node; changes nothing
+#   plan         what an upgrade would do; changes nothing
+#   upgrade      the upgrade: backup, new version, and back to the old one by
+#                itself when the new one does not answer
+#   disk-report  what takes the space on the node; changes nothing
+#   last-log     what the last run on the node said and how it ended
+#
+# Secrets (Settings, Secrets and variables, Actions):
+#
+#   VPS_HOST            host name or address of the node
+#   VPS_USER            who to sign in as: root (the default), or a user with
+#                       sudo without a password
+#   VPS_PASSWORD        that user's password, or
+#   VPS_SSH_KEY         a private key, which is the better of the two
+#   VPS_PORT            the SSH port, when it is not 22
+#   VPS_HOST_KEY        the node's host key ("ssh-ed25519 AAAA..."), so that
+#                       nobody else can answer in its place. A run without it
+#                       accepts the key the node shows and puts it in the output.
+#   PTERODACTYL_SERVER  the server's UUID or its first 8 characters
+#   APP_URL             the public address of the site
+#
+# The last three can also be typed when a run is started; what is typed is
+# hidden in the log.
+#
+# Anyone can read the log of a public repository, so what the node says is not
+# printed here unless the repository is private or "show_output" is ticked.
+# It stays on the node, and with an "output_key" a sealed copy comes back:
+# scripts/host/README.md, "From GitHub Actions".
+#
+# Nothing here is tried against a real node by CI: scripts/host/test/over-ssh.sh
+# runs these scripts against an SSH server on the machine of the test.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do on the node
+        type: choice
+        options: [check, plan, upgrade, disk-report, last-log]
+        default: plan
+        required: true
+      server:
+        description: Server ID (default, the secret PTERODACTYL_SERVER)
+        type: string
+        required: false
+      app_url:
+        description: Public address of the site (default, the secret APP_URL)
+        type: string
+        required: false
+      version:
+        description: Version to install
+        type: string
+        default: latest
+        required: false
+      options:
+        description: More options for the host script, such as --with-media
+        type: string
+        required: false
+      host_key:
+        description: Host key of the node (default, the secret VPS_HOST_KEY)
+        type: string
+        required: false
+      output_key:
+        description: Public key to seal the node's output with (sealed-output.sh keygen)
+        type: string
+        required: false
+      show_output:
+        description: Print what the node says in this log, which anyone can read when the repository is public
+        type: boolean
+        default: false
+
+permissions:
+  # For the sealed output only: it is stored as an object of the repository
+  # that no branch contains. Nothing is committed or pushed.
+  contents: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  node:
+    name: On the node
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Run on the node
+        env:
+          DEPLOY_HOST: ${{ secrets.VPS_HOST }}
+          DEPLOY_PORT: ${{ secrets.VPS_PORT }}
+          DEPLOY_USER: ${{ secrets.VPS_USER }}
+          DEPLOY_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+          DEPLOY_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          SECRET_HOST_KEY: ${{ secrets.VPS_HOST_KEY }}
+          SECRET_SERVER: ${{ secrets.PTERODACTYL_SERVER }}
+          SECRET_APP_URL: ${{ secrets.APP_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/host/from-workflow.sh

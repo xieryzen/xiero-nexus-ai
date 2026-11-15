@@ -233,6 +233,14 @@ is backed up where, and how to go back are in
 against a stand-in for Wings, not on a real node: do the dry run first and
 read the plan.
 
+**Without signing in to the node yourself:** the workflow *Deploy to a
+Pterodactyl node* (Actions, started by hand) runs the same script over SSH,
+with the node's address and a password or key from the repository's secrets.
+Run `plan` first, then `upgrade`. `scripts/host/over-ssh.sh` does the same
+from any machine. Both are described in
+[scripts/host/README.md](scripts/host/README.md#from-somewhere-else-over-sshsh),
+with what they keep out of a public log.
+
 **Through the panel only:** stop the server, back up or archive
 `xiero-nexus-ai/data`, delete `xiero-nexus-ai/.next` and
 `xiero-nexus-ai/node_modules`, upload the new zip, unarchive it, start the
