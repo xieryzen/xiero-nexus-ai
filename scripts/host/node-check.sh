@@ -17,6 +17,10 @@
 #                        configuration, else /var/lib/pterodactyl/volumes).
 #   --wings-config <f>   The Wings configuration (default /etc/pterodactyl/config.yml).
 #   --backup-dir <dir>   Where the upgrade keeps its backups (default /root/xiero-nexus-backups).
+#   --site <url>         Also say how the site's public address is answered on
+#                        this machine: where the name leads, what listens on
+#                        ports 80 and 443, whether a web server's configuration
+#                        names the site, and what a request gets.
 #   --try-image          Also find out what the server's image holds and whether
 #                        its startup command can run a file. For that, and only
 #                        with this option, a container is started from the image
@@ -31,6 +35,7 @@ VOLUMES=""
 WINGS_CONFIG="/etc/pterodactyl/config.yml"
 BACKUP_ROOT="/root/xiero-nexus-backups"
 TRY_IMAGE=false
+SITE=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -39,8 +44,9 @@ while [ "$#" -gt 0 ]; do
     --wings-config) WINGS_CONFIG="${2:-}"; shift 2 ;;
     --backup-dir) BACKUP_ROOT="${2:-}"; shift 2 ;;
     --try-image) TRY_IMAGE=true; shift ;;
+    --site) SITE="${2:-}"; shift 2 ;;
     -h | --help)
-      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -349,4 +355,72 @@ else
 fi
 if [ -d "${BACKUP_ROOT}" ]; then backup_at="${BACKUP_ROOT}"; else backup_at="$(dirname "${BACKUP_ROOT}")"; fi
 row "Room" "$(human "$(free_kb "${VOLUME}")") free for the server's files, $(human "$(free_kb "${backup_at}")") free for backups"
+
+# ── The site ─────────────────────────────────────────────────────────────────
+
+# What a request gets: the status, or why there was none.
+ask() { # URL [curl options]
+  local url="$1" said
+  shift
+  said="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$@" "${url}" 2>&1 | tr '\n' ' ')"
+  case "${said}" in
+    [0-9][0-9][0-9]\ | [0-9][0-9][0-9]) if [ "${said%% *}" = "000" ]; then echo "no answer"; else echo "HTTP ${said%% *}"; fi ;;
+    *) echo "no answer: $(printf '%s' "${said}" | sed -e 's/^curl: ([0-9]*) //' -e 's/ *000 *$//' | cut -c 1-140)" ;;
+  esac
+}
+
+# The port of this machine that leads to the server, and whether the app answers there.
+PORTS=""
+if have docker; then
+  PORTS="$(docker inspect -f '{{range $port, $to := .NetworkSettings.Ports}}{{range $to}}{{.HostIp}}:{{.HostPort}} {{end}}{{end}}' "${UUID}" 2> /dev/null | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' || true)"
+fi
+if [ -n "${PORTS}" ]; then
+  first="${PORTS%% *}"
+  local_port="${first##*:}"
+  row "Port" "this machine passes ${PORTS% }on to the server"
+  if have curl; then more "the app at http://127.0.0.1:${local_port}/api/health: $(ask "http://127.0.0.1:${local_port}/api/health")"; fi
+fi
+
+if [ -n "${SITE}" ] && have curl; then
+  site_host="${SITE#*://}"
+  site_host="${site_host%%[:/]*}"
+  head_line "The site ${SITE}"
+  leads_to="$(getent ahosts "${site_host}" 2> /dev/null | awk '{ print $1 }' | sort -u | tr '\n' ' ')"
+  own="$( (hostname -I 2> /dev/null || true) | tr ' ' '\n' | grep -v '^$')"
+  if [ -z "${leads_to}" ]; then
+    row "Name" "${site_host} does not lead anywhere (no DNS record that this machine can see)"
+  else
+    here_too="not an address of this machine: something else stands in front, or the name leads elsewhere"
+    for address in ${leads_to}; do
+      if printf '%s\n' "${own}" | grep -qxF "${address}"; then here_too="an address of this machine"; fi
+    done
+    row "Name" "${site_host} leads to ${leads_to% }, ${here_too}"
+  fi
+  if have ss; then
+    for port in 80 443; do
+      who="$(ss -ltnpH "sport = :${port}" 2> /dev/null | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ')"
+      if [ -n "${who}" ]; then row "Port ${port}" "${who% }listens"; else row "Port ${port}" "nothing listens"; fi
+    done
+  fi
+  named=""
+  for folder in /etc/nginx /etc/apache2 /etc/httpd /etc/caddy; do
+    [ -d "${folder}" ] || continue
+    while IFS= read -r file; do
+      named="${named}${file} "
+      row "Web server" "${file} names ${site_host}"
+      grep -E '^[[:space:]]*(proxy_pass|reverse_proxy|ProxyPass|listen|root)[[:space:]]' "${file}" 2> /dev/null | sed 's/^[[:space:]]*//' | sort -u | head -n 8 | while IFS= read -r line; do more "${line}"; done
+    done < <(grep -rlsF -- "${site_host}" "${folder}" 2> /dev/null | head -n 5)
+  done
+  [ -n "${named}" ] || row "Web server" "no configuration of nginx, Apache or Caddy on this machine names ${site_host}"
+  row "Asked" "${SITE}/api/health: $(ask "${SITE}/api/health")"
+  case "${SITE}" in
+    https://*)
+      more "http://${site_host}/api/health: $(ask "http://${site_host}/api/health")"
+      if have openssl; then
+        cert_names="$(echo | timeout 10 openssl s_client -connect "${site_host}:443" -servername "${site_host}" 2> /dev/null | openssl x509 -noout -ext subjectAltName 2> /dev/null | grep -o 'DNS:[^,]*' | sed 's/DNS://' | head -n 6 | tr '\n' ' ')"
+        if [ -n "${cert_names}" ]; then more "the certificate shown for it is for: ${cert_names% }"; fi
+      fi
+      ;;
+  esac
+fi
 exit 0

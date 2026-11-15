@@ -109,6 +109,7 @@ ARGS=()
 case "${ACTION}" in
   check)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    [ -z "${APP_URL}" ] || ARGS+=(--site "${APP_URL}")
     ;;
   plan | upgrade)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")

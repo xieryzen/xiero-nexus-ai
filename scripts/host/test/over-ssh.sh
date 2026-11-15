@@ -275,8 +275,8 @@ check "  with the server, the address, --dry-run and what came after \"--\"" arg
 DEPLOY_SERVER=0a11ce00 DEPLOY_VERSION=1.5.0 remote install || true
 check "install: --yes" args_are --server 0a11ce00 --version 1.5.0 --yes
 DEPLOY_SERVER=0a11ce00 DEPLOY_APP_URL="https://site.example.com" remote check || true
-check "check: runs node-check.sh with the server only" said "ran=node-check.sh"
-check "  " args_are --server 0a11ce00
+check "check: runs node-check.sh with the server and the site" said "ran=node-check.sh"
+check "  " args_are --server 0a11ce00 --site https://site.example.com
 DEPLOY_SERVER=0a11ce00 remote disk-report || true
 check "disk-report: runs disk-report.sh with no options" said "count=0"
 check "  " said "ran=disk-report.sh"
