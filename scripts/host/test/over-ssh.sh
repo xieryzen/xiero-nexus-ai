@@ -386,6 +386,12 @@ code=0
 DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=0b0b0b0b DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases" remote check -- "${node_options[@]}" || code=$?
 expect_exit "a server without the app: still ends well" 0 "${code}"
 check "  says that it holds no bundle" said "none: no folder here has"
+check_not "without --try-image no container is started" said "ts-node --esm"
+DEPLOY_SCRIPTS="${host}" DEPLOY_SERVER=0a11ce00 DEPLOY_ENV="PATH=${here}:${PATH}"$'\n'"XIERO_RELEASES_URL=http://127.0.0.1:1/releases"$'\n'"FAKE_DOCKER_LOG=${WORK}/docker.asked" remote check -- "${node_options[@]}" --try-image || true
+check "with --try-image: says what the image holds" said "Node.js v22.0.0, npm 10.0.0"
+check "  and whether its ts-node runs a main file" said "ts-node --esm runs a JavaScript file"
+check "  the container had no network, was not pulled, and is removed" grep -qE '^run --rm --pull never --network none ' "${WORK}/docker.asked"
+check_not "  and none of the server's files" grep -qE '^run .*(-v|--volume|--mount) ' "${WORK}/docker.asked"
 # A server that holds the app as source code, cloned and never run.
 source_server="${WORK}/host/volumes/50c0de00-1111-4222-8333-444455556666"
 mkdir -p "${source_server}/src" "${source_server}/node_modules"

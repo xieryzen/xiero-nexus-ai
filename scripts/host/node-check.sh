@@ -7,8 +7,9 @@
 # It says what the machine runs, whether Wings and Docker are there, whether
 # the releases on GitHub can be reached from here, which servers hold a Xiero
 # Nexus AI bundle, and for one server what is in its files, which image it
-# runs in and how much room is left. Of .env it shows which names are set and
-# no value; it shows no token and no file's content.
+# runs in, what it runs when it starts and how much room is left. Of .env it
+# shows which names are set and no value; it shows no token and no file's
+# content.
 #
 #   --server <id>        The server to look at: its UUID or the first 8
 #                        characters. Without it: the one server that has the app.
@@ -16,6 +17,11 @@
 #                        configuration, else /var/lib/pterodactyl/volumes).
 #   --wings-config <f>   The Wings configuration (default /etc/pterodactyl/config.yml).
 #   --backup-dir <dir>   Where the upgrade keeps its backups (default /root/xiero-nexus-backups).
+#   --try-image          Also find out what the server's image holds and whether
+#                        its startup command can run a file. For that, and only
+#                        with this option, a container is started from the image
+#                        for a moment: without network, without any server's
+#                        files, and removed again. The image is not pulled.
 set -uo pipefail
 
 REPO="${XIERO_REPO:-xieryzen/xiero-nexus-ai}"
@@ -24,6 +30,7 @@ SERVER=""
 VOLUMES=""
 WINGS_CONFIG="/etc/pterodactyl/config.yml"
 BACKUP_ROOT="/root/xiero-nexus-backups"
+TRY_IMAGE=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,8 +38,9 @@ while [ "$#" -gt 0 ]; do
     --volumes) VOLUMES="${2:-}"; shift 2 ;;
     --wings-config) WINGS_CONFIG="${2:-}"; shift 2 ;;
     --backup-dir) BACKUP_ROOT="${2:-}"; shift 2 ;;
+    --try-image) TRY_IMAGE=true; shift ;;
     -h | --help)
-      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -299,6 +307,34 @@ if have docker; then
         others="${others}${name} "
       done <<< "${container_env}"
       [ -z "${others}" ] || more "also set, values not shown: ${others% }"
+    fi
+    if [ "${TRY_IMAGE}" = true ]; then
+      # A container of its own, for a moment: no network, none of the server's
+      # files, little memory, and gone afterwards. It says what the image
+      # holds, and tries what the common Node.js egg does with a main file.
+      tried="$(timeout 90 docker run --rm --pull never --network none --memory 512m --pids-limit 200 --entrypoint /bin/sh "${image}" -c '
+        echo "Node.js $(node -v 2> /dev/null || echo "not found"), npm $(npm -v 2> /dev/null || echo "not found")"
+        if [ -e /etc/alpine-release ]; then echo "Alpine $(cat /etc/alpine-release)"; else echo "$(sed -n "s/^PRETTY_NAME=//p" /etc/os-release 2> /dev/null | tr -d \")"; fi
+        if command -v ffmpeg > /dev/null 2>&1; then echo "$(ffmpeg -version 2> /dev/null | head -n 1 | cut -d " " -f 1-3)"; else echo "no ffmpeg"; fi
+        if command -v ts-node > /dev/null 2>&1; then
+          echo "ts-node $(ts-node --version 2>&1 | head -n 1), TypeScript $(tsc --version 2>&1 | head -n 1)"
+          mkdir -p /tmp/try && cd /tmp/try && echo "console.log(\"a-main-file-ran\")" > index.js
+          if ts-node --esm /tmp/try/index.js > out.txt 2>&1 && grep -q a-main-file-ran out.txt; then
+            echo "ts-node --esm runs a JavaScript file"
+          else
+            echo "ts-node --esm does NOT run a JavaScript file: $(grep -m 1 -E "Error|error" out.txt | cut -c 1-160)"
+          fi
+        else
+          echo "no ts-node"
+        fi
+        if node -e "process.exit(0)" 2> /dev/null; then echo "node runs a JavaScript file"; fi
+      ' 2>&1 || true)"
+      if [ -n "${tried}" ]; then
+        row "Image" "$(printf '%s\n' "${tried}" | head -n 1)"
+        printf '%s\n' "${tried}" | tail -n +2 | while IFS= read -r line; do more "${line}"; done
+      else
+        row "Image" "a container could not be started from it"
+      fi
     fi
   fi
 fi

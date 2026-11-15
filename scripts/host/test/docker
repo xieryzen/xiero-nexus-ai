@@ -11,6 +11,14 @@ case "${1:-}" in
     if [ "${2:-}" = "--format" ]; then echo "${FAKE_DOCKER_ROOT:-/var/lib/docker}"; fi
     ;;
   version) echo "27.3.1" ;;
+  run)
+    # What a container of the image would say; the test only wants to know
+    # that it was asked for without network and without a pull.
+    case " $* " in
+      *" --rm --pull never --network none "*) printf 'Node.js v22.0.0, npm 10.0.0\nDebian GNU/Linux 13 (trixie)\nffmpeg version 7.1\nts-node v10.9.2, TypeScript Version 5.9.3\nts-node --esm runs a JavaScript file\nnode runs a JavaScript file\n' ;;
+      *) exit 1 ;;
+    esac
+    ;;
   inspect)
     if [ "${2:-}" = "-f" ]; then
       case "${3}" in
