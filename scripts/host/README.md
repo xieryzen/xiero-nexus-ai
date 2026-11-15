@@ -6,23 +6,102 @@ not part of a release bundle and the app never runs them.
 
 | Script | What it is for |
 |---|---|
+| [`pterodactyl-install.sh`](pterodactyl-install.sh) | Put the app on a server that does not have it yet: the bundle, its `.env`, and the file the server starts. |
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
 | [`over-ssh.sh`](over-ssh.sh) | Run one of the three on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
 
-The first two were tested on a made-up Wings host (see [Tests](#tests)),
-written from the source of Wings 1.12. **Neither has been run against a real
-Wings by this repository's tests.** The upgrade script is built for that: it
-has a dry run, asks before it starts, keeps a backup outside the server's
-files, and puts the old version back when the new one does not answer.
+All of them are tested on a made-up Wings host (see [Tests](#tests)), written
+from the source of Wings 1.12; no test here talks to a real Wings. Outside
+the tests, the installer, the start it ends with, the check and the disk
+report have been used on one real node (Debian 13, Docker 29, the Node.js egg
+of ptero-eggs), in November 2026. **The upgrade itself has not yet run
+against a real Wings.** It is built for that: it has a dry run, asks before it
+starts, keeps a backup outside the server's files, and puts the old version
+back when the new one does not answer.
 
 Get them on the node:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/pterodactyl-upgrade.sh
-curl -fsSLO https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/disk-report.sh
+for name in pterodactyl-install.sh pterodactyl-upgrade.sh disk-report.sh node-check.sh; do
+  curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/${name}"
+done
 ```
+
+## Installing: `pterodactyl-install.sh`
+
+For a server that was made in the panel and does not run the app yet. Stop
+the server first.
+
+```bash
+# 1. See what it would do. Nothing is changed.
+sudo bash pterodactyl-install.sh --server 1a2b3c4d --app-url https://site.example.com --dry-run
+
+# 2. Do it.
+sudo bash pterodactyl-install.sh --server 1a2b3c4d --app-url https://site.example.com
+```
+
+What happens, in this order:
+
+1. It finds the server's files, and stops when a bundle is there already
+   (that is a case for the upgrade script) or when the server is running.
+2. It downloads the bundle for the Node.js of the server's image and checks
+   it against the release's SHA-256 list.
+3. It shows the plan and asks.
+4. It unpacks the bundle into `xiero-nexus-ai/` and writes its `.env`: a new
+   `SECRET_ENCRYPTION_KEY`, a password for the first administrator, the
+   site's address, and what was given with `--set`.
+5. When the server's startup command runs a file that is not there, it
+   writes that file (see below).
+6. It gives the new files to the owner of the server's files, starts the
+   server through Wings and waits until the app answers. The start is done by
+   `pterodactyl-upgrade.sh --start`, which has to be in the same folder;
+   without it, start the server in the panel.
+
+Nothing is deleted and nothing that is there is overwritten. When it is
+stopped in the middle, it puts the server's files back as they were.
+
+- **The first administrator.** Sign in as `admin`. The password was made on
+  the node and is in `xiero-nexus-ai/.env`, in the line
+  `BOOTSTRAP_ADMIN_PASSWORD`; the script does not print it. Change it after
+  signing in. Without that line the first account that registers in the
+  browser becomes the administrator, which on a public address can be anyone.
+- **The file the server starts.** The common Node.js egg does not run a
+  command of your choice: it runs one file, `index.js` unless the panel's
+  *Startup* tab says otherwise, and it runs that file through `ts-node`. The
+  installer therefore writes that file. It is a few lines that start
+  `xiero-nexus-ai/start.js` with plain Node.js in a process of its own, pass
+  a stop on to it once, and end with its exit code. A file of that name that
+  is there already is left alone; then set the startup file to
+  `xiero-nexus-ai/start.js` in the panel. `--launcher <file>` and
+  `--no-launcher` decide otherwise.
+- **A checkout of the source code.** Given the repository's address, that egg
+  clones the source code into the server and runs `npm install` and
+  `git pull` there at every start, as long as `package.json` and `.git` are
+  at the top of the server's files. That takes minutes and does nothing for
+  a bundle. `--move-aside` moves all of it into one folder of the server,
+  `source-checkout-<date>/`, which can be deleted afterwards. It only does
+  so for a checkout that never ran (no `.env`, no `data/`); one that has run
+  holds a key and a database, and the script stops.
+- **`ts-node` and TypeScript 7.** `ts-node` 10 does not start with
+  TypeScript 7 next to it. An image that holds both cannot start any main
+  file through that egg, this one included. `node-check.sh --try-image` says
+  whether a server's image is such a one. The way out is a startup command
+  without `ts-node`, which an administrator of the panel can set for the
+  server: `/usr/local/bin/node /home/container/xiero-nexus-ai/start.js`.
+
+| Option | |
+|---|---|
+| `--app-url <url>` | The public address of the site (`APP_URL`). |
+| `--set KEY=VALUE` | Another line for `.env`. Can be repeated. |
+| `--version <v>`, `--zip <file>` | Which bundle: a version instead of the latest, or a file instead of a download. |
+| `--node <20\|22>` | The Node.js of the server's image, for a server that has never been started. |
+| `--move-aside` | Move a checkout of the source code that never ran into one folder. |
+| `--launcher <file>`, `--no-launcher` | Where the start file is written, or that none is. |
+| `--no-start` | Leave the server stopped. |
+| `--dry-run`, `--yes` | Show the plan and stop; do not ask. |
+| `--volumes`, `--wings-config`, `--check-url`, `--health-timeout`, `--backup-dir` | As for the upgrade script. |
 
 ## Upgrading: `pterodactyl-upgrade.sh`
 
@@ -74,6 +153,7 @@ it.
 | `--with-media` | Also copy the generated images and videos to the backup. An upgrade does not change them, and copying can take long. |
 | `--backup-dir <dir>` | Keep backups somewhere else. |
 | `--restore <folder>` | Do not upgrade: put the program files and the database of that backup folder back. |
+| `--start` | Do not upgrade: start the server through Wings and wait until the app answers; show its console when it does not. |
 | `--dry-run` | Show the plan and stop. |
 | `--yes` | Do not ask. |
 | `--power manual` | Do not talk to Wings. You stop the server in the panel first, and start it afterwards. |
@@ -190,7 +270,20 @@ bash scripts/host/over-ssh.sh check        # what is on the node; changes nothin
 bash scripts/host/over-ssh.sh plan         # what an upgrade would do; changes nothing
 bash scripts/host/over-ssh.sh upgrade      # the upgrade, without asking again
 bash scripts/host/over-ssh.sh disk-report > report.txt
+
+# For a server that does not have the app yet:
+bash scripts/host/over-ssh.sh install-plan -- --move-aside   # changes nothing
+bash scripts/host/over-ssh.sh install -- --move-aside
 ```
+
+`check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
+Docker are there, which servers hold the app, what is in the named server's
+files, what that server runs when it starts, and how the site's address is
+answered on the machine: where the name leads, what listens on ports 80 and
+443, whether a web server's configuration names the site. It shows no
+setting's value. With `-- --try-image` it also starts a container from the
+server's image for a moment, without network and without any server's files,
+to say which Node.js, ffmpeg and `ts-node` the image holds.
 
 Options for the host script go after `--`, for example
 `over-ssh.sh upgrade -- --with-media`. All settings come from the environment
@@ -219,7 +312,7 @@ Options for the host script go after `--`, for example
 The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml)
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
-`disk-report` or `last-log`.
+`install-plan`, `install`, `disk-report` or `last-log`.
 
 It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 
@@ -266,6 +359,10 @@ folder:
 # The upgrade: two real bundles, an old one and a new one (about 4 minutes).
 OLD_ZIP=old.zip NEW_ZIP=new.zip bash scripts/host/test/run.sh
 
+# The first installation: one real bundle (about a minute). With TS_NODE the
+# server is also started the way the common Node.js egg starts it.
+NEW_ZIP=new.zip TS_NODE=/path/to/ts-node bash scripts/host/test/install.sh
+
 # The report (about half a minute).
 bash scripts/host/test/report.sh
 
@@ -306,8 +403,18 @@ real over SSH, on made-up folders. As root
 for the time of the test to sign in with a password, as the workflow does,
 and to run through `sudo`.
 
-CI runs all three on every push: the report test, the SSH test as a plain
-user and as root, and the upgrade test from the released bundle of v1.4.0 to
-the bundle it has just built, for Node.js 20 and 22. That is still a made-up
-host and an SSH server on the runner itself: no test here signs in to a real
-node or talks to a real Wings.
+The installation test sets the made-up server up as the common Node.js egg
+leaves one: the source code at the top of its files, and a startup that runs
+`index.js`. It covers the dry run, what the installer refuses, the move of
+the source code, the `.env` it writes and that neither the key nor the
+password is printed, the start through Wings, signing in as the first
+administrator, a stop that reaches the app once, `--start` of the upgrade
+script, and a server that does not come up. With `TS_NODE` it does all of
+that a second time with the server's file started through `ts-node --esm`.
+
+CI runs all four on every push: the report test, the SSH test as a plain
+user and as root, and for Node.js 20 and 22 the upgrade test from the
+released bundle of v1.4.0 to the bundle it has just built and the
+installation test of that bundle, with `ts-node` 10.9 and TypeScript 6.0.
+That is still a made-up host and an SSH server on the runner itself: no test
+here signs in to a real node or talks to a real Wings.

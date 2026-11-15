@@ -243,7 +243,8 @@ if [ -n "${APP_DIR}" ]; then
   more "in ${APP_DIR}, owned by $(stat -c '%U:%G (%u:%g)' "${APP_DIR}" 2> /dev/null)"
   if [ -f "${APP_DIR}/.env" ]; then
     set_names="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=.*/\2/p' "${APP_DIR}/.env" 2> /dev/null | sort -u | tr '\n' ' ')"
-    row ".env" "sets: ${set_names:+${set_names% }}${set_names:-nothing}"
+    set_names="${set_names% }"
+    row ".env" "sets: ${set_names:-nothing}"
   else
     row ".env" "missing: the app does not start without SECRET_ENCRYPTION_KEY"
   fi
@@ -377,7 +378,7 @@ fi
 if [ -n "${PORTS}" ]; then
   first="${PORTS%% *}"
   local_port="${first##*:}"
-  row "Port" "this machine passes ${PORTS% }on to the server"
+  row "Port" "this machine passes ${PORTS% } on to the server"
   if have curl; then more "the app at http://127.0.0.1:${local_port}/api/health: $(ask "http://127.0.0.1:${local_port}/api/health")"; fi
 fi
 
@@ -399,7 +400,7 @@ if [ -n "${SITE}" ] && have curl; then
   if have ss; then
     for port in 80 443; do
       who="$(ss -ltnpH "sport = :${port}" 2> /dev/null | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | sort -u | tr '\n' ' ')"
-      if [ -n "${who}" ]; then row "Port ${port}" "${who% }listens"; else row "Port ${port}" "nothing listens"; fi
+      if [ -n "${who}" ]; then row "Port ${port}" "${who% } listens"; else row "Port ${port}" "nothing listens"; fi
     done
   fi
   named=""
