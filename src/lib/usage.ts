@@ -2,6 +2,7 @@ import "server-only";
 import { db } from "@/db";
 import { usageRecords, type Model } from "@/db/schema";
 import { currentApiKeyId } from "./request-context";
+import { chargeTokens } from "./tokens";
 
 /** Rough token estimate when a provider does not report usage (~4 chars/token). */
 export function estimateTokens(text: string): number {
@@ -68,5 +69,16 @@ export function recordUsage(input: RecordUsageInput): void {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[xiero-nexus] usage write failed:", err);
+  }
+  // The account's balance: what its work used. A check of a model is the
+  // installation's own, and a request that failed delivered nothing.
+  const kind = input.kind ?? "chat";
+  if (input.userId && kind !== "test" && (input.status ?? "ok") === "ok") {
+    try {
+      chargeTokens(input.userId, prompt + completion);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[xiero-nexus] token count failed:", err);
+    }
   }
 }

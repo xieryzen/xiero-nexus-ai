@@ -55,6 +55,11 @@ export const users = sqliteTable(
     twoFactorConfirmedAt: integer("two_factor_confirmed_at", {
       mode: "timestamp_ms",
     }),
+    // The tokens of the account (v1.8, src/lib/token-rules.ts): how many it
+    // may use in all, which an owner sets, and how many it has used. The
+    // count only grows; an owner is not held to the limit.
+    tokenLimit: integer("token_limit").notNull().default(10_000_000),
+    tokensUsed: integer("tokens_used").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

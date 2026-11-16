@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Wordmark, DesignedByXiero } from "@/components/brand";
 import { Icon, type IconName } from "@/components/icons";
 import { apiFetch } from "@/lib/client";
 import { APP_VERSION, BUILD_SHA, releaseChannel } from "@/lib/version";
-import { cn } from "@/components/ui";
+import { Alert, cn } from "@/components/ui";
 import { NotificationBell } from "./notification-bell";
 import { isAdminRole, roleLabel, type Role } from "@/lib/roles";
+import { formatTokens, shortTokens } from "@/lib/token-rules";
 
 interface NavItem {
   href: string;
@@ -58,6 +59,8 @@ export interface ShellUser {
   username: string;
   email: string;
   role: Role;
+  /** What is left of the account's tokens. Null: it is not limited. */
+  tokensLeft: number | null;
 }
 
 export function AppShell({
@@ -71,6 +74,24 @@ export function AppShell({
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
+
+  // What is left of the account's tokens: as the server said when the page
+  // was loaded, and asked again on every page, since work uses them up.
+  const [tokensLeft, setTokensLeft] = useState(user.tokensLeft);
+  useEffect(() => setTokensLeft(user.tokensLeft), [user.tokensLeft]);
+  useEffect(() => {
+    let alive = true;
+    apiFetch<{ user: { tokensLeft: number | null } }>("/api/account/me")
+      .then((res) => {
+        if (alive) setTokensLeft(res.user.tokensLeft);
+      })
+      .catch(() => {
+        /* the number of the page load stays */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [pathname]);
 
   const isActive = (href: string) =>
     href === "/dashboard" ? pathname === href : pathname.startsWith(href);
@@ -176,7 +197,22 @@ export function AppShell({
           <NotificationBell />
           <div className="text-right leading-tight">
             <p className="text-sm font-medium text-ink">{user.username}</p>
-            <p className="text-xs text-ink-3">{roleLabel(user.role)}</p>
+            <p className="text-xs text-ink-3">
+              {roleLabel(user.role)}
+              {tokensLeft !== null && (
+                <>
+                  {" · "}
+                  <Link
+                    href="/dashboard/settings"
+                    id="tokens-left"
+                    title={`${formatTokens(tokensLeft)} tokens left`}
+                    className={tokensLeft === 0 ? "text-danger hover:underline" : "hover:text-ink hover:underline"}
+                  >
+                    {tokensLeft === 0 ? "no tokens left" : `${shortTokens(tokensLeft)} tokens left`}
+                  </Link>
+                </>
+              )}
+            </p>
           </div>
           <div
             className="grid h-9 w-9 place-items-center rounded-full border border-line bg-surface-2 text-sm font-semibold text-signal"
@@ -197,7 +233,17 @@ export function AppShell({
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-content px-4 py-7 sm:px-6">{children}</main>
+      <main className="mx-auto w-full max-w-content px-4 py-7 sm:px-6">
+        {tokensLeft === 0 && (
+          <div className="mb-6" id="tokens-used-up">
+            <Alert tone="danger">
+              Your token balance is used up. New work is refused until an owner of this installation raises your
+              limit. What you made is still here.
+            </Alert>
+          </div>
+        )}
+        {children}
+      </main>
     </div>
   );
 }

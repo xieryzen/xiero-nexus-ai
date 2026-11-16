@@ -14,6 +14,7 @@ import {
 } from "@/db/schema";
 import { AppError, Errors, sanitizeUpstreamError } from "../errors";
 import { gatewayEmbed, resolveEmbeddingModel } from "../gateway";
+import { assertTokensLeft } from "../tokens";
 import { computeCost, estimateTokens, recordUsage } from "../usage";
 import {
   bytesToVector,
@@ -429,6 +430,9 @@ export async function embedDocument(documentId: string, userId: string | null): 
         .limit(EMBED_BATCH)
         .all();
       if (batch.length === 0) break;
+      // With no tokens left the rest is not embedded: the document says why,
+      // is found by its words, and is embedded when it is tried again.
+      assertTokensLeft(userId);
       const texts = batch.map((c) => c.content);
       const result = await gatewayEmbed(resolved, texts);
       db.transaction((tx) => {
@@ -543,6 +547,8 @@ async function meaningRanking(
     if (!modelRowId) continue;
     if (!vectors.has(modelRowId)) {
       try {
+        // With no tokens left the question is not embedded: its words still find things.
+        assertTokensLeft(userId);
         const resolved = resolveEmbeddingModel(modelRowId);
         const started = Date.now();
         const result = await gatewayEmbed(resolved, [question]);

@@ -7,7 +7,8 @@ import { audit } from "./audit";
 import { hashPassword, verifyPassword } from "./crypto";
 import { Errors } from "./errors";
 import { rateLimit } from "./ratelimit";
-import { ROLES, whyNot } from "./roles";
+import { ROLES, isOwnerRole, whyNot } from "./roles";
+import { MAX_TOKEN_LIMIT, defaultTokenLimit } from "./token-rules";
 import { destroyAllSessions } from "./session";
 import { emailSchema, passwordSchema, usernameSchema } from "./validation";
 
@@ -24,12 +25,21 @@ export interface RequestMeta {
 
 // ─── What may be sent ────────────────────────────────────────────────────────
 
+/** The most tokens an account may use in all: a whole number from 0. */
+export const tokenLimitSchema = z
+  .number({ invalid_type_error: "The token limit is a whole number" })
+  .int("The token limit is a whole number")
+  .min(0, "The token limit cannot be below 0")
+  .max(MAX_TOKEN_LIMIT, `The token limit can be at most ${MAX_TOKEN_LIMIT}`);
+
 export const createAccountSchema = z.object({
   username: usernameSchema,
   email: emailSchema,
   password: passwordSchema,
   /** Without one, an ordinary user. */
   role: z.enum(ROLES).optional(),
+  /** Without one, what every new account gets (DEFAULT_TOKEN_LIMIT). */
+  tokenLimit: tokenLimitSchema.optional(),
 });
 
 export const updateAccountSchema = z
@@ -39,6 +49,8 @@ export const updateAccountSchema = z
     password: passwordSchema.optional(),
     role: z.enum(ROLES).optional(),
     status: z.enum(["active", "disabled"]).optional(),
+    /** The most tokens the account may use in all. What it has used stays counted. */
+    tokenLimit: tokenLimitSchema.optional(),
     /** Switch two-factor sign-in off for someone who lost their authenticator. */
     resetTwoFactor: z.literal(true).optional(),
     /** End every session of the account. */
@@ -111,6 +123,7 @@ export function createAccount(actor: User, input: CreateAccountInput, meta: Requ
       passwordHash: hashPassword(input.password),
       role: input.role ?? "user",
       status: "active",
+      tokenLimit: input.tokenLimit ?? defaultTokenLimit(),
     })
     .returning()
     .get();
@@ -119,7 +132,7 @@ export function createAccount(actor: User, input: CreateAccountInput, meta: Requ
     action: "admin.user.create",
     targetType: "user",
     targetId: created.id,
-    metadata: { username: created.username, role: created.role },
+    metadata: { username: created.username, role: created.role, tokenLimit: created.tokenLimit },
     ...meta,
   });
   return created;
@@ -137,6 +150,9 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
   }
   const refused = whyNot(actor, target, { role: input.role, status: input.status }, otherActiveOwners(target.id));
   if (refused) throw Errors.badRequest(refused);
+  if (input.tokenLimit !== undefined && isOwnerRole(input.role ?? target.role)) {
+    throw Errors.badRequest("An owner is not held to a token limit: there is none to set");
+  }
 
   const username = input.username !== undefined && input.username !== target.username ? input.username : undefined;
   const email = input.email !== undefined && input.email !== target.email ? input.email : undefined;
@@ -163,6 +179,10 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
   if (input.password !== undefined) {
     patch.passwordHash = hashPassword(input.password);
     changed.push("password");
+  }
+  if (input.tokenLimit !== undefined && input.tokenLimit !== target.tokenLimit) {
+    patch.tokenLimit = input.tokenLimit;
+    changed.push("tokenLimit");
   }
   const resetTwoFactor = input.resetTwoFactor === true && (target.twoFactorEnabled || target.twoFactorSecret !== null);
   if (resetTwoFactor) {
@@ -195,6 +215,10 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
       ...(patch.email !== undefined ? { email: patch.email } : {}),
       ...(patch.role !== undefined ? { role: patch.role } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
+      // The limit before and after, and what the account had used by then.
+      ...(patch.tokenLimit !== undefined
+        ? { tokenLimit: patch.tokenLimit, tokenLimitBefore: target.tokenLimit, tokensUsed: target.tokensUsed }
+        : {}),
       ...(signedOut ? { signedOut: true } : {}),
     },
     ...meta,

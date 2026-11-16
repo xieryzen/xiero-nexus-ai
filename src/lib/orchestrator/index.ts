@@ -57,6 +57,8 @@ import {
 import { notify } from "@/lib/notifications";
 import { publish } from "@/lib/run-bus";
 import { runtime } from "@/lib/runtime";
+import { taskTokenBudget, usedUpMessage } from "@/lib/token-rules";
+import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 import { allFiles, ensureWorkspace, latestExecSummary, listFiles, upsertFile } from "@/lib/workspace";
 import { validateWorkspacePath } from "@/lib/workspace/paths";
@@ -378,6 +380,12 @@ export async function executeRun(runId: string): Promise<void> {
     } catch (e) {
       return fail(e instanceof AppError ? e.message : "The project cannot run");
     }
+    // A run is refused at its start when the account has no tokens left. This
+    // is for one whose last tokens went between the start and now.
+    {
+      const account = tokenAccount(project.createdBy);
+      if (account && !hasTokensLeft(project.createdBy)) return fail(usedUpMessage(account, "project"));
+    }
     const { manager, routable, workforce } = setup;
 
     // The models creative tasks generate with, when the project has them.
@@ -698,6 +706,14 @@ export async function executeRun(runId: string): Promise<void> {
       if (isGeneratedKind(t.kind)) mediaStarted++;
     }
     const budget = project.maxTokens;
+    // The run spends the tokens of the account the project belongs to. When
+    // they are used up, the tasks that have not started are not started, and
+    // nothing more is asked of a model for this run.
+    const accountSpent = (): boolean => !hasTokensLeft(project.createdBy);
+    const accountSpentMessage = (): string => {
+      const account = tokenAccount(project.createdBy);
+      return account ? usedUpMessage(account, "project") : "The token balance of the project's account is used up.";
+    };
     const maxParallel = Math.max(1, project.maxParallel);
 
     /** The newest media asset a task produced, if any. */
@@ -1064,7 +1080,10 @@ export async function executeRun(runId: string): Promise<void> {
                   messages,
                   tools,
                   maxSteps: Math.min(Math.max(1, agent?.maxSteps ?? DEFAULT_MAX_STEPS), MAX_MAX_STEPS),
-                  tokenBudget: Math.max(20_000, budget - usedTokens - taskTokens),
+                  tokenBudget: taskTokenBudget(
+                    Math.max(20_000, budget - usedTokens - taskTokens),
+                    tokensLeftFor(project.createdBy),
+                  ),
                   estimateTokens,
                   isCancelled,
                   onStep: (n) => {
@@ -1300,6 +1319,11 @@ export async function executeRun(runId: string): Promise<void> {
         pending.clear();
         break;
       }
+      if (accountSpent()) {
+        markAll(pending, "cancelled", accountSpentMessage());
+        pending.clear();
+        break;
+      }
       const ready = [...pending]
         .filter((seq) => bySeq.get(seq)!.dependsOn.every((d) => statusBySeq.get(d) === "succeeded"))
         .sort((a, b) => a - b);
@@ -1368,9 +1392,17 @@ export async function executeRun(runId: string): Promise<void> {
       });
     };
 
+    // With the account's tokens used up, nothing more is asked of a model: what
+    // the tasks made stays as it is, and the run says why it is not complete.
+    const spent = accountSpent();
+
     let deliverable = "";
     const workspaceList = fileList(listFiles(workspace.id));
-    if (succeededTasks.length > 0) {
+    if (succeededTasks.length > 0 && spent) {
+      deliverable =
+        `(What the tasks made was not put together into one deliverable. ${accountSpentMessage()} ` +
+        "The output of each finished task is in the task.)";
+    } else if (succeededTasks.length > 0) {
       const synthMessages: ChatMessage[] = [
         {
           role: "system",
@@ -1408,7 +1440,11 @@ export async function executeRun(runId: string): Promise<void> {
 
     // ── QA / Security review ──────────────────────────────────────────────
     let reviewNotes = "";
-    if (succeededTasks.length > 0) {
+    // Putting the result together can have used the last tokens.
+    const unreviewed = succeededTasks.length > 0 && !spent && accountSpent();
+    if (unreviewed) {
+      reviewNotes = `(Not reviewed. ${accountSpentMessage()})`;
+    } else if (succeededTasks.length > 0 && !spent) {
       const reviewer = workforce.find(
         (a) => /qa|quality|security|review|test/i.test(a.role) && buildCandidates(a, project, routable).length > 0,
       );
@@ -1487,7 +1523,7 @@ export async function executeRun(runId: string): Promise<void> {
     const finalStatus: "failed" | "review" | "succeeded" =
       succeededTasks.length === 0
         ? "failed"
-        : incomplete.length > 0 || gateFailed
+        : incomplete.length > 0 || gateFailed || spent || unreviewed
           ? "review"
           : "succeeded";
 
@@ -1509,12 +1545,17 @@ export async function executeRun(runId: string): Promise<void> {
     emit({ type: "status", status: finalStatus });
 
     const total = completed.length;
+    const tokenNote = spent || unreviewed ? ` ${accountSpentMessage()}` : "";
     const problem =
-      incomplete.length > 0
+      (incomplete.length > 0
         ? `${incomplete.length} of ${total} tasks did not succeed.`
         : gateFailed
           ? "The reviewer did not pass it."
-          : "";
+          : spent
+            ? "Its result was not put together."
+            : unreviewed
+              ? "It was not reviewed."
+              : "") + tokenNote;
     endRun(
       finalStatus,
       { deliverable: deliverable || null, reviewNotes: reviewNotes || null, tokensUsed: usedTokens },
@@ -1522,7 +1563,7 @@ export async function executeRun(runId: string): Promise<void> {
         ? { level: "success", title: `Run finished: ${project.title}`, body: `All ${total} tasks succeeded.` }
         : finalStatus === "review"
           ? { level: "warning", title: `Run needs a look: ${project.title}`, body: problem }
-          : { level: "error", title: `Run failed: ${project.title}`, body: "No task succeeded." },
+          : { level: "error", title: `Run failed: ${project.title}`, body: `No task succeeded.${tokenNote}` },
     );
   } catch (err) {
     if (!(err instanceof AppError)) {

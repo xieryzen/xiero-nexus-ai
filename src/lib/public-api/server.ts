@@ -27,6 +27,7 @@ import { RequestError, findModel, publicModelNames, type ListableModel } from ".
 const ERROR_TYPE: Record<number, string> = {
   400: "invalid_request_error",
   401: "authentication_error",
+  402: "insufficient_quota",
   403: "permission_error",
   404: "not_found_error",
   409: "conflict_error",

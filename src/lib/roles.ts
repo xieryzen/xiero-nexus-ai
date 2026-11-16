@@ -3,10 +3,11 @@
  * the server and by the pages, and tested alone.
  *
  *   owner  everything an administrator does, and the accounts: making them,
- *          their roles, names, addresses and passwords, and deleting them.
+ *          their roles, names, addresses and passwords, how many tokens each
+ *          may use (token-rules.ts), and deleting them.
  *   admin  providers, models, agents, teams, workflows, skills, the audit
- *          log, everyone's projects and usage. Sees the accounts, and
- *          changes none.
+ *          log, everyone's projects and usage. Sees the accounts and their
+ *          tokens, and changes none.
  *   user   their own projects, chats, media and keys.
  */
 

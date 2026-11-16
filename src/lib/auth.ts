@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import type { User } from "@/db/schema";
 import { Errors } from "./errors";
 import { isAdminRole, isOwnerRole } from "./roles";
+import { tokenSummary } from "./token-rules";
 import { readSession } from "./session";
 
 export type SessionState =
@@ -60,6 +61,7 @@ export function requireOwner(): User {
 
 /** Public-safe shape of a user (never includes secrets). */
 export function publicUser(user: User) {
+  const tokens = tokenSummary(user);
   return {
     id: user.id,
     username: user.username,
@@ -67,6 +69,11 @@ export function publicUser(user: User) {
     role: user.role,
     status: user.status,
     twoFactorEnabled: user.twoFactorEnabled,
+    /** The most tokens the account may use in all. Null: it is not limited (an owner). */
+    tokenLimit: tokens.limit,
+    tokensUsed: tokens.used,
+    /** What is left of the limit. Null: not limited. */
+    tokensLeft: tokens.left,
     createdAt: user.createdAt,
   };
 }

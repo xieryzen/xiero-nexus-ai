@@ -588,6 +588,28 @@ try {
   eq("  with the role it was given, and its email in small letters", [await page.$eval(`${accountRow} select`, (s) => s.value), await page.$eval(accountRow, (r) => r.innerText.includes("browser.user@example.com"))], ["admin", true]);
   await page.select(`${accountRow} select`, "user");
   check("its role is changed in the list", await waitText('"browser.user" is user now'), null);
+  // The tokens of the account (v1.8): shown in the list, and changed there by an owner.
+  const tokensCell = `${accountRow} td[data-tokens="browser.user"]`;
+  const cellText = async () => (await page.$eval(tokensCell, (c) => c.innerText)).replace(/\s+/gu, " ").trim();
+  eq("the account is listed with its tokens: none used, of ten million", await cellText(), "0 of 10,000,000 10,000,000 left · Change");
+  check("  an owner is listed without a limit", await page.$eval('td[data-tokens="admin"]', (c) => c.innerText.includes("No limit") && !c.innerText.includes("Change")), null);
+  await clickText("Change", { within: tokensCell, tag: "button" });
+  await fill(`${tokensCell} input`, "2.500.000");
+  check("a limit is typed with any thousands separator, and the page says what is left after it", await waitText("0 used: 2,500,000 left after this."), null);
+  await snap("account-tokens");
+  await clickText("Save", { within: tokensCell, tag: "button" });
+  check("the limit is changed, and the page says so", await waitText('"browser.user" may use 2,500,000 tokens in all now: 2,500,000 are left.'), null);
+  eq("  the list shows it", await cellText(), "0 of 2,500,000 2,500,000 left · Change");
+  await clickText("Change", { within: tokensCell, tag: "button" });
+  await fill(`${tokensCell} input`, "a lot");
+  check("what is no number of tokens cannot be saved", (await waitText("A whole number of tokens.")) && (await page.$eval(`${tokensCell} button[type=submit]`, (b) => b.disabled)), null);
+  await clickText("Cancel", { within: tokensCell, tag: "button" });
+  // The list has one column more than it had: at this width it is still all there.
+  const widths = await page.$eval(`${accountRow}`, (row) => {
+    const box = row.closest("table").parentElement;
+    return [box.scrollWidth, box.clientWidth];
+  });
+  check("the whole list is on the page: nothing of it has to be scrolled to", widths[0] <= widths[1], widths);
   await clickText("Manage", { within: accountRow, tag: "button" });
   const manage = 'tr[data-manage="browser.user"]';
   await page.waitForSelector(manage);
@@ -607,6 +629,8 @@ try {
   await clickText("Delete", { within: renamed, tag: "button" });
   check("the account is deleted after being asked once more", (await waitText('The account "browser.renamed" was deleted')) && !(await page.$('tr[data-user="browser.renamed"]')), null);
   await open("/dashboard/settings");
+  check("Settings shows an owner what it used, and that it has no limit", await page.$eval("#token-balance", (d) => /Used\s+[\d,]+\s+Limit\s+No limit/u.test(d.innerText) && !d.innerText.includes("Left")), await page.$eval("#token-balance", (d) => d.innerText).catch(() => null));
+  await snap("settings-tokens");
   check("Settings has the forms for one's own username, email and password", Boolean(await page.$("#account-username")) && Boolean(await page.$("#password-new")) && (await page.$eval("#account-save", (b) => b.disabled)), null);
   await fill("#account-email", "admin+changed@example.com");
   await fill("#account-current", "not-the-password");

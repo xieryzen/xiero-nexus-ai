@@ -11,6 +11,7 @@ import {
 } from "@/lib/public-api/openai-format";
 import { readJsonBody, resolveApiModel, v1 } from "@/lib/public-api/server";
 import { SSE_HEADERS } from "@/lib/run-bus";
+import { assertTokensLeft } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +24,7 @@ export const maxDuration = 300;
  */
 export const POST = v1("chat", async (req, { caller }) => {
   const request = parseChatCompletionRequest(await readJsonBody(req));
+  assertTokensLeft(caller.user.id);
   const resolved = resolveChatModel(resolveApiModel(caller, request.model, "chat"));
   const options = {
     temperature: request.temperature,

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSessionState } from "@/lib/auth";
+import { tokensLeft } from "@/lib/token-rules";
 import { AppShell } from "@/components/shell/app-shell";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +16,7 @@ export default function DashboardLayout({
 
   const { user } = state;
   return (
-    <AppShell user={{ username: user.username, email: user.email, role: user.role }}>
+    <AppShell user={{ username: user.username, email: user.email, role: user.role, tokensLeft: tokensLeft(user) }}>
       {children}
     </AppShell>
   );
