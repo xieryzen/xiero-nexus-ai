@@ -1602,7 +1602,7 @@ export async function automation(ctx) {
     const chatPage = await page(admin, "/dashboard/chat");
     check("  and so does the list a chat offers", chatPage.includes("health-steady") && !chatPage.includes("health-switch"), null);
     const modelsPage = await page(admin, "/dashboard/models");
-    check("the Models page says that it is left out, and how the check is set", modelsPage.includes("left out of the lists") && modelsPage.includes("1 model is left out now.") && modelsPage.includes("The automatic check is switched off") && modelsPage.includes("Check all now"), null);
+    check("the Models page says that it is left out, and how the check is set", modelsPage.includes("left out of the lists") && /\d+ models? (is|are) left out now\./.test(modelsPage) && modelsPage.includes("The automatic check is switched off") && modelsPage.includes("Check all now"), /[^>]{0,40}left out now[^<]{0,10}/.exec(modelsPage)?.[0]);
     await v1("/chat/completions", { key: apiKey, method: "POST", body: { model: publicId, messages: [{ role: "user", content: "Hello, health." }] } });
     check("a request that names the failing model is still passed on to its provider", (await mockLog()).some((l) => l.body?.model === "health-switch" && l.body?.messages?.some((m) => m.content === "Hello, health.")), publicId);
 

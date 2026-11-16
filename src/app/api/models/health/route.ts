@@ -30,7 +30,7 @@ export const POST = handle(async (req) => {
   const user = requireAdmin();
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, runSchema);
-  const limit = rateLimit(`models:health:${user.id}`, 12, 10 * 60_000);
+  const limit = rateLimit(`models:health:${user.id}`, 30, 10 * 60_000);
   if (!limit.ok) throw Errors.rateLimited("The models were checked several times just now. Wait a few minutes.");
   if (healthStatus().running) throw Errors.conflict("A check of the models is running already.");
 

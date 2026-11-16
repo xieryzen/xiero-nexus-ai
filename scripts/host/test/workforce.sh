@@ -638,6 +638,16 @@ scrambled = '<a class="input popsok" href="javascript:void(0)" data-scrambled-ur
 print(workforce.mediafire_direct(plain), workforce.mediafire_direct(scrambled), workforce.mediafire_direct("<html>Just a moment...</html>"))
 PYTHON_END
 )"
+is "the inventory says which failing models the app leaves out of its lists" "last test failed, left out of the lists: no credit | last test failed: no credit | last test ok" "$(python3 - "${host}" << 'PYTHON_END'
+import sys
+sys.path.insert(0, sys.argv[1])
+import workforce
+print(" | ".join(workforce.tested_text(item) for item in (
+    {"lastTestStatus": "error", "lastTestError": "no credit", "hidden": True},
+    {"lastTestStatus": "error", "lastTestError": "no credit", "hidden": False},
+    {"lastTestStatus": "ok", "hidden": False})))
+PYTHON_END
+)"
 is "a site passes a request on to another https address, and to no other" "onwards refused refused" "$(python3 - "${host}" << 'PYTHON_END'
 import sys, urllib.request
 sys.path.insert(0, sys.argv[1])
