@@ -209,7 +209,11 @@ export function UsersManager({
           ) : (
             <p className="text-sm text-ink-2">
               {users.length} {users.length === 1 ? "account" : "accounts"}:{" "}
-              {ROLES.map((role) => `${users.filter((u) => u.role === role).length} ${roleLabel(role).toLowerCase()}`).join(", ")}.
+              {ROLES.map((role) => {
+                const count = users.filter((u) => u.role === role).length;
+                return `${count} ${roleLabel(role).toLowerCase()}${count === 1 ? "" : "s"}`;
+              }).join(", ")}
+              .
             </p>
           )}
         </Card>
