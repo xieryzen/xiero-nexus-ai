@@ -638,6 +638,52 @@ export async function automation(ctx) {
     check("  and the run does not say that tools were turned down", !ltRun.events.some((e) => e.type === "progress" && /did not accept tools/.test(e.message)), ltRun.events.filter((e) => e.type === "progress"));
     check("  what the provider said is kept with the attempt", /Provider responded 429: .*Rate limit reached/.test(ltAttempts[0]?.error ?? ""), ltAttempts[0]?.error);
 
+    begin("Agent tools: a task's output file, and what the reviewer is shown");
+    await agent("Plainwriter", "Plain Writer");
+    const outWf = await workflow("Output files", [
+      { title: "Tool: output", objective: "Write the guide.", role: "Engineer", outputFile: "docs/guide.md" },
+      { title: "Tool: silent", objective: "Write the notes, and say nothing.", role: "Engineer", outputFile: "docs/notes.md" },
+      { title: "Fenced: data", objective: "Answer with the file.", role: "Plain Writer", outputFile: "data/pack.json" },
+      { title: "Tool: files", objective: "Write the plan file.", role: "Engineer" },
+      { title: "Write a line", objective: "One line.", role: "Plain Writer", outputFile: "docs/line.txt" },
+    ]);
+    const out = await project(admin, { title: "Output files", workflowId: outWf, managerModelRowId: ids.models.chat });
+    await mockReset();
+    const outRun = await runProject(admin, out);
+    eq("the run finishes", outRun.events.at(-1)?.status, "succeeded");
+    const outWs = await admin.get(`/api/projects/${out}/workspace`);
+    const outWsId = outWs.data?.workspace?.id ?? outWs.data?.id;
+    const contentOf = async (filePath) => {
+      const file = (outWs.data?.files ?? []).find((f) => f.path === filePath);
+      if (!file) return null;
+      const got = await admin.get(`/api/workspaces/${outWsId}/files/${file.id}`);
+      return got.data?.file?.content ?? got.data?.content ?? null;
+    };
+    const written = "# Written with the tool\n\nBy the agent, in the file.\n";
+    const guide = taskOf(outRun.events, 1);
+    eq("an agent that can write files is told to save its output file itself, and does", outRun.events.filter((e) => e.type === "tool" && e.seq === 1).map((e) => e.call.name), ["write_file"]);
+    eq("  the file keeps what the agent saved, and not what it said afterwards", await contentOf("docs/guide.md"), written);
+    check("  the task hands over the file, then what the agent said", (guide?.artifact ?? "").startsWith(`${written.trimEnd()}\n\n[Saved as docs/guide.md by the agent, which said: DONE after 1 tool results. LAST: Saved docs/guide.md (`), guide?.artifact);
+    const silent = taskOf(outRun.events, 2);
+    eq("an agent that saves its file and says nothing has done its task: the file is what it hands over", [silent?.status, silent?.artifact, await contentOf("docs/notes.md")], ["succeeded", written, written]);
+    const fenced = taskOf(outRun.events, 3);
+    eq("an answer that holds the file in a fence is saved without the fence and the words around it", await contentOf("data/pack.json"), '{"name": "from a fence"}\n');
+    check("  the task still shows the whole answer", /^Here is the file:/.test(fenced?.artifact ?? "") && /I could not run it\.$/.test(fenced?.artifact ?? ""), fenced?.artifact);
+    eq("an answer without a fence is saved as it is", await contentOf("docs/line.txt"), 'OUTPUT of "Write a line" [deps:none]');
+    const outChats = (await mockLog()).filter((l) => l.path.endsWith("/chat/completions"));
+    const outSystem = (title) => String(outChats.find((l) => String(l.body?.messages?.[1]?.content ?? "").startsWith(`Task: ${title}`))?.body?.messages?.[0]?.content ?? "");
+    check("an agent without tools is told that its answer is the file", /Your answer is saved as the file data\/pack\.json: return the complete contents of that file and nothing else\./.test(outSystem("Fenced: data")) && !/You have tools/.test(outSystem("Fenced: data")), outSystem("Fenced: data").slice(-400));
+    check("  one with tools and no output file is asked for the deliverable and a word on what it did", /answer with the deliverable itself and say briefly what you did/.test(outSystem("Tool: files")) && !/Your deliverable is the file/.test(outSystem("Tool: files")), outSystem("Tool: files").slice(-400));
+    const outDetail = (await admin.get(`/api/projects/${out}`)).data?.project;
+    check("the reviewer is shown the files that the deliverables only speak of", /\[files:notes\/plan\.md\]/.test(outDetail?.reviewNotes ?? ""), outDetail?.reviewNotes);
+    check("  and is told which files each task wrote", /\[wrote:docs\/guide\.md;docs\/notes\.md;data\/pack\.json;notes\/plan\.md;docs\/line\.txt\]/.test(outDetail?.reviewNotes ?? ""), outDetail?.reviewNotes);
+    const reviewAsk = outChats.find((l) => /QA\/Security reviewer/.test(String(l.body?.messages?.[0]?.content ?? "")));
+    const reviewUser = String(reviewAsk?.body?.messages?.[1]?.content ?? "");
+    check("  a file is shown as it is in the workspace, after the edit", /#### File: notes\/plan\.md \(\d+ characters\)\n# Plan\n\nStep one is done\./.test(reviewUser), reviewUser.slice(-600));
+    check("  a file that a deliverable holds is not shown a second time", !/#### File: docs\/guide\.md/.test(reviewUser) && reviewUser.split("By the agent, in the file.").length - 1 === 2, reviewUser.slice(0, 900));
+    check("  and the reviewer is told what the files are", /After the tasks come the files of the project's workspace/.test(String(reviewAsk?.body?.messages?.[0]?.content ?? "")), String(reviewAsk?.body?.messages?.[0]?.content ?? "").slice(0, 700));
+    check("the manager is given the files by name when it sums up", /files=5/.test(outDetail?.finalDeliverable ?? ""), outDetail?.finalDeliverable);
+
     begin("Projects: a reviewer whose first model does not answer");
     await model("chat-down", openai, "chat-down", ["text"]);
     await agent("Maker", "Maker");
