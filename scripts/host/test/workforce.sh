@@ -8,9 +8,10 @@
 #
 # The file that is checked is the committed workforce.json, with the addresses
 # of its providers changed to the mock's and the names of its models to the
-# ones the mock has: every provider, agent, team and workflow of it goes
-# through the app's own checks, both workflows are run to the end in a project
-# with the limits a new project has, and its "tryRun" is run. The mock's model
+# ones the mock has: every provider, skill, agent, team and workflow of it
+# goes through the app's own checks, every workflow is run to the end in a
+# project of the team that names it, with the limits a new project has, and
+# its "tryRun" is run. The mock's model
 # "chat-busy" answers "too many requests" every other time, as a free tier
 # does, and is the one that plans and sums up here: the app has to ask again.
 #
@@ -187,6 +188,8 @@ for agent in real["agents"]:
             agent[key] = stand_in.get(agent[key], agent[key])
 json.dump(real, open(sys.argv[2], "w", encoding="utf-8"), indent=1)
 PYTHON_END
+# The skills of the file are folders next to it.
+cp -R "${host}/skills" "${WORK}/skills"
 # Numbers and names out of that file: a Python expression over "d", the file.
 of_file() {
   python3 -c 'import json, sys
@@ -196,6 +199,10 @@ print(eval(sys.argv[2]))' "${FILE}" "$1"
 AGENTS="$(of_file 'len(d["agents"])')"
 TEAMS="$(of_file 'len(d["teams"])')"
 WORKFLOWS="$(of_file 'len(d["workflows"])')"
+SKILLS="$(of_file 'len(d["skills"])')"
+# The agents the try-run gives a task: those of its team.
+TRY_TEAM="$(of_file 'd["tryRun"]["team"]')"
+TRY_AGENTS="$(of_file 'sum(1 for a in d["agents"] if a["name"] in [t for t in d["teams"] if t["name"] == d["tryRun"]["team"]][0]["agents"])')"
 # The models the program takes into the app: those of the file that are not switched off.
 MODELS="$(of_file 'sum(1 for m in d["models"].values() if m.get("enabled") is not False)')"
 KEYLESS="$(of_file 'sum(1 for p in d["providers"].values() if p.get("baseUrl"))')"
@@ -268,6 +275,8 @@ check "and how long a provider is waited for" says "waits up to 60 s for an answ
 run -- --user boss --file "${FILE}" --dry-run --test
 is "a dry run ends well" "0" "${CODE}"
 check "it says what it would add" line '\+ Agent "Manager" \(Project Manager\): add it'
+check "the skills of the file among it" line '\+ Skill "short-reels": add it \([0-9]+ characters of instructions\)'
+check "and which skills an agent gets" line '\+ Agent "Copywriter" \(Copywriter\): add it, .*; skills: anti-ai-slop-copy'
 check "and that nothing was changed" says "Dry run: nothing was changed."
 check "and that no model was tried" says "no model was tried"
 check "a provider that differs is reported and left alone" line 'Provider "Gemini" differs from the file .*--update changes it'
@@ -275,6 +284,7 @@ check "a provider that takes no key would be added" line '\+ Provider "Kilo Gate
 check "and its models taken in after that" line '^ +Model "[a-z0-9-]+": take chat-mini of Kilo Gateway into the app, once that provider is added'
 is "no provider was added" "2" "$(ask /api/providers 'len(d["providers"])')"
 is "nothing was changed" "0 agents, 0 teams, 0 workflows, 0 models" "$(counts)"
+is "no skill was added" "0" "$(ask /api/skills 'len(d["skills"])')"
 is "no model was asked anything" "0" "$(db "select count(*) from usage_records")"
 is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
 check_not "the password is not in what it says" says "${PASS}"
@@ -287,6 +297,30 @@ run -- --user boss --file "${FILE}" --yes --test ${MEDIA[@]+"${MEDIA[@]}"}
 is "it ends well" "0" "${CODE}"
 is "the app has what the file says" "${AGENTS} agents, ${TEAMS} teams, ${WORKFLOWS} workflows, ${MODELS} models" "$(counts)"
 check "it read that back" says "everything the file asks for is there"
+is "with the skills of the file" "${SKILLS}" "$(ask /api/skills 'len(d["skills"])')"
+api GET /api/skills > "${WORK}/skills.json"
+is "each with the words of its SKILL.md" "${SKILLS}" "$(
+  for id in $(python3 -c 'import json, sys; print(" ".join(s["id"] for s in json.load(open(sys.argv[1]))["skills"]))' "${WORK}/skills.json"); do
+    api GET "/api/skills/${id}"
+    echo
+  done | python3 -c 'import json, sys
+same = 0
+for line in sys.stdin:
+    if not line.strip():
+        continue
+    skill = json.loads(line)["skill"]
+    text = open(sys.argv[1] + "/skills/" + skill["name"] + "/SKILL.md", encoding="utf-8").read()
+    front, body = text.split("\n---\n", 1)
+    described = [l.split(": ", 1)[1] for l in front.split("\n") if l.startswith("description: ")][0]
+    same += skill["instructions"] == body.strip() and skill["description"] == described and skill["enabled"]
+print(same)' "${WORK}")"
+is "an agent has the skills the file gives it, and a team its own" \
+  "$(of_file '"; ".join("%s: %s" % (x["name"], ", ".join(sorted(x["skills"]))) for x in d["agents"] + d["teams"] if x.get("skills"))')" \
+  "$(api GET /api/teams > "${WORK}/teams.json"; api GET /api/agents | python3 -c 'import json, sys
+names = dict((s["id"], s["name"]) for s in json.load(open(sys.argv[1] + "/skills.json"))["skills"])
+order = [x["name"] for x in json.load(open(sys.argv[2]))["agents"] + json.load(open(sys.argv[2]))["teams"]]
+have = dict((x["name"], x["skillIds"]) for x in json.load(sys.stdin)["agents"] + json.load(open(sys.argv[1] + "/teams.json"))["teams"])
+print("; ".join("%s: %s" % (name, ", ".join(sorted(names[i] for i in have[name]))) for name in order if have.get(name)))' "${WORK}" "${FILE}")"
 check "every chat model said its word" line 'ok +chat-mini \("[a-z0-9-]+"\) said "ok"'
 check "one that says \"too many requests\" is asked again by the app, and answers" line 'ok +chat-busy \("[a-z0-9-]+"\) said "ok" in [1-9]'
 check_not "no check failed" says "FAILED"
@@ -372,6 +406,97 @@ check "it says that the key is to be entered on the Providers page" line 'Paid G
 is "and no provider was added" "${before}" "$(ask /api/providers 'len(d["providers"])')"
 check_not "nothing of the rest was changed either" line '^  done '
 
+section "Only what can be used: the models the file does not name"
+# What a person does on the Providers page: take everything a gateway lists into the app.
+GATE="LLM7"
+GATE_ID="$(ask /api/providers "[p['id'] for p in d['providers'] if p['name'] == '${GATE}'][0]")"
+EXTRA="'chat-paid','auto-paid','img-paid','chat-noaccess','chat-limited','chat-down','whisper-1','text-embedding-3-small','vid-ok'"
+api POST "/api/providers/${GATE_ID}/models/discover" "{\"import\":[$(printf '%s' "${EXTRA}" | tr "'" '"')]}" > /dev/null
+state_of() { # the models named, each as on or off
+  ask /api/models "' '.join(sorted(m['modelId'] + ('=on' if m['enabled'] else '=off') for m in d['models'] if m['providerId'] == '${GATE_ID}' and m['modelId'] in ($1)))"
+}
+is "nine more models of a gateway are in the app, all switched on" \
+  "auto-paid=on chat-down=on chat-limited=on chat-noaccess=on chat-paid=on img-paid=on text-embedding-3-small=on vid-ok=on whisper-1=on" "$(state_of "${EXTRA}")"
+is "the app took their prices from the gateway's list" "2.0 10.0" \
+  "$(ask /api/models "[' '.join(str(float(m[k])) for k in ('inputPricePerMTok', 'outputPricePerMTok')) for m in d['models'] if m['modelId'] == 'chat-paid'][0]")"
+on_before="$(ask /api/models 'sum(1 for m in d["models"] if m["enabled"])')"
+run -- --user boss --file "${FILE}" --dry-run --only-usable
+is "a dry run ends well" "0" "${CODE}"
+check "and tries no model" says "no model was tried"
+is "and switches nothing off" "${on_before}" "$(ask /api/models 'sum(1 for m in d["models"] if m["enabled"])')"
+curl -fsS "${MOCK}/__reset" > /dev/null
+run -- --user boss --file "${FILE}" --yes --only-usable
+is "it ends well" "0" "${CODE}"
+is "what the gateway bills for is switched off, and what it refuses one word" \
+  "auto-paid=off chat-noaccess=off chat-paid=off img-paid=off" "$(state_of "'chat-paid','auto-paid','img-paid','chat-noaccess'")"
+is "a model that is limited or down at the moment stays on" "chat-down=on chat-limited=on" "$(state_of "'chat-limited','chat-down'")"
+is "a model for listening or for embeddings is not judged by a word" "text-embedding-3-small=on whisper-1=on" "$(state_of "'text-embedding-3-small','whisper-1'")"
+# Its name does not say that it makes videos, so the app took it for a chat model; the provider knows better.
+is "a model that was taken for a chat model and that the provider refuses a chat is switched off" "vid-ok=off" "$(state_of "'vid-ok'")"
+check "it says which it switched off because they are billed" line 'Switched off +3 models: the provider bills for it, and has no key here'
+check "  which because the provider refused" line "chat-noaccess of ${GATE}: refused \\(403\\): .*not available on your plan"
+check "  both of them" line 'Switched off +2 models: the provider refused one word'
+check "and which it could not judge" line 'Not judged +2 models did not answer this time'
+is "no billed model was asked anything" "0" \
+  "$(curl -fsS "${MOCK}/__log" | python3 -c 'import json, sys; print(sum(1 for l in json.load(sys.stdin) if isinstance(l.get("body"), dict) and l["body"].get("model") in ("chat-paid", "auto-paid", "img-paid")))')"
+is "five models fewer are switched on, and none of the file's" "$((on_before - 5))" "$(ask /api/models 'sum(1 for m in d["models"] if m["enabled"])')"
+run -- --user boss --file "${FILE}" --yes
+check "the models of the file are as they were" says "Nothing to do: the app has everything the file asks for."
+run -- --user boss --file "${FILE}" --yes --only-usable
+is "a second time it ends well" "0" "${CODE}"
+check "and finds nothing more to switch off" says "nothing: no model was found that cannot be used"
+
+section "The skills of the file: changed, given by hand, written wrongly"
+SKILL_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'short-reels'][0]")"
+had="$(ask "/api/skills/${SKILL_ID}" 'str(len(d["skill"]["agentIds"])) + " " + str(len(d["skill"]["teamIds"]))')"
+printf '\nOne more rule, added for the test.\n' >> "${WORK}/skills/short-reels/SKILL.md"
+mkdir -p "${WORK}/skills/short-reels/references"
+printf '# Hooks\n\nThree that worked.\n' > "${WORK}/skills/short-reels/references/hooks.md"
+run -- --user boss --file "${FILE}" --yes
+is "it ends well" "0" "${CODE}"
+check "a skill whose folder was changed is reported" line 'Skill "short-reels" is in the app and differs from the file \(instructions, files\)'
+is "and left as it is" "False" "$(ask "/api/skills/${SKILL_ID}" '"One more rule" in d["skill"]["instructions"]')"
+run -- --user boss --file "${FILE}" --yes --update
+is "with --update it ends well" "0" "${CODE}"
+check "it says what it changes" line 'done +Skill "short-reels": change it to what the file says \(instructions, files\)'
+is "the app has the new words, and the file that came with them" "True references/hooks.md" \
+  "$(ask "/api/skills/${SKILL_ID}" 'str(d["skill"]["instructions"].endswith("One more rule, added for the test.")) + " " + " ".join(f["path"] for f in d["skill"]["files"])')"
+is "that file reads as it was written" "# Hooks  Three that worked. " "$(ask "/api/skills/${SKILL_ID}/files?path=references/hooks.md" 'd["content"].replace(chr(10), " ")')"
+is "it is the same skill, with the agents and teams that had it" "${had}" "$(ask "/api/skills/${SKILL_ID}" 'str(len(d["skill"]["agentIds"])) + " " + str(len(d["skill"]["teamIds"]))')"
+run -- --user boss --file "${FILE}" --yes --update
+check "a second time there is nothing to do" says "Nothing to do: the app has everything the file asks for."
+# The file gives the Manager no skills, and the Designer two.
+MANAGER_ID="$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "Manager"][0]')"
+DESIGNER_ID="$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "Designer"][0]')"
+api PATCH "/api/agents/${MANAGER_ID}" "{\"skillIds\":[\"${SKILL_ID}\"]}" > /dev/null
+api PATCH "/api/agents/${DESIGNER_ID}" '{"skillIds":[]}' > /dev/null
+run -- --user boss --file "${FILE}" --yes
+check "an agent that lost the skills the file gives it is reported" line 'Agent "Designer" is in the app and differs from the file \(skills\)'
+run -- --user boss --file "${FILE}" --yes --update
+is "with --update it ends well" "0" "${CODE}"
+is "and it has them again" "$(of_file 'len([a for a in d["agents"] if a["name"] == "Designer"][0]["skills"])')" "$(ask /api/agents '[len(a["skillIds"]) for a in d["agents"] if a["name"] == "Designer"][0]')"
+is "an agent whose skills the file does not name keeps what it was given by hand" "${SKILL_ID}" "$(ask /api/agents '[" ".join(a["skillIds"]) for a in d["agents"] if a["name"] == "Manager"][0]')"
+api PATCH "/api/agents/${MANAGER_ID}" '{"skillIds":[]}' > /dev/null
+wrong() { # NAME, a Python statement that changes "d", what the program has to say
+  python3 - "${FILE}" "${WORK}/wrong.json" "$2" << 'PYTHON_END'
+import json, sys
+d = json.load(open(sys.argv[1]))
+exec(sys.argv[3])
+json.dump(d, open(sys.argv[2], "w"))
+PYTHON_END
+  run -- --user boss --file "${WORK}/wrong.json" --dry-run
+  if [ "${CODE}" = "2" ] && says "$3"; then ok "$1"; else bad "$1 (it ended with ${CODE})"; fi
+}
+wrong "a skill that its SKILL.md calls by another name is refused" \
+  'd["skills"]["Another Name"] = {"file": "skills/short-reels"}' 'its SKILL.md calls it "short-reels"'
+wrong "a skill whose file is outside the folder of the definition is refused" \
+  'd["skills"]["outside"] = {"file": "../../../etc/hostname"}' "not one that leaves its folder"
+wrong "an agent that is given a skill the file does not have is refused" \
+  'd["agents"][0]["skills"] = ["no-such-skill"]' 'names the skill "no-such-skill"'
+wrong "a skill without words is refused" \
+  'd["skills"]["empty"] = {"instructions": "  "}' "is empty"
+is "nothing of those files reached the app" "${SKILLS}" "$(ask /api/skills 'len(d["skills"])')"
+
 section "Only a part of the file"
 python3 - "${FILE}" "${WORK}/more.json" << 'PYTHON_END'
 import json, sys
@@ -443,12 +568,44 @@ DELIVERY="$(printf '%s' "${made}" | python3 -c 'import json, sys; print(json.loa
 api POST "/api/projects/${DELIVERY}/run" > /dev/null
 result="$(ended "${DELIVERY}")"
 is "the software is delivered: every step succeeds" "succeeded; 10 of 10 tasks succeeded" "${result%;*}"
-check "each step is done by the agent it names" \
+check "each step of it is done by the agent it names" \
   grep -qE 'Product brief: CEO, Delivery plan: Manager, UX and UI design: Designer, API and data design: Backend, Backend implementation: Backend, Frontend implementation: Frontend, Test plan and automated tests: Tester, Security review: Security Engineer, QA review: QA, Release plan: DevOps' <<< "${result}"
+
+# Every other workflow of the file, in a project of the team whose description names it.
+python3 - "${FILE}" > "${WORK}/flows.txt" << 'PYTHON_END'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for w in d["workflows"]:
+    if w["name"] in ("Short Reels", "Software delivery"):
+        continue
+    teams = [t["name"] for t in d["teams"] if 'the workflow "%s"' % w["name"] in t["description"]]
+    kinds = set(s.get("kind", "text") for s in w["steps"])
+    print("\t".join([
+        w["name"], teams[0] if len(teams) == 1 else "-", "media" if kinds - {"text"} else "-", "render" if "render" in kinds else "-",
+        str(len(w["steps"])), ", ".join("%s: %s" % (s["title"], s["role"]) for s in w["steps"])]))
+PYTHON_END
+OTHERS=0
+while IFS="$(printf '\t')" read -r flow team media render steps who; do
+  OTHERS=$((OTHERS + 1))
+  if [ "${team}" = "-" ]; then
+    bad "the workflow \"${flow}\" is named by the description of exactly one team"
+    continue
+  fi
+  if [ "${render}" = "render" ] && [ -z "${FFMPEG}" ]; then
+    echo "  --   no ffmpeg here: \"${flow}\" was not run"
+    continue
+  fi
+  made="$(api POST /api/projects "$(project "${flow}" "${team}" "${media#-}")")"
+  id="$(printf '%s' "${made}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["project"]["id"])' 2> /dev/null || echo "?")"
+  api POST "/api/projects/${id}/run" > /dev/null
+  is "\"${flow}\" with the team \"${team}\": all ${steps} steps succeed, each done by the agent it names" \
+    "succeeded; ${steps} of ${steps} tasks succeeded; ${who}" "$(ended "${id}")"
+done < "${WORK}/flows.txt"
+is "every workflow of the file was run" "$((WORKFLOWS - 2))" "${OTHERS}"
 
 # ── The try-run of the file ──────────────────────────────────────────────────
 
-section "The try-run of the file: a planned goal, then a task for every agent"
+section "The try-run of the file: a planned goal, then a task for every agent of its team"
 left() { printf '%s projects, %s workflows' "$(ask /api/projects 'len(d["projects"])')" "$(ask /api/workflows 'len(d["workflows"])')"; }
 before="$(left)"
 errors="$(db "select count(*) from usage_records where status = 'error'")"
@@ -457,11 +614,12 @@ is "it ends well" "0" "${CODE}"
 check_not "nothing failed" says "FAILED"
 check "the goal is planned by the model the file names for it" line 'Planned +by chat-busy: [0-9]+ tasks?;'
 check "the tasks of the plan are done" line 'ok +1\. ".*", by .*: succeeded on '
-check "every agent of the file gets a task" line "Given +one task to each of ${AGENTS} agents"
+check "every agent of the try-run's team gets a task, and no other" says "A small task for every agent of the team \"${TRY_TEAM}\""
+check "  each of them one" line "Given +one task to each of ${TRY_AGENTS} agents"
 is "and does it on its own first model" \
-  "$(of_file '"; ".join("%s on %s (%s)" % (a["name"], d["models"][a["primary"]]["model"], d["models"][a["primary"]]["provider"]) for a in d["agents"])')" \
+  "$(of_file '"; ".join("%s on %s (%s)" % (a["name"], d["models"][a["primary"]]["model"], d["models"][a["primary"]]["provider"]) for a in d["agents"] if a["name"] in [t for t in d["teams"] if t["name"] == d["tryRun"]["team"]][0]["agents"])')" \
   "$(sed -n '/^A small task for every agent/,$p' "${OUT}" | sed -n 's/^  ok  *[0-9]*\. \(.*\): succeeded on \([^(]*([^)]*)\).*/\1 on \2/p' | paste -sd ';' | sed 's/;/; /g')"
-is "what each of them said is shown" "${AGENTS}" "$(grep -c '^ *it said: ' "${OUT}")"
+is "what each of them said is shown" "${TRY_AGENTS}" "$(grep -c '^ *it said: ' "${OUT}")"
 is "both projects are summed up by the model that plans" "2" "$(grep -c 'summed up by chat-busy, beginning: ' "${OUT}")"
 is "and reviewed" "2" "$(grep -cE '^  Review +VERDICT: pass' "${OUT}")"
 is "that model said \"too many requests\" every other time, and no request failed for it" "${errors}" "$(db "select count(*) from usage_records where status = 'error'")"
