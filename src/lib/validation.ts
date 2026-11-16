@@ -22,6 +22,14 @@ import {
 } from "@/lib/creative/prompt";
 import { API_SCOPES, MAX_PROJECT_TASKS } from "@/lib/limits";
 import { MAX_RENDER_CLIPS, MAX_STILL_SECONDS } from "@/lib/media/render-plan";
+import {
+  SKILL_DESCRIPTION_MAX,
+  SKILL_FILES_MAX,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_INSTRUCTIONS_MAX,
+  SKILL_NAME_MAX,
+  SKILLS_PER_OWNER_MAX,
+} from "@/lib/skills/limits";
 
 export { API_SCOPES, MAX_PROJECT_TASKS, type ApiScope } from "@/lib/limits";
 
@@ -165,6 +173,8 @@ export const agentCreateSchema = z.object({
   memoryEnabled: z.boolean().optional(),
   // Shared knowledge collections the agent can search.
   collectionIds: z.array(z.string().min(1)).max(20).optional(),
+  // Skills the agent works by (v1.7).
+  skillIds: z.array(z.string().min(1)).max(SKILLS_PER_OWNER_MAX).optional(),
 });
 
 export const agentUpdateSchema = agentCreateSchema
@@ -175,9 +185,33 @@ export const teamCreateSchema = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().trim().max(500).optional(),
   agentIds: z.array(z.string().min(1)).max(50).optional().default([]),
+  // Skills every agent has while it works in a project of the team (v1.7).
+  skillIds: z.array(z.string().min(1)).max(SKILLS_PER_OWNER_MAX).optional(),
 });
 
 export const teamUpdateSchema = teamCreateSchema.partial();
+
+const skillFileSchema = z.object({
+  path: z.string().min(1).max(400),
+  content: z.string().max(SKILL_FILE_MAX_BYTES),
+});
+
+export const skillCreateSchema = z.object({
+  name: z.string().trim().min(1).max(SKILL_NAME_MAX),
+  description: z.string().max(SKILL_DESCRIPTION_MAX).optional().default(""),
+  instructions: z.string().max(SKILL_INSTRUCTIONS_MAX).optional().default(""),
+  files: z.array(skillFileSchema).max(SKILL_FILES_MAX).optional(),
+  // A skill of the same name: refuse (default), or give it this text and these files.
+  onConflict: z.enum(["error", "replace"]).optional(),
+});
+
+export const skillUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(SKILL_NAME_MAX).optional(),
+  description: z.string().max(SKILL_DESCRIPTION_MAX).optional(),
+  instructions: z.string().max(SKILL_INSTRUCTIONS_MAX).optional(),
+  enabled: z.boolean().optional(),
+  files: z.array(skillFileSchema).max(SKILL_FILES_MAX).optional(),
+});
 
 export const projectCreateSchema = z.object({
   title: z.string().trim().min(1).max(120),

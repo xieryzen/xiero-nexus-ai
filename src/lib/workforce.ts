@@ -5,6 +5,7 @@ import {
   models,
   projectTasks,
   teamAgents,
+  teamSkills,
   type Agent,
   type Project,
   type ProjectTask,
@@ -33,6 +34,8 @@ export interface AgentExtras {
   collectionIds?: string[];
   /** Notes the agent has kept. */
   memoryCount?: number;
+  /** Skills the agent works by. */
+  skillIds?: string[];
 }
 
 export function serializeAgent(a: Agent, labels?: Map<string, string>, extras: AgentExtras = {}) {
@@ -53,6 +56,7 @@ export function serializeAgent(a: Agent, labels?: Map<string, string>, extras: A
     maxSteps: a.maxSteps,
     memoryEnabled: a.memoryEnabled,
     collectionIds: extras.collectionIds ?? [],
+    skillIds: extras.skillIds ?? [],
     memoryCount: extras.memoryCount ?? 0,
     status: a.status,
     createdAt: a.createdAt,
@@ -61,13 +65,18 @@ export function serializeAgent(a: Agent, labels?: Map<string, string>, extras: A
 
 export function serializeAgents(
   list: Agent[],
-  extras: { collections?: Map<string, string[]>; memories?: Map<string, number> } = {},
+  extras: {
+    collections?: Map<string, string[]>;
+    memories?: Map<string, number>;
+    skills?: Map<string, string[]>;
+  } = {},
 ) {
   const labels = modelLabels(list.flatMap((a) => [a.primaryModelRowId ?? "", a.fallbackModelRowId ?? ""]));
   return list.map((a) =>
     serializeAgent(a, labels, {
       collectionIds: extras.collections?.get(a.id),
       memoryCount: extras.memories?.get(a.id),
+      skillIds: extras.skills?.get(a.id),
     }),
   );
 }
@@ -79,11 +88,18 @@ export function serializeTeam(t: Team) {
     .where(eq(teamAgents.teamId, t.id))
     .all()
     .map((r) => r.agentId);
+  const skillIds = db
+    .select({ skillId: teamSkills.skillId })
+    .from(teamSkills)
+    .where(eq(teamSkills.teamId, t.id))
+    .all()
+    .map((r) => r.skillId);
   return {
     id: t.id,
     name: t.name,
     description: t.description,
     agentIds,
+    skillIds,
     createdAt: t.createdAt,
   };
 }

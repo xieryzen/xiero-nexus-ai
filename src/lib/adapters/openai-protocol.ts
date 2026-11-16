@@ -301,9 +301,46 @@ export function parseModelList(json: unknown): ListedModel[] {
       }
       if (caps.size > 0) listed.capabilities = [...caps];
     }
+    // What the list says of the price. Gateways that give some models away
+    // say so here and nowhere else, each in its own words:
+    //  - OpenRouter and those that follow it: USD per token, as text
+    //    ("0" for a free model, "-1" for a router whose price depends on the
+    //    model it picks); some add `isFree`.
+    //  - Others: USD per million tokens as numbers, and `usage_based_only`
+    //    for a model that no free allowance covers.
+    const pricing = isRecord(item.pricing) ? item.pricing : null;
+    const amount = (key: string): number | undefined => {
+      const value = pricing?.[key];
+      const n = typeof value === "string" && value.trim() !== "" ? Number(value) : num(value);
+      return n !== undefined && Number.isFinite(n) ? n : undefined;
+    };
+    if (pricing) {
+      const perToken = [amount("prompt"), amount("completion")] as const;
+      const perMillion = [amount("input"), amount("output")] as const;
+      if (perToken[0] !== undefined && perToken[1] !== undefined) {
+        if (perToken[0] >= 0 && perToken[1] >= 0) {
+          listed.inputPricePerMTok = roundPrice(perToken[0] * 1_000_000);
+          listed.outputPricePerMTok = roundPrice(perToken[1] * 1_000_000);
+        }
+        listed.billed = [perToken[0], perToken[1], amount("request"), amount("image")].some((n) => n !== undefined && n !== 0);
+      } else if (perMillion[0] !== undefined && perMillion[1] !== undefined && perMillion[0] >= 0 && perMillion[1] >= 0) {
+        listed.inputPricePerMTok = roundPrice(perMillion[0]);
+        listed.outputPricePerMTok = roundPrice(perMillion[1]);
+        listed.billed = perMillion[0] > 0 || perMillion[1] > 0;
+      }
+    }
+    // The gateway's own word goes before a sum: a model with a price can
+    // still be one that its free allowance covers.
+    if (typeof item.isFree === "boolean") listed.billed = !item.isFree;
+    else if (typeof item.usage_based_only === "boolean") listed.billed = item.usage_based_only;
     out.push(listed);
   }
   return out;
+}
+
+/** A price without the noise of a multiplication: 0.15, not 0.15000000000000002. */
+function roundPrice(value: number): number {
+  return Math.round(value * 1e6) / 1e6;
 }
 
 // ─── Embeddings ──────────────────────────────────────────────────────────────

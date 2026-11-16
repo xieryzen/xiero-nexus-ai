@@ -321,14 +321,16 @@ Good to know:
 ## The workforce: `workforce.sh` and `workforce.json`
 
 An app that was just installed has providers at most: no agents, no teams, no
-workflows. [`workforce.json`](workforce.json) says what the workforce of this
-repository's server is, and `workforce.sh` puts it into the running app, the
-way an administrator would by hand on its pages:
+workflows, no skills. [`workforce.json`](workforce.json) says what the
+workforce of this repository's server is, with the skills in
+[`skills/`](skills), and `workforce.sh` puts it into the running app, the way
+an administrator would by hand on its pages:
 
 ```bash
 sudo bash workforce.sh --server 1a2b3c4d --dry-run        # what the app has, what would be added
 sudo bash workforce.sh --server 1a2b3c4d --yes --test     # add it, then ask each chat model for one word
 sudo bash workforce.sh --server 1a2b3c4d --yes --try-run  # add it, then have the agents do a small project
+sudo bash workforce.sh --server 1a2b3c4d --yes --only-usable  # add it, then switch off the models that cannot be used
 ```
 
 `workforce.sh` finds the port the server's app answers on and the app's
@@ -347,9 +349,16 @@ It adds what is missing and leaves the rest:
 - A model the file names is taken into the app from the provider's list, with
   the capabilities and prices of the file. One that is in the app already
   gets the capabilities it lacks, and the prices and name it has none of.
-- An agent, a team or a workflow is added when none of that name is there.
-  One that is there and differs from the file is reported and left as it is;
-  `--update` changes it to what the file says, under the ID it has.
+- An agent, a team, a workflow or a skill is added when none of that name is
+  there. One that is there and differs from the file is reported and left as
+  it is; `--update` changes it to what the file says, under the ID it has.
+- A skill is a folder with a `SKILL.md` and the text files it refers to. It
+  is compared word for word: a `SKILL.md` that was edited here differs from
+  the one in the app until `--update` puts it there, and a skill that was
+  edited on the Skills page is overwritten by that. An agent or a team gets
+  exactly the skills the file names for it; one for which the file names
+  none keeps what it was given by hand. Skills came with version 1.7: on an
+  older app the program says so and changes no agent.
 - A provider that takes no key (`"authType": "none"`) is added when the app
   does not have it, with the address of the file. One that takes a key is not
   added: the program has no keys, and says that the provider is to be added
@@ -373,11 +382,33 @@ ends the run with 1 and says what the provider answered; the workforce stays.
 `--try-run` goes further, and takes minutes: it makes a small project with
 the goal of the file's `tryRun`, lets the model named there plan it and the
 agents do the tasks, and says for each task which model answered and what the
-models before it said. With `"everyAgent": true` a second project gives every
-agent of the file one small task, so that each is seen at work with its own
-first model and its tools. Both are deleted again (`--keep-try-run` keeps
-them). One word from a model says that it answers; whether a provider allows
-the many requests of a project is only seen in one.
+models before it said. With `"everyAgent": true` a second project gives each
+agent one small task (each agent of the try-run's team, or of the whole file
+when it names no team), so that each is seen at work with its own first model
+and its tools. Both are deleted again (`--keep-try-run` keeps them). One word
+from a model says that it answers; whether a provider allows the many
+requests of a project is only seen in one.
+
+`--only-usable` is for an app whose model list has grown past what can be
+used, as it does when everything a gateway lists is imported. It looks at
+every model that is switched on and that the file does not name, and
+switches off:
+
+- a model that a provider without a key **bills for**, by what the provider's
+  own list says (a price above zero, or the gateway's word that it is not
+  free). No request is made for these;
+- a chat model that the provider **refuses** one word: no access, no credit,
+  no such model (an answer of 400 to 405, 410 or 422).
+
+A model that is limited or busy at the moment (429, 5xx), or that takes
+longer than 100 seconds, stays as it is and is listed: run it again later.
+Models for pictures, video, speech, listening and embeddings are not judged,
+because a word cannot try them. The models the file names are never touched
+by it (`--test` is for those). Nothing is deleted: a model is switched on
+again on the Models page. It needs version 1.7 of the app, which passes on
+what a provider's list says of its prices; a provider that lists more than
+120 models without saying what they cost is left alone, so that the check
+does not become hundreds of requests.
 
 Without the node, against any app that can be reached:
 
@@ -402,12 +433,16 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
     "slow":   { "provider": "OVHcloud AI Endpoints", "model": "Meta-Llama-3_3-70B-Instruct", "enabled": false },
     "pictures": { "provider": "gemini", "model": "gemini-nano-banana-2.1", "capabilities": ["image_generation"], "pricePerImage": 0.0336 }
   },
+  "skills": {
+    "house-style": { "file": "skills/house-style" },
+    "short-notes": { "description": "Three rules for notes.", "instructions": "One line each. A date. A name." }
+  },
   "agents": [
     { "name": "Copywriter", "role": "Copywriter", "primary": "writer", "fallback": "spare",
-      "tools": ["read_file", "write_file"], "maxSteps": 8, "memory": true,
+      "tools": ["read_file", "write_file"], "maxSteps": 8, "memory": true, "skills": ["house-style"],
       "instructions": ["Writes captions and headlines in the brand's voice.", "", "How you work:", "- ..."] }
   ],
-  "teams": [ { "name": "Content", "description": "...", "agents": ["Copywriter"] } ],
+  "teams": [ { "name": "Content", "description": "...", "agents": ["Copywriter"], "skills": ["short-notes"] } ],
   "workflows": [ { "name": "Post", "description": "...", "steps": [
     { "title": "Caption", "role": "Copywriter", "objective": "...", "acceptanceCriteria": "..." },
     { "title": "Picture", "role": "Copywriter", "kind": "image", "media": { "aspectRatio": "9:16" }, "dependsOn": [1], "objective": "..." }
@@ -432,13 +467,20 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   model off). Give `capabilities` where the provider's list does not say what
   a model is: Gemini lists its Nano Banana image models like chat models, and
   Anthropic lists names only.
+- **`skills`**: the name of each skill, and where it is: `file`, a folder
+  with a `SKILL.md` next to the definition file (or one Markdown file), or
+  the words themselves as `description` and `instructions`. The name is the
+  one in the `SKILL.md`'s front matter, which this program reads as one line
+  for each key (`name: ...`, `description: ...`). The other text files of
+  the folder come with the skill, each up to 256 KB.
 - **`agents`**: `name`, `role`, `primary` and, optionally, `fallback` (model
   names from above), `instructions` (text, or a list of lines), `tools`,
-  `maxSteps` (1 to 40), `memory`, `temperature`. The AI Manager sees the
-  first 160 characters of the instructions when it shares out tasks: say
-  there what the agent is for. A model that only makes images, speech or
-  embeddings cannot be an agent's model.
-- **`teams`**: `name`, `description`, `agents` (names).
+  `maxSteps` (1 to 40), `memory`, `temperature`, `skills` (names from above).
+  The AI Manager sees the first 160 characters of the instructions when it
+  shares out tasks: say there what the agent is for. A model that only makes
+  images, speech or embeddings cannot be an agent's model.
+- **`teams`**: `name`, `description`, `agents` (names), and `skills`: every
+  member has those while it works in a project of the team.
 - **`workflows`**: `name`, `description`, `steps`. A step has `title`,
   `objective`, `role` (the name of an agent, or a role), and optionally
   `acceptanceCriteria`, `dependsOn` (numbers of earlier steps), `outputFile`,
@@ -450,13 +492,50 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   name from above) that plans the goal and sums the tasks up. Optional:
   `team` (the agents that may get a task; all of them otherwise), `maxTasks`
   (3 unless given), and `everyAgent` (a second project with one task for
-  each agent of the file).
+  each of those agents; a project takes 40 tasks).
 
 What [`workforce.json`](workforce.json) holds is said in its `about`.
 
+### The teams of the committed file
+
+Each team is for one kind of work, and its description names the workflow
+that goes with it. A project is made with the team and the workflow of the
+same row; a workflow with pictures or voice-overs also needs the project's
+image and speech models set.
+
+| Team | Agents | Workflow | What it makes | Skills of the team |
+| --- | --- | --- | --- | --- |
+| Software Team | Manager, CEO, Designer, Frontend, Backend, QA, Security Engineer, Tester, DevOps | Software delivery | 10 steps: 10 written | (its agents' own) |
+| Short Reels Team | Short Reels, Designer, Copywriter, QA | Short Reels | 12 steps: 2 written, 5 pictures, 4 voice-overs, 1 joined video | short-reels, product-image-prompts, anti-ai-slop-copy |
+| Video Product | Video Director, Designer, Copywriter, QA | Video Product | 12 steps: 2 written, 5 pictures, 4 voice-overs, 1 joined video | product-video, product-image-prompts, anti-ai-slop-copy |
+| Brosur & Katalog | Art Director, Copywriter, Designer, Print Designer, QA | Brosur & Katalog | 8 steps: 5 written, 3 pictures | brochure-catalog, anti-ai-slop-design, anti-ai-slop-copy |
+| Website E-commerce | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, Backend, SEO Specialist, Security Engineer, QA | Website E-commerce | 11 steps: 11 written | ecommerce-store, anti-ai-slop-design |
+| Landing Page | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, SEO Specialist, QA | Landing Page | 7 steps: 6 written, 1 pictures | anti-ai-slop-design, anti-ai-slop-copy |
+| Plugin Minecraft Premium | Minecraft Game Designer, Minecraft Plugin Developer, Minecraft QA, Technical Writer | Plugin Minecraft Premium | 10 steps: 10 written | minecraft-paper-plugin, minecraft-premium-product |
+| Addon Minecraft Premium | Minecraft Game Designer, Minecraft Addon Developer, Minecraft QA, Technical Writer | Addon Minecraft Premium | 9 steps: 9 written | minecraft-bedrock-addon, minecraft-premium-product |
+| Setup Server Minecraft | Minecraft Server Admin, Minecraft QA, Technical Writer | Setup Server Minecraft | 8 steps: 8 written | minecraft-server-setup, linux-server-hardening |
+| Developer Minecraft | Minecraft Game Designer, Minecraft Plugin Developer, Minecraft Addon Developer, Minecraft Server Admin, Minecraft QA, Technical Writer | Fitur Minecraft Custom | 7 steps: 7 written | minecraft-premium-product |
+| Install Panel + Wings Pterodactyl | Pterodactyl Engineer, DevOps, Security Engineer, Technical Writer, QA | Install Panel + Wings Pterodactyl | 8 steps: 8 written | pterodactyl-panel-wings, linux-server-hardening |
+| Bot Discord | Discord Bot Developer, Tester, Technical Writer | Bot Discord | 5 steps: 5 written | discord-bot |
+| Konten Media Sosial | Social Media Strategist, Designer, Copywriter, QA | Konten Carousel | 8 steps: 3 written, 5 pictures | social-media-content, anti-ai-slop-copy, product-image-prompts |
+| Artikel SEO | SEO Specialist, Copywriter, QA | Artikel SEO | 4 steps: 4 written | seo-content, anti-ai-slop-copy |
+| Proposal & Penawaran | Sales Consultant, Copywriter, QA | Proposal & Penawaran | 4 steps: 4 written | sales-proposal, anti-ai-slop-copy |
+
+The agents write documents and files into the project's workspace. Without a
+sandbox runner on the server they do not compile, start a game or run a
+command, and no workflow touches a customer's machine: each ends with a test
+list, a checklist or a review for a person, and says what was not run. The
+pictures are made by a free model that makes squares of 1024 pixels and no
+lettering; they stand in for the client's own photographs.
+
+The skills are in [`skills/`](skills), one folder each. They say how the work
+is done, what to check against the official documentation instead of
+memory, and what must never be invented. They were written for this file and
+are **untried as skills**: no project was judged with and without them.
+
 ### Providers that cost nothing
 
-The committed file adds three providers that take no key, and uses no model
+The committed file adds four providers that take no key, and uses no model
 that is billed:
 
 | Provider | What it has | What it allows from one address |
@@ -464,6 +543,7 @@ that is billed:
 | [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | 200 requests an hour by its documentation, all models together; about a hundred when it was counted on one server |
 | [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
 | [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and an allowance for a day that a few tasks use up |
+| [Pollinations](https://pollinations.ai) | One chat model (GPT-OSS 20B) on its old open text API; its newer API takes a key | One request at a time; no number is published |
 
 That is little: an agent with tools makes several requests for one task. The
 app waits and asks again when a provider answers "too many requests" (see
@@ -471,7 +551,8 @@ app waits and asks again when a provider answers "too many requests" (see
 not answer goes on with its second, so a project gets done, slowly. The
 agents have their first model with Kilo Gateway and their second with
 OVHcloud or Gemini. None depends on LLM7, whose allowance was used up after
-a few tasks: its free models are in the app to be picked by hand. When Kilo
+a few tasks, or on the one model of Pollinations: those are in the app to be
+picked by hand. When Kilo
 Gateway's allowance is used up it answers "sign up for free or come back
 later", and every agent works on its second model: on one server each of
 the eleven agents then did its small task there, in ten minutes instead of a
@@ -481,8 +562,14 @@ providers list far more models than they give away: one word from each
 (`--test`) is how the ones in the file were found. Kilo Gateway and LLM7 may
 log what is sent to their free models and use it to improve models: nothing
 confidential belongs there. A free key of a provider (Google AI Studio, Groq,
-Cerebras, Mistral, OpenRouter) allows more than no key; such a provider is
-added on the Providers page, and its models can then be named in the file.
+Mistral, OpenRouter, NVIDIA NIM, GitHub Models, Cloudflare Workers AI, and
+Kilo Gateway and LLM7 themselves) allows more than no key; such a provider
+is added on the Providers page, and its models can then be named in the
+file. Which providers give what for nothing changes by the month: the lists
+this was taken from are
+[awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) and
+[awesome-free-ai-coding](https://github.com/mvalentsev/awesome-free-ai-coding),
+read on 2026-11-15.
 
 ## Tidying up: `disk-report.sh`
 

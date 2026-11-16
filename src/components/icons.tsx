@@ -45,6 +45,7 @@ type IconName =
   | "search"
   | "link"
   | "memory"
+  | "skill"
   | "api";
 
 const paths: Record<IconName, React.ReactNode> = {
@@ -201,6 +202,12 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   link: <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1" />,
+  skill: (
+    <>
+      <path d="M12 3 4 7v5c0 4.5 3.2 7.8 8 9 4.8-1.2 8-4.5 8-9V7l-8-4Z" />
+      <path d="m9 12 2 2 4-4.5" />
+    </>
+  ),
   memory: (
     <>
       <path d="M7 3h10a2 2 0 0 1 2 2v16l-7-4-7 4V5a2 2 0 0 1 2-2Z" />

@@ -10,6 +10,7 @@ import { Errors } from "@/lib/errors";
 import { modelIsMediaOnly } from "@/lib/gateway";
 import { agentCollectionMap, setAgentCollections } from "@/lib/knowledge/service";
 import { getClientMeta } from "@/lib/request";
+import { agentSkillMap, setAgentSkills } from "@/lib/skills/service";
 import { serializeAgent, serializeAgents } from "@/lib/workforce";
 import { agentCreateSchema } from "@/lib/validation";
 
@@ -31,6 +32,7 @@ export const GET = handle(async () => {
   return json({
     agents: serializeAgents(rows, {
       collections: agentCollectionMap(),
+      skills: agentSkillMap(),
       // An administrator sees how many notes there are; everyone else, their own.
       memories: memoryCounts(user.role === "admin" ? undefined : user.id),
     }),
@@ -62,14 +64,13 @@ export const POST = handle(async (req) => {
     })
     .returning()
     .get();
-  if (body.collectionIds?.length) {
-    try {
-      setAgentCollections(agent.id, body.collectionIds);
-    } catch (err) {
-      // Not half an agent: without its collections it is not what was asked for.
-      db.delete(agents).where(eq(agents.id, agent.id)).run();
-      throw err;
-    }
+  try {
+    if (body.collectionIds?.length) setAgentCollections(agent.id, body.collectionIds);
+    if (body.skillIds?.length) setAgentSkills(agent.id, body.skillIds);
+  } catch (err) {
+    // Not half an agent: without its collections and skills it is not what was asked for.
+    db.delete(agents).where(eq(agents.id, agent.id)).run();
+    throw err;
   }
 
   audit({
@@ -77,12 +78,17 @@ export const POST = handle(async (req) => {
     action: "agent.create",
     targetType: "agent",
     targetId: agent.id,
-    metadata: { name: agent.name, role: agent.role, tools: body.tools ?? [] },
+    metadata: { name: agent.name, role: agent.role, tools: body.tools ?? [], skills: body.skillIds?.length ?? 0 },
     ip,
     userAgent,
   });
   return json(
-    { agent: serializeAgent(agent, undefined, { collectionIds: body.collectionIds ?? [] }) },
+    {
+      agent: serializeAgent(agent, undefined, {
+        collectionIds: body.collectionIds ?? [],
+        skillIds: [...new Set(body.skillIds ?? [])],
+      }),
+    },
     { status: 201 },
   );
 });

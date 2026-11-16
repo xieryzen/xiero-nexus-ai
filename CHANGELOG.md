@@ -5,7 +5,95 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.7.0-rc.1] - 2026-11-16
+
+Skills: a way of working, written down once and read by an agent with every
+task. A skill is uploaded as a `SKILL.md`, a `.skill` or a `.zip`, or written
+on its page, and given to agents and to teams. With it: a way to cut a model
+list that has grown past what can be used down to the models that answer,
+and a workforce file of fifteen teams with a workflow and skills each. The
+app's part was tested against the local mock; what is known from a real
+server is under Notes.
+
+### Added
+
+- **Skills.** A page where skills are uploaded, written, read with their
+  files, switched off, downloaded and deleted. An upload is read by what it
+  is: a Markdown or text file is one skill (front matter `name` and
+  `description`, or the first heading and paragraph); a ZIP, whatever it is
+  called, is the folders in it that hold a `SKILL.md`, each with its text
+  files; a JSON file is one skill or a list. Only text is kept: an agent
+  reads a skill and does not run it. What an archive holds beyond that
+  (pictures, links, encrypted entries, paths that leave the folder) is left
+  out and named. An archive is never unpacked to more than it announces, and
+  one that announces more than 64 MB is refused before anything is unpacked.
+  A skill of a name that is taken is refused, or replaces it when asked to,
+  and then stays with the agents and teams that have it.
+- **Skills of agents and of teams.** An agent has its own skills, and those
+  of the project's team while it works there. They follow its instructions
+  in every task, its own first, each in full while there is room (16,000
+  characters a skill, 40,000 together); what does not fit is named with its
+  description. An agent with tools gets `read_skill` for the rest of a long
+  skill and for a skill's files, and reads only the skills it was given. The
+  one who plans a project sees each agent's skills by name, and the reviewer
+  reviews by its own and the team's.
+- `GET` and `POST /api/skills`, `POST /api/skills/upload` (the file as the
+  body, its name in `x-file-name`, `?onConflict=replace`), `GET`, `PATCH`
+  and `DELETE /api/skills/{id}`, `GET /api/skills/{id}/files?path=`, and
+  `GET /api/skills/{id}/download` (a `.skill`, or `?format=md`). Agents and
+  teams take and give `skillIds`. Every signed-in user reads skills; an
+  administrator changes them, and each change is in the audit log.
+- **What a provider's list says a model costs.** Model discovery passes on
+  the prices in a provider's list, and whether the provider counts a model
+  as free, in the forms gateways use (a price per token as text with `"0"`
+  for a free model, `isFree`, a price per million tokens with
+  `usage_based_only`). A model that is imported gets the listed prices.
+- **Known providers to start from.** The form for a new provider can be
+  filled from a list: four providers that take no key, nine that give a
+  free key, and two paid ones, each with its address, how it signs in, where
+  a key is made and what it gave for nothing when the list was read
+  (2026-11-15). The list is words in the form: no provider is added or
+  called by it.
+- `workforce.py --only-usable`: looks at every model that is switched on and
+  that the file does not name, and switches off the ones that cannot be
+  used: a model a provider without a key bills for (by the provider's list,
+  without a request), and a chat model the provider refuses one word (no
+  access, no credit, no such model). A model that is limited, busy or slow
+  at the moment stays and is listed. Nothing is deleted.
+- `workforce.py` reads **skills** from the file: a folder with a `SKILL.md`
+  next to it, or the words themselves. It adds them, changes them with
+  `--update` when a word differs, and gives each agent and team the skills
+  the file names for it. An agent for which the file names none keeps what
+  it was given by hand.
+- **Fifteen teams** in the committed `workforce.json`, each with a workflow:
+  software, short reels, product videos, brochures and catalogues, online
+  stores, landing pages, Minecraft Java plugins, Bedrock add-ons, Minecraft
+  server setups, custom Minecraft features, Pterodactyl Panel and Wings
+  installations, Discord bots, social media carousels, SEO articles, and
+  proposals. Fifteen more agents for them, twenty-six in all.
+- **Twenty skills** in `scripts/host/skills`, a folder each: design and copy
+  that do not look machine-made, online stores, web build quality, SEO,
+  product videos, short reels, brochures and catalogues, picture prompts,
+  social media content, Paper plugins, Bedrock add-ons, Minecraft server
+  setup, what makes a Minecraft product worth paying for, Pterodactyl Panel
+  and Wings, Linux server hardening, Discord bots, technical writing,
+  proposals, and reviewing.
+- A fourth provider without a key in the file: Pollinations, with the one
+  model its old open API still serves.
+- `over-ssh.sh` and the Deploy workflow send the `skills` folder to the node
+  with `workforce.json`.
+- CI puts the file with its skills into the built app, runs **every**
+  workflow of it to the end in a project of the team that names it, and
+  tries `--only-usable` on a gateway that lists billed, refused, limited and
+  free models.
+
+### Changed
+
+- `tryRun.everyAgent` gives a task to each agent of the try-run's team when
+  it names one, and to each agent of the file otherwise: twenty-six agents
+  are more requests than the free tiers allow in an hour.
+- The reel's caption asks for 3 to 8 hashtags, as the skill of that team
+  says.
 
 ### Notes
 
@@ -24,6 +112,37 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
   `workforce.json` says so now. Its answer then is "sign up for free": an
   account there gives a key, which the provider takes on the Providers page
   (the `workforce` action leaves how a provider signs in as it is).
+- At the time of this release candidate **nothing of 1.7 has run on a real
+  server**: not the migration, not an upload, not `--only-usable` against a
+  real gateway. The model lists of Kilo Gateway, LLM7 and Pollinations were
+  read while this was written, and their forms are the ones the price
+  reading was written for. The candidate is there to see all of it at work.
+- **How well a model follows a skill was not measured.** The checks show
+  that a skill reaches the agent, the planner and the reviewer, and that its
+  files can be read; no project was judged with and without one.
+- The skills were written for this file. They say how the work is done and
+  what must not be invented, and leave what changes with each release
+  (versions, package names, flags) to the official documentation, which
+  they tell the agent to read. They are untried as skills.
+- The agents of the new teams write documents and files. On a server
+  without a sandbox runner they compile nothing and run nothing, and no
+  workflow touches a customer's machine: each ends with a test list, a
+  checklist or a review for a person.
+- One more provider without a key was looked at and not added: by a list
+  that probes such providers twice a week, its only model with tools has
+  asked callers without a key for one since 2026-11-05.
+
+### Upgrading
+
+- When 1.7 starts, the database gets four tables for skills. Nothing that
+  was there is changed, and 1.6 can open the database again: it leaves the
+  tables alone.
+- Nothing has to be configured.
+- On a server that got the file of 1.6, the `workforce` action adds the
+  skills, fifteen agents, thirteen teams, thirteen workflows and one
+  provider. With `--update` it also gives the earlier agents and the reel
+  team their skills and changes the reel's caption step. The models the file
+  no longer names stay as they are.
 
 ## [1.6.0] - 2026-11-15
 

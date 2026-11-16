@@ -399,7 +399,67 @@ notification is then also sent there as a JSON `POST`:
 - `url` is built from `APP_URL`. An address on a private network is refused
   unless its host is listed in `ALLOW_PRIVATE_WEBHOOK_HOSTS`.
 
+## Skills (v1.7.0)
+
+A skill is a way of working, written down: what a `SKILL.md` says. An agent
+that is given a skill reads it with every task it works on, so that the same
+kind of work is done the same way each time, by whichever model answers.
+
+- **Add one** under **Skills**: upload it, or write it on the page. What is
+  taken:
+
+  | File | What it is read as |
+  |---|---|
+  | `SKILL.md`, or any Markdown or text file | One skill. Front matter (`name`, `description`) is used when it is there; without it the first heading is the name and the first paragraph the description. |
+  | `.skill` or `.zip` | An archive of a folder with a `SKILL.md` in it, and the files the instructions refer to. Several such folders in one archive give several skills. Without a `SKILL.md`, an archive with exactly one Markdown file is that skill. |
+  | `.json` | `{"name", "description", "instructions", "files": [{"path", "content"}]}`, one or a list. |
+
+  The kind is read from the file's bytes, not from its name. Only text is
+  kept, because an agent reads a skill and does not run it: pictures, fonts
+  and programs in an archive are left out, and the page says which. A file
+  whose path leaves the folder, a link and an encrypted entry are left out
+  too. An upload is at most 8 MB, the instructions 100,000 characters, a file
+  of a skill 256 KB, and a skill keeps 60 files of 2 MB together. A skill of a
+  name that is taken is refused, unless *Replace* is ticked: then the skill
+  gets the new text and files and stays with the agents and teams that have
+  it.
+- **Give it** to an agent or to a team on the **Agents** page. A team's
+  skills are every member's while it works in a project of that team, on top
+  of its own.
+- **At work**, the agent's instructions for a task are followed by its
+  skills, its own first, each in full while there is room (16,000 characters
+  a skill, 40,000 together, twelve skills). What does not fit is named with
+  its description. An agent with tools gets one more, `read_skill`, for the
+  rest of a long skill and for a skill's files; it reads only the skills it
+  was given. A task that writes the prompt of a picture or the words of a
+  voice-over is given the skills as well.
+- **The one who plans** sees each agent with the names of its skills, and
+  **the reviewer** of a project reviews by its own skills and the team's: a
+  checklist is what a review is made of.
+- A skill can be switched off without taking it from anyone, read on its
+  page with its files, and downloaded again as a `.skill` or as its
+  `SKILL.md`. Adding, replacing, changing and deleting a skill is in the
+  audit log. Every signed-in user can read the skills; an administrator
+  changes them.
+
+The skills that come with this repository are in
+[`scripts/host/skills`](scripts/host/skills): one folder each, put into a
+running app with its agents and teams by the
+[workforce file](scripts/host#the-workforce-workforcesh-and-workforcejson).
+
+What was tested: the archive reader against archives made by another
+program, damaged ones and ones that announce less than they unpack to; the
+upload, the tool and a project run in the end-to-end checks, against the
+mock. **How well a given model follows a skill was not measured.**
+
 ## Provider adapters
+
+A new provider can **start from** a known one: the form's first field fills in
+the name, the address and how the provider signs in, for providers that take
+no key, ones that give a free key, and the paid ones. It says in a line what
+each gave for nothing when the list was read, and where a key is made; what a
+provider gives away changes, and its own site says what holds now. A provider
+of your own is filled in by hand, as before.
 
 A provider's adapter is the protocol the gateway speaks to it.
 
@@ -634,6 +694,8 @@ links in the answers to be right.
 | 1.3.0 | Advanced Orchestration (parallel, budgets, approval, observability, auto-routing, workflows) | ✅ implemented (step-based workflow builder) |
 | 1.4.0 | Creative Workflows (image and video generation, Creative Studio, media tasks, Reel template) | ✅ implemented (tested against a mock provider, not a live one) |
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
+| 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
+| 1.7.0 | Skills (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool) | ✅ implemented (tested against a mock provider) |
 
 ---
 
@@ -840,14 +902,15 @@ src/
   components/              # UI: shell, auth, providers, models, chat, studio, media, projects, workflows, knowledge, account, users
   db/                      # Drizzle schema, client (auto-migrate), migrate script
   lib/                     # crypto, secrets, auth, session, ssrf, adapters, gateway, media, creative, orchestrator,
-                           # agent (tools, memory), knowledge, worker, schedules, notifications, public-api, usage, stats…
+                           # agent (tools, memory), knowledge, skills, worker, schedules, notifications, public-api, usage, stats…
   instrumentation.ts       # starts the background worker with the server
 assets/fonts/              # the font for subtitles (Noto Sans Bold, SIL Open Font License)
 drizzle/                   # generated SQL migrations
 sandbox-runner/            # reference external code-execution runner (Docker)
 scripts/                   # release tooling: package, smoke-test, publish, download
 scripts/e2e/               # mock provider and end-to-end checks
-scripts/host/              # for a Pterodactyl node: install, upgrade, the site in nginx, disk report, running them over SSH, and their tests
+scripts/host/              # for a Pterodactyl node: install, upgrade, the site in nginx, disk report, the workforce from a file
+                           # with its skills (scripts/host/skills), running them over SSH, and their tests
 .github/workflows/         # CI: check, end-to-end, bundle, publish releases
 tests/                     # node:test unit tests
 ```
@@ -869,7 +932,9 @@ size and time limits, media tasks in a plan, the Reel template), the OpenAI
 and Gemini wire formats (tools, streaming, embeddings, images, speech), the
 custom HTTP adapter's templates, waiting for a provider that says "not now"
 (which answers are asked again, the waits, a model waited for in vain), cron
-expressions and time zones, the agent's tool loop, document reading and
+expressions and time zones, the agent's tool loop, skills (the ZIP reader
+with archives that lie about their size or leave their folder, front matter,
+what an upload is read as, what an agent is told), document reading and
 passage ranking for the knowledge base, the timeline, subtitles and ffmpeg
 command line of a joined video, the API's request and response format, and
 the release tooling (channels, version ordering, release selection,

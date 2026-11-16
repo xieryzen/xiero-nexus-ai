@@ -1,10 +1,11 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { teamAgents, teams } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
+import { setTeamSkills } from "@/lib/skills/service";
 import { serializeTeam } from "@/lib/workforce";
 import { teamCreateSchema } from "@/lib/validation";
 
@@ -32,6 +33,15 @@ export const POST = handle(async (req) => {
     }
     return t;
   });
+  if (body.skillIds?.length) {
+    try {
+      setTeamSkills(team.id, body.skillIds);
+    } catch (err) {
+      // Not half a team.
+      db.delete(teams).where(eq(teams.id, team.id)).run();
+      throw err;
+    }
+  }
 
   audit({ actorUserId: user.id, action: "team.create", targetType: "team", targetId: team.id, metadata: { name: team.name }, ip, userAgent });
   return json({ team: serializeTeam(team) }, { status: 201 });

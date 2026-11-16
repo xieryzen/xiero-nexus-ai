@@ -1,14 +1,19 @@
 {
   "about": [
     "The workforce of the server this repository is deployed to. Read by scripts/host/workforce.py (Deploy workflow: workforce-plan, workforce); the format is in scripts/host/README.md.",
-    "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints and LLM7 take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
+    "Fifteen teams, each for one kind of work and each with a workflow: software, short reels, product videos, brochures and catalogues, online stores, landing pages, Minecraft plugins, Bedrock add-ons, Minecraft server setups, custom Minecraft features, Pterodactyl installations, Discord bots, social media carousels, SEO articles, and proposals. A team's description names its workflow.",
+    "Skills are in skills/ next to this file, a folder with a SKILL.md each: the way each kind of work is done here. The program puts them into the app and gives them to the agents and teams named below; an agent reads its own skills and its team's with every task. Edit a SKILL.md and run the workforce action with --update to change a skill; one that was changed on the Skills page is overwritten by that.",
+    "The agents write documents and files into a project's workspace. They do not compile, start a game, or touch a customer's server: the server has no sandbox runner. Every workflow therefore ends with a test list, a checklist or a review for a person, and says what was not run.",
+    "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints, LLM7 and Pollinations take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
     "What costs nothing is limited: Kilo Gateway to 200 requests an hour from one address by its documentation (when it was counted on this server, to about a hundred), OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
     "Every agent has a quick first model with Kilo Gateway, and a second with another provider, most with OVHcloud, whose models are open ones that stay. No agent depends on LLM7: without a key its allowance for a day lasts a few tasks. Its free models (codestral-latest and gpt-oss:20b answered) are in the app to be picked by hand. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was. When Kilo Gateway's allowance is used up, every agent works on its second model: that was seen on this server, and a project that takes a minute and a half took ten.",
     "gpt-oss-120b of OVHcloud is no agent's model: it is the one to pick as the manager model of a project, which plans, sums up, and is every task's last resort. \"tryRun\" uses it that way.",
     "What is sent to the free models of Kilo Gateway and LLM7 may be logged by the provider and used to improve its models: nothing personal or confidential.",
     "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes between ten seconds and a minute and a half for one, so the reel shows them cropped to its vertical frame.",
     "Two models that were tried and did not serve are switched off: one was rate-limited by its provider, the other took four minutes to answer. Qwen3.5-397B of OVHcloud is left out: it answered one word in seconds at times, and not within five minutes at another.",
-    "The app waits up to 300 seconds for an answer of a provider instead of 60: an agent's request is answered in one piece."
+    "The app waits up to 300 seconds for an answer of a provider instead of 60: an agent's request is answered in one piece.",
+    "The try-run plans a small goal with the plugin team and gives each agent of that team one task: every agent of the file would be more requests than the free tiers allow in an hour.",
+    "With --only-usable the workforce action also switches off the models that cannot be used: those a provider without a key bills for, and those a provider refuses one word. The models named here are never switched off by it."
   ],
   "providers": {
     "gemini": {
@@ -34,6 +39,13 @@
       "authType": "none",
       "timeoutMs": 300000,
       "notes": "Free models, no key, for picking by hand: 1 request a second, and an allowance for a day that a few tasks use up, so no agent depends on it. Its documentation gives a free token 100,000 tokens a day. Most of the models it lists need its paid plan. What is sent may be logged and used to improve models: nothing personal or confidential."
+    },
+    "Pollinations": {
+      "adapter": "openai-compatible",
+      "baseUrl": "https://text.pollinations.ai/openai",
+      "authType": "none",
+      "timeoutMs": 300000,
+      "notes": "The old open text API of Pollinations, no key: one chat model (GPT-OSS 20B), one request at a time from one address. Its newer API takes a key and is billed."
     }
   },
   "models": {
@@ -107,6 +119,13 @@
       "provider": "gemini",
       "model": "gemini-3.8-flash-tts"
     },
+    "pollinations-gpt-oss": {
+      "provider": "Pollinations",
+      "model": "openai-fast",
+      "displayName": "GPT-OSS 20B (Pollinations)",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
+    },
     "kilo-ernie": {
       "provider": "Kilo Gateway",
       "model": "baidu/ernie-5.5-flash-preview:free",
@@ -116,6 +135,68 @@
       "provider": "OVHcloud AI Endpoints",
       "model": "Meta-Llama-3_3-70B-Instruct",
       "enabled": false
+    }
+  },
+  "skills": {
+    "anti-ai-slop-design": {
+      "file": "skills/anti-ai-slop-design"
+    },
+    "anti-ai-slop-copy": {
+      "file": "skills/anti-ai-slop-copy"
+    },
+    "ecommerce-store": {
+      "file": "skills/ecommerce-store"
+    },
+    "web-build-quality": {
+      "file": "skills/web-build-quality"
+    },
+    "seo-content": {
+      "file": "skills/seo-content"
+    },
+    "product-video": {
+      "file": "skills/product-video"
+    },
+    "short-reels": {
+      "file": "skills/short-reels"
+    },
+    "brochure-catalog": {
+      "file": "skills/brochure-catalog"
+    },
+    "product-image-prompts": {
+      "file": "skills/product-image-prompts"
+    },
+    "social-media-content": {
+      "file": "skills/social-media-content"
+    },
+    "minecraft-paper-plugin": {
+      "file": "skills/minecraft-paper-plugin"
+    },
+    "minecraft-bedrock-addon": {
+      "file": "skills/minecraft-bedrock-addon"
+    },
+    "minecraft-server-setup": {
+      "file": "skills/minecraft-server-setup"
+    },
+    "minecraft-premium-product": {
+      "file": "skills/minecraft-premium-product"
+    },
+    "pterodactyl-panel-wings": {
+      "file": "skills/pterodactyl-panel-wings"
+    },
+    "linux-server-hardening": {
+      "file": "skills/linux-server-hardening"
+    },
+    "discord-bot": {
+      "file": "skills/discord-bot"
+    },
+    "technical-writing": {
+      "file": "skills/technical-writing"
+    },
+    "sales-proposal": {
+      "file": "skills/sales-proposal"
+    },
+    "code-review-checklist": {
+      "file": "skills/code-review-checklist"
     }
   },
   "agents": [
@@ -205,6 +286,10 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "product-image-prompts",
+        "anti-ai-slop-design"
       ]
     },
     {
@@ -236,6 +321,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "web-build-quality"
       ]
     },
     {
@@ -295,6 +383,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "code-review-checklist"
       ]
     },
     {
@@ -323,6 +414,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "linux-server-hardening"
       ]
     },
     {
@@ -351,6 +445,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "code-review-checklist"
       ]
     },
     {
@@ -380,6 +477,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "linux-server-hardening"
       ]
     },
     {
@@ -408,6 +508,9 @@
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "short-reels"
       ]
     },
     {
@@ -432,6 +535,488 @@
         "- A caption: the hook as the first line, two or three short lines, the call to action, then 8 to 12 hashtags that fit (some broad, some narrow) on a last line.",
         "- Match the brand's voice and the way the audience talks. No claims that cannot be backed.",
         "- Interface text is short, specific and the same everywhere for the same thing.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ],
+      "skills": [
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Video Director",
+      "role": "Product Video Director",
+      "primary": "kilo-nemotron",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 10,
+      "memory": true,
+      "skills": [
+        "product-video"
+      ],
+      "instructions": [
+        "Plans product videos, promos and explainers that are made from still pictures and a voice-over: the promise, the storyboard, the spoken lines.",
+        "",
+        "How you work:",
+        "- Start from what is certain about the product: what it is, what it does, what it costs or where to get it. A fact the brief does not give is left out, never invented.",
+        "- One promise a video. Four scenes unless the task says otherwise: hook, what it is, proof, call to action.",
+        "- Write the style line and the product line once and repeat them word for word wherever a picture is described, so that separate pictures look like one film.",
+        "- Voice-over lines are for the ear: short, easy to say, about 2.3 words a second, and they make sense with the sound off as subtitles.",
+        "- When a task asks for the words a voice will speak, give those words and nothing else.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Print Designer",
+      "role": "Brochure and Catalogue Designer",
+      "primary": "kilo-code",
+      "fallback": "ovh-qwen-27b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 14,
+      "memory": false,
+      "skills": [
+        "brochure-catalog"
+      ],
+      "instructions": [
+        "Lays out brochures, flyers, price lists and catalogues as HTML and CSS that print correctly, from the content and the art direction it is given.",
+        "",
+        "How you work:",
+        "- Decide the format and the grid first (page size in millimetres, columns, margins, type sizes in points) and state them.",
+        "- Build one self-contained HTML file per piece, with print CSS: an @page size, pages as fixed-size blocks, nothing important within 5 mm of an edge.",
+        "- Use the real text you were given, exactly: names, codes, prices and phone numbers are copied, never retyped from memory or made up. A gap is marked TODO(client).",
+        "- Refer to pictures by clear file names in an images/ folder and list which picture goes where.",
+        "- When you have file tools, write the HTML into the project workspace and read it back once to check it is complete.",
+        "- Say how to make the PDF from the file, and what a printer still needs (bleed, picture resolution, a colour proof).",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Commerce Strategist",
+      "role": "E-commerce Strategist",
+      "primary": "kilo-nemotron",
+      "fallback": "ovh-gpt-oss-20b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "skills": [
+        "ecommerce-store"
+      ],
+      "instructions": [
+        "Decides how an online store or a landing page is shaped so that it sells: the buyers, the pages, the checkout, payment and delivery, and what to measure.",
+        "",
+        "How you work:",
+        "- Start from the buyer and the order: who buys what, on which device, how it is paid and how it arrives.",
+        "- Decide. Where the brief leaves a choice open, choose a default, give the reason in a line, and say what it rules out.",
+        "- Describe pages by their job and the order of what is on them, with the real content that goes there. No generic sections.",
+        "- Name payment and shipping services as assumptions to be confirmed by the client; never write keys or fees you were not given.",
+        "- Keep the first version small and name what comes later.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Art Director",
+      "role": "Art Director and Design Critic",
+      "primary": "kilo-nemotron-vl",
+      "fallback": "ovh-qwen-27b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "skills": [
+        "anti-ai-slop-design"
+      ],
+      "instructions": [
+        "Sets the visual direction of a website, a store or a printed piece so that it could only be this client's, and holds the work to it.",
+        "",
+        "How you work:",
+        "- Write the direction in one sentence a stranger could picture, and say what it rules out.",
+        "- Give tokens with exact values and a job each: colours (hex), type scale, spacing, radii, borders. One accent colour.",
+        "- Design with the real content. Ask for what is missing; never fill a gap with invented facts, reviews or numbers.",
+        "- When you critique, point at the place, name the rule that is broken, and say what to do instead. Start with what does the most harm.",
+        "- Say what is good and must be kept, so that a fix does not flatten it.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "SEO Specialist",
+      "role": "SEO Specialist",
+      "primary": "kilo-lightning",
+      "fallback": "ovh-qwen36",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": false,
+      "skills": [
+        "seo-content"
+      ],
+      "instructions": [
+        "Makes pages findable: the query each page answers, its title and description, its headings, its structured data and its links.",
+        "",
+        "How you work:",
+        "- One main query a page, chosen from what a searcher types and wants. Say that the choice is a reasoned assumption until it is measured.",
+        "- Give exact text: the title (50 to 60 characters), the meta description (120 to 155), the URL, the heading outline, the JSON-LD.",
+        "- Structured data matches what is visibly on the page. No invented ratings, reviews or prices.",
+        "- No keyword stuffing and no tricks: the page that answers best wins.",
+        "- End with what to measure after launch and where.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Minecraft Game Designer",
+      "role": "Minecraft Game and Product Designer",
+      "primary": "kilo-nemotron",
+      "fallback": "ovh-gpt-oss-20b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "skills": [
+        "minecraft-premium-product"
+      ],
+      "instructions": [
+        "Turns an idea for a Minecraft plugin, add-on or server feature into a specification a developer can build and an owner would pay for.",
+        "",
+        "How you work:",
+        "- Describe the feature as what a player does and sees, step by step, then every rule and number behind it.",
+        "- Decide the platform on purpose (Java plugin, datapack, Bedrock add-on, server configuration) and say why.",
+        "- List every option an owner will want to change, with its default; every command with its permission; every message a player reads.",
+        "- Three lists: in the first version, later, never. Keep the first version small and finished.",
+        "- Name what it must work with (economy, permissions, placeholders, proxies) and the edge cases: offline players, full inventories, reloads, two players at once.",
+        "- Stay within Mojang's commercial usage rules when a feature touches paid ranks or shops, and say so.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Minecraft Plugin Developer",
+      "role": "Minecraft Java Plugin Developer",
+      "primary": "kilo-code",
+      "fallback": "ovh-qwen36",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 24,
+      "memory": false,
+      "skills": [
+        "minecraft-paper-plugin"
+      ],
+      "instructions": [
+        "Writes Minecraft Java server plugins for Paper and its family: complete, buildable source that is safe on a live server.",
+        "",
+        "How you work:",
+        "- Follow the specification and the technical design you were given; where they are silent, choose the simplest thing and say so.",
+        "- Write complete files with package lines and imports into the project workspace: build files, plugin.yml, config.yml, messages.yml and every class. No '...' in place of code.",
+        "- The Bukkit API on the server thread only; anything that waits (database, files, network) off it.",
+        "- No hard-coded messages or numbers: they live in the configuration files, commented.",
+        "- State the Minecraft, Paper and Java versions you wrote for. When you can read the web, check an API you are unsure of in the Paper documentation instead of guessing.",
+        "- You cannot start a server unless you have a tool for it: say what was not compiled or run, and give the steps to do both.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Minecraft Addon Developer",
+      "role": "Minecraft Bedrock Add-on Developer",
+      "primary": "kilo-code",
+      "fallback": "ovh-qwen-27b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 24,
+      "memory": false,
+      "skills": [
+        "minecraft-bedrock-addon"
+      ],
+      "instructions": [
+        "Writes add-ons for Minecraft Bedrock Edition: behavior pack, resource pack and scripts that load without errors.",
+        "",
+        "How you work:",
+        "- Follow the specification you were given; where it is silent, choose the simplest thing and say so.",
+        "- Write every file complete into the project workspace, under <Name>_BP/ and <Name>_RP/: both manifests, each definition, the language files, the scripts.",
+        "- Every UUID is a real, different version-4 UUID. Every identifier is namespaced and appears in every place it must: definition, texture key, language file.",
+        "- JSON the game reads is valid JSON: no comments, no trailing commas.",
+        "- Textures and icons are binary: list each with its path, size and what it shows, for a person to add.",
+        "- State the Minecraft version you wrote for and any experiment or beta API it needs. When you can read the web, check a format version or component you are unsure of in the official creator documentation.",
+        "- You cannot run the game: say so, and give the test list for the person who does.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Minecraft Server Admin",
+      "role": "Minecraft Server Administrator",
+      "primary": "kilo-glyph",
+      "fallback": "ovh-gpt-oss-20b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 14,
+      "memory": false,
+      "skills": [
+        "minecraft-server-setup"
+      ],
+      "instructions": [
+        "Plans and configures Minecraft servers that stay up, do not lag and can be restored: software, sizing, configuration, plugins, security, backups.",
+        "",
+        "How you work:",
+        "- Write down what you were told and what you assumed: edition, version, players, where it runs, who administers it.",
+        "- Give every setting as file, key, value and reason, in a table. Name the gameplay cost of each performance setting.",
+        "- A small plugin stack of maintained plugins, each with its job. Check that each supports the server version; say when you could not check.",
+        "- Never write long lists of JVM flags from memory: take them from the Paper documentation and say where they came from.",
+        "- Secrets are generated and stored by the owner, never written into a document.",
+        "- You do not operate the server: you write what a person does, with a check after each step.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Minecraft QA",
+      "role": "Minecraft QA Tester and Code Reviewer",
+      "primary": "kilo-glyph",
+      "fallback": "ovh-qwen36",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 16,
+      "memory": false,
+      "skills": [
+        "code-review-checklist"
+      ],
+      "instructions": [
+        "Tests and reviews Minecraft plugins, add-ons and server setups: finds what would break on a live server before a player does.",
+        "",
+        "How you work:",
+        "- Review against the specification and the acceptance criteria. Read the files themselves when you have the tools, not only their summary.",
+        "- For plugins: threads (no Bukkit call off the server thread, nothing blocking on it), configuration that survives updates, permissions on every action, player names never used as keys, tasks and connections closed on disable.",
+        "- For add-ons: every UUID different, dependencies pointing at header UUIDs, identifiers present in every place they must be, valid JSON, format versions that allow the components used.",
+        "- For servers: who can join as whom, what is reachable from the internet, what happens after a crash, whether a backup was restored.",
+        "- Write a test list a person can follow in the game, each test with what to do and what should happen.",
+        "- Report findings with their place, the harm and the fix, most harmful first. Say what you only read and did not run.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Technical Writer",
+      "role": "Technical Writer",
+      "primary": "kilo-lightning",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "skills": [
+        "technical-writing"
+      ],
+      "instructions": [
+        "Writes the documentation that lets someone use, install or operate the work without its author: READMEs, guides, references, handovers, changelogs.",
+        "",
+        "How you work:",
+        "- Read the material first: the specification, the code and configuration in the workspace, the earlier deliverables. Document what is there, not what should be.",
+        "- Start from what the reader wants to do. Numbered steps, one action each, with what they should see.",
+        "- Tables for commands, permissions and options: every one that exists, none that do not.",
+        "- Never a secret in a document: say where it is stored.",
+        "- Mark what you could not confirm as TODO(author) and list it at the end.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Pterodactyl Engineer",
+      "role": "Pterodactyl and Linux Hosting Engineer",
+      "primary": "kilo-code",
+      "fallback": "ovh-gpt-oss-20b",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 16,
+      "memory": false,
+      "skills": [
+        "pterodactyl-panel-wings"
+      ],
+      "instructions": [
+        "Writes exact, checkable runbooks for installing, moving, updating and repairing the Pterodactyl Panel and Wings on Linux servers.",
+        "",
+        "How you work:",
+        "- Read the official Pterodactyl documentation first when you can read the web, and follow it rather than your memory. Say at the top which pages you followed and what you could not verify.",
+        "- Write down the intake: operating system, one machine or several, the domain names, whether Docker can run there, what will be hosted.",
+        "- Every step: the command in a code block, what it does, and a check that shows it worked.",
+        "- Never invent a package name, a flag or a path. What you are not sure of is marked to be looked up.",
+        "- No secret in the runbook: <generated>, and where it is kept. The application key is backed up the moment it exists.",
+        "- You do not run anything on the customer's server; a technician follows what you write.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Discord Bot Developer",
+      "role": "Discord Bot Developer",
+      "primary": "kilo-code",
+      "fallback": "ovh-qwen36",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "delete_file",
+        "run_command",
+        "fetch_url"
+      ],
+      "maxSteps": 24,
+      "memory": false,
+      "skills": [
+        "discord-bot"
+      ],
+      "instructions": [
+        "Writes Discord bots that are reliable, ask for no more access than they use, and can be deployed by someone else.",
+        "",
+        "How you work:",
+        "- Design first: the slash commands with their options and who may use them, the intents, the data kept.",
+        "- Write complete files into the project workspace: the entry point, one file per command and event, the command registration script, .env.example, README.md.",
+        "- The token comes from the environment and appears nowhere else. Every interaction is answered in time; every handler catches its errors.",
+        "- State the library and runtime versions you wrote for. When you can read the web, check an API you are unsure of in the library's guide.",
+        "- You cannot run the bot unless you have a tool for it: say what was not run, and give the test list.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Social Media Strategist",
+      "role": "Social Media Content Strategist",
+      "primary": "kilo-lightning",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 10,
+      "memory": true,
+      "skills": [
+        "social-media-content"
+      ],
+      "instructions": [
+        "Plans social media posts, carousels and content calendars that give the audience something and lead to one action.",
+        "",
+        "How you work:",
+        "- One goal a post: reach, trust or sale. One point a slide. One call to action.",
+        "- Write the slide text ready to set: a headline of five to seven words, a body of at most twenty.",
+        "- Describe each picture so that it can be made without the rest of the plan, and say where the text will sit on it.",
+        "- Facts, prices and results come from the brief. A gap is TODO(client), never an invention.",
+        "- When a task asks for the words of one slide or one caption, give those words and nothing else.",
+        "",
+        "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
+        "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
+      ]
+    },
+    {
+      "name": "Sales Consultant",
+      "role": "Sales Consultant and Proposal Writer",
+      "primary": "kilo-nemotron",
+      "fallback": "gemini-hydrogen",
+      "tools": [
+        "list_files",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "fetch_url"
+      ],
+      "maxSteps": 12,
+      "memory": true,
+      "skills": [
+        "sales-proposal"
+      ],
+      "instructions": [
+        "Writes service proposals, quotations and scopes of work that a client can say yes to.",
+        "",
+        "How you work:",
+        "- Restate the client's need in their words before offering anything.",
+        "- Scope as deliverables the client can check, a list of what is not included, at most three options named by what they are.",
+        "- Prices, names, legal details and dates come from the brief. A missing one is TODO(provider): you may propose the structure of a price, never a number as if it were agreed.",
+        "- Check that totals add up. No promise the provider cannot keep.",
+        "- End with one next step.",
         "",
         "Write in the language of the project goal (Indonesian when the goal is in Indonesian) unless the task says otherwise.",
         "Follow the output format the task asks for. Do not invent facts: state your assumptions, and say plainly what you could not do or could not verify."
@@ -462,6 +1047,202 @@
         "Designer",
         "Copywriter",
         "QA"
+      ],
+      "skills": [
+        "short-reels",
+        "product-image-prompts",
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Video Product",
+      "description": "Product videos, promos and explainers from still pictures and a voice-over. Use it with the workflow \"Video Product\"; the project needs an image model and a speech model.",
+      "agents": [
+        "Video Director",
+        "Designer",
+        "Copywriter",
+        "QA"
+      ],
+      "skills": [
+        "product-video",
+        "product-image-prompts",
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Brosur & Katalog",
+      "description": "Brochures, flyers, price lists and product catalogues, as print-ready HTML with their pictures and copy. Use it with the workflow \"Brosur & Katalog\"; the project needs an image model.",
+      "agents": [
+        "Art Director",
+        "Copywriter",
+        "Designer",
+        "Print Designer",
+        "QA"
+      ],
+      "skills": [
+        "brochure-catalog",
+        "anti-ai-slop-design",
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Website E-commerce",
+      "description": "Online stores that look and read like the client and nobody else: strategy, art direction, content, pages, checkout, SEO, security review. Use it with the workflow \"Website E-commerce\", or let the AI Manager plan the tasks.",
+      "agents": [
+        "Commerce Strategist",
+        "Art Director",
+        "Copywriter",
+        "Designer",
+        "Frontend",
+        "Backend",
+        "SEO Specialist",
+        "Security Engineer",
+        "QA"
+      ],
+      "skills": [
+        "ecommerce-store",
+        "anti-ai-slop-design"
+      ]
+    },
+    {
+      "name": "Landing Page",
+      "description": "One page with one job: the offer, the direction, the copy, the page itself, its SEO and a critique. Use it with the workflow \"Landing Page\".",
+      "agents": [
+        "Commerce Strategist",
+        "Art Director",
+        "Copywriter",
+        "Designer",
+        "Frontend",
+        "SEO Specialist",
+        "QA"
+      ],
+      "skills": [
+        "anti-ai-slop-design",
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Plugin Minecraft Premium",
+      "description": "Minecraft Java plugins for Paper and its family, built to be sold: specification, design, source, tests, review, documentation and the store page. Use it with the workflow \"Plugin Minecraft Premium\".",
+      "agents": [
+        "Minecraft Game Designer",
+        "Minecraft Plugin Developer",
+        "Minecraft QA",
+        "Technical Writer"
+      ],
+      "skills": [
+        "minecraft-paper-plugin",
+        "minecraft-premium-product"
+      ]
+    },
+    {
+      "name": "Addon Minecraft Premium",
+      "description": "Add-ons for Minecraft Bedrock Edition: concept, behavior pack, resource pack, scripts, test list, review, documentation and the listing. Use it with the workflow \"Addon Minecraft Premium\".",
+      "agents": [
+        "Minecraft Game Designer",
+        "Minecraft Addon Developer",
+        "Minecraft QA",
+        "Technical Writer"
+      ],
+      "skills": [
+        "minecraft-bedrock-addon",
+        "minecraft-premium-product"
+      ]
+    },
+    {
+      "name": "Setup Server Minecraft",
+      "description": "Minecraft servers planned, configured, secured and handed over: software and sizing, settings, plugin stack, security and backups, launch checklist. Use it with the workflow \"Setup Server Minecraft\".",
+      "agents": [
+        "Minecraft Server Admin",
+        "Minecraft QA",
+        "Technical Writer"
+      ],
+      "skills": [
+        "minecraft-server-setup",
+        "linux-server-hardening"
+      ]
+    },
+    {
+      "name": "Developer Minecraft",
+      "description": "Custom Minecraft work on either edition: a feature as a Java plugin, as a Bedrock add-on, or as server configuration. Use it with the workflow \"Fitur Minecraft Custom\", or let the AI Manager plan the tasks.",
+      "agents": [
+        "Minecraft Game Designer",
+        "Minecraft Plugin Developer",
+        "Minecraft Addon Developer",
+        "Minecraft Server Admin",
+        "Minecraft QA",
+        "Technical Writer"
+      ],
+      "skills": [
+        "minecraft-premium-product"
+      ]
+    },
+    {
+      "name": "Install Panel + Wings Pterodactyl",
+      "description": "Installation runbooks for the Pterodactyl Panel and Wings: intake, Panel, Wings and the first node, network and TLS, hardening and backups, verification, handover. Use it with the workflow \"Install Panel + Wings Pterodactyl\".",
+      "agents": [
+        "Pterodactyl Engineer",
+        "DevOps",
+        "Security Engineer",
+        "Technical Writer",
+        "QA"
+      ],
+      "skills": [
+        "pterodactyl-panel-wings",
+        "linux-server-hardening"
+      ]
+    },
+    {
+      "name": "Bot Discord",
+      "description": "Discord bots: design, source, tests, deployment notes and documentation. Use it with the workflow \"Bot Discord\".",
+      "agents": [
+        "Discord Bot Developer",
+        "Tester",
+        "Technical Writer"
+      ],
+      "skills": [
+        "discord-bot"
+      ]
+    },
+    {
+      "name": "Konten Media Sosial",
+      "description": "Carousels and feed posts: the plan, the slide pictures, the captions and hashtags. Use it with the workflow \"Konten Carousel\"; the project needs an image model.",
+      "agents": [
+        "Social Media Strategist",
+        "Designer",
+        "Copywriter",
+        "QA"
+      ],
+      "skills": [
+        "social-media-content",
+        "anti-ai-slop-copy",
+        "product-image-prompts"
+      ]
+    },
+    {
+      "name": "Artikel SEO",
+      "description": "Articles that answer what people search for: the query and outline, the draft, the SEO pass and a review. Use it with the workflow \"Artikel SEO\".",
+      "agents": [
+        "SEO Specialist",
+        "Copywriter",
+        "QA"
+      ],
+      "skills": [
+        "seo-content",
+        "anti-ai-slop-copy"
+      ]
+    },
+    {
+      "name": "Proposal & Penawaran",
+      "description": "Service proposals and quotations a client can say yes to: needs, scope, options, price table and terms. Use it with the workflow \"Proposal & Penawaran\".",
+      "agents": [
+        "Sales Consultant",
+        "Copywriter",
+        "QA"
+      ],
+      "skills": [
+        "sales-proposal",
+        "anti-ai-slop-copy"
       ]
     }
   ],
@@ -611,8 +1392,8 @@
           "dependsOn": [
             1
           ],
-          "objective": "Write the caption for the post: the hook as the first line, two or three short lines that deliver the message, and a call to action. Then 8 to 12 relevant hashtags on a last line.",
-          "acceptanceCriteria": "A caption that opens with the hook and ends with a call to action, and one line of 8 to 12 hashtags."
+          "objective": "Write the caption for the post: the hook as the first line, two or three short lines that deliver the message, and a call to action. Then 3 to 8 hashtags that the audience searches, on a last line.",
+          "acceptanceCriteria": "A caption that opens with the hook and ends with a call to action, and one line of 3 to 8 hashtags."
         }
       ]
     },
@@ -732,11 +1513,1225 @@
           "acceptanceCriteria": "Build, configuration, deployment and rollback steps that can be followed, and a release checklist that names the open findings."
         }
       ]
+    },
+    {
+      "name": "Video Product",
+      "description": "A product video of about 24 seconds in a wide 16:9 frame, without a video model: 4 pictures, each shown for as long as its voice-over, with subtitles; plus a thumbnail, and the title and description for the post. The pictures are square and fill the wide frame. Use the team \"Video Product\"; the project needs an image model and a speech model. 12 steps and 10 generated files, within a project's default limits.",
+      "steps": [
+        {
+          "title": "Brief and storyboard",
+          "role": "Video Director",
+          "dependsOn": [],
+          "objective": "Plan a product video of about 24 seconds in a wide 16:9 frame for the project goal. Give: (1) the three facts about the product that are certain from the goal: what it is, what it does, what it costs or where to get it (leave out what the goal does not say); (2) the one thing the viewer should remember; (3) the style line: one sentence that fixes the look of every picture (setting, light, colour palette, camera); (4) the product line: one sentence that describes the product the same way every time (shape, colour, material, size, distinctive detail); (5) exactly 4 scenes of about 6 seconds each: Hook, What it is, Proof, Call to action. For each scene: the voice-over (12 to 15 words, easy to say aloud), the picture (subject, action, framing), and on-screen text of at most 5 words or none.",
+          "acceptanceCriteria": "Three facts, one message, a style line, a product line, and exactly 4 numbered scenes, each with a voice-over that can be spoken in about 6 seconds, a picture and on-screen text. No fact that is not in the goal.",
+          "outputFile": "video/01-storyboard.md"
+        },
+        {
+          "title": "Scene 1 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 1 of the storyboard, and only that scene: one still that shows its subject and action. Start from the storyboard's product line and end with its style line, word for word, so that it matches the other scenes. The picture is square and is shown cropped to a wide 16:9 frame: put the product and everything that matters in the middle, and nothing that matters near the top and bottom edges. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Scene 1 voice-over",
+          "role": "Video Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 1 from the storyboard, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the storyboard's wording unless a phrase is hard to say aloud.",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          }
+        },
+        {
+          "title": "Scene 2 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 2 of the storyboard, and only that scene: one still that shows its subject and action. Start from the storyboard's product line and end with its style line, word for word, so that it matches the other scenes. The picture is square and is shown cropped to a wide 16:9 frame: put the product and everything that matters in the middle, and nothing that matters near the top and bottom edges. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Scene 2 voice-over",
+          "role": "Video Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 2 from the storyboard, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the storyboard's wording unless a phrase is hard to say aloud.",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          }
+        },
+        {
+          "title": "Scene 3 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 3 of the storyboard, and only that scene: one still that shows its subject and action. Start from the storyboard's product line and end with its style line, word for word, so that it matches the other scenes. The picture is square and is shown cropped to a wide 16:9 frame: put the product and everything that matters in the middle, and nothing that matters near the top and bottom edges. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Scene 3 voice-over",
+          "role": "Video Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 3 from the storyboard, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the storyboard's wording unless a phrase is hard to say aloud.",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          }
+        },
+        {
+          "title": "Scene 4 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of scene 4 of the storyboard, and only that scene: one still that shows its subject and action. Start from the storyboard's product line and end with its style line, word for word, so that it matches the other scenes. The picture is square and is shown cropped to a wide 16:9 frame: put the product and everything that matters in the middle, and nothing that matters near the top and bottom edges. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Scene 4 voice-over",
+          "role": "Video Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The voice-over of scene 4 from the storyboard, and only that scene: the words as they are spoken, one or two short sentences that take about 6 seconds to say. Keep the storyboard's wording unless a phrase is hard to say aloud.",
+          "kind": "audio",
+          "media": {
+            "durationSeconds": 6
+          }
+        },
+        {
+          "title": "Final cut",
+          "role": "Video Director",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "objective": "Join the 4 scene pictures in order into one wide video: each picture fills the frame and is shown for as long as its voice-over, with the spoken words as subtitles.",
+          "kind": "render",
+          "media": {
+            "aspectRatio": "16:9",
+            "subtitles": true,
+            "fit": "cover"
+          }
+        },
+        {
+          "title": "Thumbnail",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The thumbnail of the video: one striking still of the product that shows the hook. Start from the storyboard's product line and end with its style line. The picture is square and is shown cropped to a wide 16:9 frame: the product in the middle, with a calm, empty area on one side where a title can be set later. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Title, description and posting notes",
+          "role": "Copywriter",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write what goes with the video where it is posted: a title of at most 60 characters that says what the product is and why to watch; a description of 3 to 5 short lines with the facts of the storyboard and one call to action; 3 to 8 hashtags; and one line saying which of the generated pictures should be replaced by real product photographs before publishing.",
+          "acceptanceCriteria": "A title, a description that uses only facts from the storyboard, a call to action, 3 to 8 hashtags, and the note on real photographs.",
+          "outputFile": "video/02-title-and-description.md"
+        }
+      ]
+    },
+    {
+      "name": "Brosur & Katalog",
+      "description": "A brochure, flyer, price list or catalogue as print-ready HTML: the plan and art direction, the copy, three pictures, the layout, the handover notes for print, and a review. Use the team \"Brosur & Katalog\"; the project needs an image model. The generated pictures are placeholders for the client's own photographs.",
+      "steps": [
+        {
+          "title": "Plan, format and art direction",
+          "role": "Art Director",
+          "dependsOn": [],
+          "objective": "Plan the printed piece for the project goal. Give: (1) its job: what the reader should do after reading; (2) the format, with the reason: page size in millimetres, number of pages or panels, where it will be read; (3) the page plan: for each page or panel, what goes on it, in order; (4) the content inventory: every product or service named in the goal with the facts given for it, and a list of what is missing as TODO(client); (5) the direction in one sentence and what it rules out; (6) the tokens: colours with hex values and a job each, one accent; type sizes in points for headings, body, captions and prices; the grid (columns, gutters, margins in millimetres); (7) the three pictures needed (cover, product, detail or in use): what each shows, and one style line that all three share.",
+          "acceptanceCriteria": "A job, a format in millimetres, a plan for every page or panel, an inventory with TODO(client) for every gap, a direction, tokens with exact values, and three pictures with one shared style line. Nothing invented.",
+          "outputFile": "brochure/01-plan.md"
+        },
+        {
+          "title": "Copy",
+          "role": "Copywriter",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write all the text of the piece, page by page or panel by panel as the plan orders it: headlines, body text, every product entry (name, code, two to four specification lines, price with its unit), how to order, contact details, and the validity of the prices. Use the facts of the goal and the plan exactly; mark each gap as TODO(client). End with a confirmation list: every price, code, phone number, address and date that appears, for the client to sign off.",
+          "acceptanceCriteria": "Text for every page or panel of the plan, product entries all built the same way, and a confirmation list. No invented fact; no filler.",
+          "outputFile": "brochure/02-copy.md"
+        },
+        {
+          "title": "Cover picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The cover picture of the plan, and only that picture. End with the plan's style line, word for word. Keep the subject in the middle with a calm, empty area where the plan puts the title. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Product picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The product picture of the plan, and only that picture: the product alone, clearly lit, on a plain surface. End with the plan's style line, word for word. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Detail picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The third picture of the plan (a detail, or the product in use), and only that picture. End with the plan's style line, word for word. No text in the image, no people's faces.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Layout",
+          "role": "Print Designer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Lay the piece out as one self-contained HTML file with print CSS, exactly in the plan's format, grid and tokens, with the copy as written (do not change a name, code, price or number). Pages are fixed-size blocks in millimetres with an @page size; nothing important within 5 mm of an edge; product entries all built the same way and never split across pages. Refer to the three pictures as images/cover.jpg, images/product.jpg and images/detail.jpg. The deliverable is the complete HTML file.",
+          "acceptanceCriteria": "One complete HTML file that prints at the planned size, holds all the copy unchanged, uses the plan's tokens, and refers to the three pictures by file name.",
+          "outputFile": "brochure/brochure.html"
+        },
+        {
+          "title": "Print handover notes",
+          "role": "Print Designer",
+          "dependsOn": [
+            1,
+            6
+          ],
+          "objective": "Write the notes that go with the HTML file: how to make the PDF from it (browser, paper size, margins, background graphics); which generated picture is saved under which file name in images/; where real photographs should replace the generated ones and at what size in pixels for 300 dpi; what a print shop needs that the file does not have yet (bleed of 3 mm, a colour proof, paper and finish assumed); and the list of every TODO(client) still open.",
+          "acceptanceCriteria": "Steps to the PDF, the picture file names, the photographs needed with their sizes, what a printer still needs, and the open TODOs.",
+          "outputFile": "brochure/README.md"
+        },
+        {
+          "title": "Review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            2,
+            6,
+            7
+          ],
+          "objective": "Review the piece before it goes to print. Check every price, code, phone number, address and date in the layout against the copy and the project goal, one by one, and list any that differ. Check the layout against the plan (format, grid, tokens, nothing near an edge) and against the skills of this team. List what is invented, what is filler, and what could not be checked because the pictures were not seen. Findings most harmful first, each with its place and its fix.",
+          "acceptanceCriteria": "A check of every fact against its source, findings with place and fix, what is good, what could not be checked, and a verdict.",
+          "outputFile": "brochure/review.md"
+        }
+      ]
+    },
+    {
+      "name": "Website E-commerce",
+      "description": "An online store from a goal to a reviewed first version: store strategy, art direction, content, pages, the backend design and code, the storefront code, SEO, a security review, a design critique and the launch checklist. Documents go to docs/ in the project workspace, the code beside them. Use the team \"Website E-commerce\".",
+      "steps": [
+        {
+          "title": "Store strategy",
+          "role": "Commerce Strategist",
+          "dependsOn": [],
+          "objective": "Write the store strategy for the project goal: who buys what and on which device; how an order is paid and delivered; the pages the store needs, each with its job and the order of what is on it; the checkout step by step; payment methods and shipping, named as assumptions the client confirms; what the owner manages day to day; what is in the first version and what comes later; what to measure. Where the goal leaves a choice open, decide, and say why.",
+          "acceptanceCriteria": "Buyers, the order's path from cart to delivery, a job and a block order for every page, the checkout, payment and shipping as stated assumptions, the scope of the first version, and measures. Every open choice is decided.",
+          "outputFile": "docs/01-store-strategy.md"
+        },
+        {
+          "title": "Art direction and design system",
+          "role": "Art Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Set the visual direction of the store so that it could only be this client's. Give: the direction in one sentence and what it rules out; the tokens with exact values and a job each (colours in hex with one accent, the type scale with line heights, spacing, radii, borders); how products are photographed and shown; the one strong idea of the home page and of the product page; and the list of real material needed from the client (photographs, logo, texts), each missing one marked TODO(client).",
+          "acceptanceCriteria": "A direction and what it rules out, tokens with exact values, a picture style, one idea per key page, and the material needed. Nothing from the list of things that give machine-made work away.",
+          "outputFile": "docs/02-art-direction.md"
+        },
+        {
+          "title": "Content and microcopy",
+          "role": "Copywriter",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the words of the store, page by page as the strategy orders them: the home page's headline and blocks; category lines; the product page template (title, description of three to five specific lines, what is in the box, shipping and returns lines); cart and checkout labels, buttons and helper texts; every error and empty state; the order confirmation message; shipping, returns and contact pages. Use the facts of the goal; mark each gap as TODO(client).",
+          "acceptanceCriteria": "Real text for every page of the strategy and for every state (empty, error, out of stock, payment failed and pending). No filler, no invented fact.",
+          "outputFile": "docs/03-content.md"
+        },
+        {
+          "title": "Pages and states",
+          "role": "Designer",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Specify each page of the strategy so that a frontend engineer can build it without guessing: the layout at 360 px and at desktop width; the components with their tokens from the art direction; the text from the content document in place; and each state: loading, empty, error, out of stock, success. Include the cart, each checkout step, the order page and the admin's order list.",
+          "acceptanceCriteria": "Every page with its layout at two widths, its components, its real text and every state; touch targets of at least 44 px; text contrast of at least 4.5 to 1.",
+          "outputFile": "docs/04-pages.md"
+        },
+        {
+          "title": "Backend design",
+          "role": "Backend",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Design the backend of the store from the strategy: the stack (what the goal names, otherwise a common and simple one, with the reason); the data model (products, variants with SKU, price and stock, categories, carts, orders with lines that copy the price, customers, addresses, payments, shipments); the order states and who may change them; every API endpoint with request, response and errors; how a payment is confirmed (the gateway's server-to-server notification, verified, safe to receive twice); how shipping cost is found; how stock cannot be oversold; the admin's access. Money in whole rupiah, never floats.",
+          "acceptanceCriteria": "A named stack, a data model, order states, endpoints with errors, payment confirmation by verified notification, stock that cannot be oversold, and admin access with roles.",
+          "outputFile": "docs/05-backend-design.md"
+        },
+        {
+          "title": "Backend implementation",
+          "role": "Backend",
+          "dependsOn": [
+            5
+          ],
+          "objective": "Implement the backend as designed: the data model with its migrations, every endpoint, the order states, the payment notification handler and the stock rule, with configuration read from the environment and an example file that names each variable without a value. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "The endpoints of the design exist with their validation and errors; prices and stock are checked on the server; no secret in the code."
+        },
+        {
+          "title": "Storefront implementation",
+          "role": "Frontend",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Implement the storefront as the pages document says, with the tokens of the art direction and the text of the content document, against the API of the backend design: home, listing, product page, cart, checkout, order page. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "Every page of the pages document is built with its states; real text, no placeholders; works at 360 px; images have sizes and alt text."
+        },
+        {
+          "title": "SEO",
+          "role": "SEO Specialist",
+          "dependsOn": [
+            1,
+            3,
+            4
+          ],
+          "objective": "Make the store findable. For the home page, the listing template and the product page template give: the query and intent, the title, the meta description, the URL pattern, the heading outline and the JSON-LD (Product with offers in IDR for the product page, BreadcrumbList, LocalBusiness when the shop has a place). Add the canonical rules for filters and sorting, the sitemap and robots.txt, and what to measure after launch.",
+          "acceptanceCriteria": "Exact titles, descriptions, URL patterns and JSON-LD for the three page types, canonical rules, and measures. No invented ratings.",
+          "outputFile": "docs/08-seo.md"
+        },
+        {
+          "title": "Security review",
+          "role": "Security Engineer",
+          "dependsOn": [
+            5,
+            6,
+            7
+          ],
+          "objective": "Review the backend design and the code in the workspace for what would cost the shop money or data: prices or stock trusted from the browser, a payment confirmed without verifying the notification, an order readable by another customer, admin actions without a role check, input used in queries or markup unchecked, secrets in code. Read the files themselves. Findings most harmful first, each with its place, the harm and the fix.",
+          "acceptanceCriteria": "Findings with place, harm and fix; what was read and what was not; a verdict.",
+          "outputFile": "docs/09-security-review.md"
+        },
+        {
+          "title": "Design critique",
+          "role": "Art Director",
+          "dependsOn": [
+            2,
+            4,
+            7
+          ],
+          "objective": "Hold the storefront code and the pages document against the art direction and against the list of things that give machine-made work away. Point at each place that could be any other shop's, name the rule it breaks and say what to do instead. Say what is good and must be kept. You read code and documents, not a rendered page: say so.",
+          "acceptanceCriteria": "Findings with their place, the rule broken and the change to make, most harmful first; what to keep.",
+          "outputFile": "docs/10-design-critique.md"
+        },
+        {
+          "title": "QA and launch checklist",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "objective": "Check the first version against the strategy: for each page and each state, whether it is specified, built and consistent between the documents and the code. Then write the launch checklist: a test order with each payment method in the gateway's test mode, a refund, a shipping cost for a far city, each message a customer receives, the open findings of the security review and the design critique, backups, and every TODO(client) still open.",
+          "acceptanceCriteria": "A table of pages and states with what is missing, the launch checklist, the open findings and TODOs, and a verdict.",
+          "outputFile": "docs/11-qa-and-launch.md"
+        }
+      ]
+    },
+    {
+      "name": "Landing Page",
+      "description": "One page with one job: the offer and the page plan, the art direction, the copy, a hero picture, the page itself, its SEO, and a review. The page is written to site/ in the project workspace. Use the team \"Landing Page\"; the project needs an image model.",
+      "steps": [
+        {
+          "title": "Offer and page plan",
+          "role": "Commerce Strategist",
+          "dependsOn": [],
+          "objective": "Plan a landing page for the project goal: who it is for and what they should do on it (one action); the offer in one sentence with what is certain from the goal; the blocks of the page in order, each with its job and the facts it uses; what is left out on purpose; and the facts that are missing, as TODO(client).",
+          "acceptanceCriteria": "One audience, one action, an offer, an ordered list of blocks with a job each, and the open TODOs. No block without something to say.",
+          "outputFile": "docs/01-offer.md"
+        },
+        {
+          "title": "Art direction",
+          "role": "Art Director",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Set the visual direction of the page so that it could only be this client's: the direction in one sentence and what it rules out; tokens with exact values (colours in hex with one accent, type scale, spacing, radii); the one strong idea of the first screen; and the hero picture: what it shows and its style line.",
+          "acceptanceCriteria": "A direction, tokens with exact values, one idea for the first screen, and a hero picture with a style line.",
+          "outputFile": "docs/02-art-direction.md"
+        },
+        {
+          "title": "Copy",
+          "role": "Copywriter",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the words of the page, block by block as the plan orders them: the headline (at most 10 words: what it is and for whom), the supporting line, each block's text, the button labels, the form labels and messages, and the footer. Facts from the goal only; gaps as TODO(client).",
+          "acceptanceCriteria": "Text for every block of the plan, buttons that say what happens, no filler and no invented fact.",
+          "outputFile": "docs/03-copy.md"
+        },
+        {
+          "title": "Hero picture",
+          "role": "Designer",
+          "dependsOn": [
+            2
+          ],
+          "objective": "The hero picture of the art direction, and only that picture. End with its style line, word for word. Keep the subject in the middle, with a calm, empty area where the headline will sit. No text in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Page",
+          "role": "Frontend",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Build the page as static HTML and CSS (and only the JavaScript it needs) in site/: site/index.html, site/styles.css, with the tokens of the art direction as CSS custom properties and the copy exactly as written. Refer to the hero picture as site/images/hero.jpg. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "A complete page that works at 360 px and on a desktop, with the copy unchanged, visible focus, images with sizes and alt text, and no placeholders."
+        },
+        {
+          "title": "SEO",
+          "role": "SEO Specialist",
+          "dependsOn": [
+            1,
+            3
+          ],
+          "objective": "Give the page's query and intent, its title, meta description, URL, heading outline and JSON-LD, the Open Graph tags for sharing, and what to measure after launch.",
+          "acceptanceCriteria": "An exact title and description, the outline, JSON-LD that matches the page, sharing tags, and measures.",
+          "outputFile": "docs/06-seo.md"
+        },
+        {
+          "title": "Review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            5,
+            6
+          ],
+          "objective": "Review the page in site/ against the plan, the art direction and the copy: is every block there with its text unchanged; does anything on it fit another business unchanged; is any fact not from the goal; does it hold at 360 px (read the CSS); are the SEO tags in the page. Read the files themselves. Findings most harmful first, each with its place and its fix.",
+          "acceptanceCriteria": "Findings with place and fix, what is good, what could not be checked without a browser, and a verdict.",
+          "outputFile": "docs/07-review.md"
+        }
+      ]
+    },
+    {
+      "name": "Plugin Minecraft Premium",
+      "description": "A Minecraft Java plugin for Paper, built to be sold: the product specification, the technical design, the source in four parts, a test plan, a code review, the documentation and the store page. The source goes to the project workspace. Nothing is compiled or run on a server by this workflow: the test plan says how. Use the team \"Plugin Minecraft Premium\".",
+      "steps": [
+        {
+          "title": "Product specification",
+          "role": "Minecraft Game Designer",
+          "dependsOn": [],
+          "objective": "Write the one-page specification of the plugin for the project goal: who buys it and the problem in their words; the feature as what a player does and sees, step by step; every rule and number behind it; three lists (in the first version, later, never); every option an owner can change, with its default; every command with its arguments and permission; every message a player reads; what it must work with; the target Minecraft and Paper version (what the goal names, otherwise the current stable one, stated as an assumption); and the edge cases to handle.",
+          "acceptanceCriteria": "A buyer, the player's steps, rules with numbers, the three lists, options with defaults, commands with permissions, messages, integrations, a target version and edge cases. Every open choice is decided.",
+          "outputFile": "docs/01-specification.md"
+        },
+        {
+          "title": "Technical design",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Design the plugin from the specification: the package and class layout with the job of each class; which work runs on the server thread and which off it; the storage interface, its implementations and the schema; the configuration files with every key; how the configuration is migrated on update; the optional integrations and how their absence is handled; whether Folia is supported and what that costs; the build (Gradle Kotlin DSL, dependencies, what is shaded and relocated).",
+          "acceptanceCriteria": "Classes with a job each, a threading plan, storage with a schema, configuration keys, update migration, integrations, and the build.",
+          "outputFile": "docs/02-technical-design.md"
+        },
+        {
+          "title": "Project skeleton and configuration",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Create the project: settings.gradle.kts, build.gradle.kts, plugin.yml with every command and permission of the specification, config.yml and messages.yml with every key commented, the main class with clean start and stop, and the typed configuration access with the update migration of the design. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "The build files, plugin.yml, both configuration files with comments, and a main class that starts and stops cleanly."
+        },
+        {
+          "title": "Core feature",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Write the core of the plugin as designed: the services and the listeners that carry out the feature of the specification, with its rules, numbers and edge cases. Read the files of the skeleton first and build on them. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "The feature of the specification is implemented with its edge cases; no Bukkit call off the server thread; nothing hard-coded."
+        },
+        {
+          "title": "Commands and messages",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "objective": "Write every command of the specification: arguments with tab completion, the permission check, who may run it (player or console), clear errors for wrong input, and the reload command. Every message comes from messages.yml. Read the existing files first and build on them. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "Every command of the specification exists with its permission, tab completion and errors; the reload command works without a restart."
+        },
+        {
+          "title": "Storage and integrations",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "objective": "Write the storage of the design: the interface, the default implementation that works out of the box, the database option with a connection pool, the schema creation and migration, all off the server thread; then the optional integrations of the specification, each switched off with one log line when its plugin is absent. Read the existing files first and build on them. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "Storage behind an interface with two implementations, players keyed by UUID, prepared statements, and integrations that are optional."
+        },
+        {
+          "title": "Test plan",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            1,
+            2,
+            4,
+            5,
+            6
+          ],
+          "objective": "Write the test plan for the plugin: the unit tests worth having, with their cases; and the manual test list for a real Paper server, each test with what to do and what should happen: fresh install, each command as player, as console and without permission, wrong arguments, a second player, a reload, a restart in the middle of an action, a missing optional plugin, a broken configuration file, an update from an older configuration. Read the source in the workspace first. Say that nothing was run.",
+          "acceptanceCriteria": "Unit test cases, a manual test list that covers every command and every edge case of the specification, and what was not run.",
+          "outputFile": "docs/07-test-plan.md"
+        },
+        {
+          "title": "Code review",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "objective": "Review the source in the workspace against the specification, the design and the skills of this team. Read the files themselves. Look for: Bukkit calls off the server thread or blocking calls on it; messages or numbers not in a file; missing permission checks; player names used as keys; tasks and connections not closed on disable; configuration that an update would wipe; code that is named and not written. Findings most harmful first, each with file and line, the harm and the fix.",
+          "acceptanceCriteria": "Findings with file and line, harm and fix; what is good; what was read and not run; a verdict.",
+          "outputFile": "docs/08-code-review.md"
+        },
+        {
+          "title": "Documentation",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            3,
+            5,
+            6
+          ],
+          "objective": "Write the README of the plugin from the specification and the files in the workspace: what it does; requirements (server software and version, Java); installation in numbered steps; the commands and permissions table; the configuration reference with every key, type, default and meaning; placeholders and integrations; troubleshooting by symptom; how to build from source; how to get support. Document what is in the files; mark what you could not confirm as TODO(author).",
+          "acceptanceCriteria": "A README with installation steps, a complete commands and permissions table, a complete configuration reference and troubleshooting.",
+          "outputFile": "README.md"
+        },
+        {
+          "title": "Store page and changelog",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            9
+          ],
+          "objective": "Write the store page of the plugin, ready to paste: the first lines (what it does and for whom, without adjectives); three to five features, each one sentence that names something visible in the game; requirements and what is not supported; what the price includes (as TODO(client) for the numbers); the list of screenshots or clips to make, with what each shows; and the changelog entry for version 1.0.0. No invented downloads, reviews or server names.",
+          "acceptanceCriteria": "A store page with features, requirements, limits, a media list and a changelog entry. No invented proof.",
+          "outputFile": "docs/10-store-page.md"
+        }
+      ]
+    },
+    {
+      "name": "Addon Minecraft Premium",
+      "description": "An add-on for Minecraft Bedrock Edition: the concept, the technical design, the behavior pack, the resource pack, the scripts, a test list, a review, the documentation with packaging steps, and the listing. The packs go to the project workspace as text files; textures and icons are listed for a person to add, and nothing is run in the game by this workflow. Use the team \"Addon Minecraft Premium\".",
+      "steps": [
+        {
+          "title": "Concept and content list",
+          "role": "Minecraft Game Designer",
+          "dependsOn": [],
+          "objective": "Write the concept of the add-on for the project goal: who it is for and what it adds, as what a player does and sees; the content list (every item, block, entity, recipe and mechanic, each with its numbers and how a survival player gets it); what it does not touch in the vanilla game; three lists (in the first version, later, never); the target Minecraft Bedrock version (what the goal names, otherwise the current stable one, stated as an assumption); and whether anything needs an experiment or a beta API, with the stable alternative.",
+          "acceptanceCriteria": "An audience, the player's view, a content list with numbers and a fair way to get each thing, the three lists and a target version.",
+          "outputFile": "docs/01-concept.md"
+        },
+        {
+          "title": "Technical design",
+          "role": "Minecraft Addon Developer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Design the add-on from the concept: the names of the two pack folders; the namespace; a table of every identifier with the files it appears in (definition, texture key, language key); the format version used for each kind of file; the script modules and their versions, or why there are no scripts; the list of textures and icons with path, size in pixels and what each shows; and the four UUIDs or more that the manifests need, written out, all different.",
+          "acceptanceCriteria": "Pack names, a namespace, an identifier table, format versions, script modules, a texture list, and real, different UUIDs.",
+          "outputFile": "docs/02-technical-design.md"
+        },
+        {
+          "title": "Behavior pack",
+          "role": "Minecraft Addon Developer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the behavior pack as designed: manifest.json with the UUIDs of the design and the dependency on the resource pack, every item, block and entity definition of the concept, the recipes and loot tables, the functions, and the language files. Valid JSON only. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "A manifest with the designed UUIDs and dependencies, and a definition for everything in the content list, in valid JSON."
+        },
+        {
+          "title": "Resource pack",
+          "role": "Minecraft Addon Developer",
+          "dependsOn": [
+            2,
+            3
+          ],
+          "objective": "Write the resource pack as designed: manifest.json with its UUIDs and the dependency on the behavior pack, item_texture.json, terrain_texture.json and blocks.json for every identifier of the design, the client entity files, and the language files with a name for everything. Read the behavior pack's files first so that every identifier matches. Textures are not written: keep the design's texture list up to date. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "A manifest, a texture key and a name for every identifier of the behavior pack, in valid JSON."
+        },
+        {
+          "title": "Scripts",
+          "role": "Minecraft Addon Developer",
+          "dependsOn": [
+            2,
+            3
+          ],
+          "objective": "Write the scripts of the design: the entry file named in the manifest and its modules, subscribing to events rather than polling, with everything that can be missing guarded. If the design has no scripts, answer in one line that this part does not apply and why, and change nothing. Read the behavior pack's manifest first: the script module and its dependencies must be in it. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "The scripts of the design exist and are named in the manifest with their module dependencies; or the part does not apply, with the reason."
+        },
+        {
+          "title": "Test list",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Write the test list for the person who runs the add-on in the game, each test with what to do and what should happen: the Content Log on and empty at world load; each item, block and entity present with its texture and its name; each recipe and interaction in survival; each script event; leaving and rejoining; a second player. Read the packs in the workspace first. Say that nothing was run.",
+          "acceptanceCriteria": "A test for everything in the content list and for loading without errors, and what was not run.",
+          "outputFile": "docs/06-test-list.md"
+        },
+        {
+          "title": "Review",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Review the packs in the workspace against the concept, the design and the skills of this team. Read the files themselves. Check: every UUID different and the dependencies pointing at header UUIDs; every identifier present in every place the design's table says; valid JSON; a format version in each file that allows the components used; no custom content in the minecraft namespace; any beta API named. Findings most harmful first, each with file and place, the harm and the fix.",
+          "acceptanceCriteria": "Findings with file and place, harm and fix; what is good; what was read and not run; a verdict.",
+          "outputFile": "docs/07-review.md"
+        },
+        {
+          "title": "Documentation and packaging",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            2,
+            6
+          ],
+          "objective": "Write the README of the add-on from the concept and the files in the workspace: what it adds; the game version and any experiment needed; installation; how each item and block is obtained; known limits; the list of textures and icons a person still has to add, with sizes; the steps to package the two folders as .mcpack files and one .mcaddon; and the changelog entry for version 1.0.0.",
+          "acceptanceCriteria": "A README with installation, content, limits, the textures still to add, packaging steps and a changelog entry.",
+          "outputFile": "README.md"
+        },
+        {
+          "title": "Listing",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            8
+          ],
+          "objective": "Write the listing of the add-on, ready to paste: the first lines (what it adds and for whom, without adjectives); three to five features, each one sentence that names something visible in the game; the game version and what is needed; what it does not do; and the list of screenshots to make, with what each shows. No invented downloads or reviews.",
+          "acceptanceCriteria": "A listing with features, requirements, limits and a media list. No invented proof.",
+          "outputFile": "docs/09-listing.md"
+        }
+      ]
+    },
+    {
+      "name": "Setup Server Minecraft",
+      "description": "A Minecraft server planned and handed over as documents a person follows: software and sizing, the configuration, the plugin stack and permissions, security and backups, the deployment on the host or panel, the launch checklist, a review and the handover document. Nothing is installed by this workflow. Use the team \"Setup Server Minecraft\".",
+      "steps": [
+        {
+          "title": "Intake, software and sizing",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [],
+          "objective": "Plan the server for the project goal. Write down what the goal says and what you assume: edition and version, game mode, players at peak, one server or a network, Java only or Bedrock players too, where it runs and with how much memory and CPU, who administers it. Then decide, with reasons: the server software (and the proxy and Geyser where needed), the memory for the heap and what is left outside it, the world border and pre-generation, and the ports.",
+          "acceptanceCriteria": "What is known and assumed, a software choice with reasons, heap and container memory that fit together, pre-generation, and the ports.",
+          "outputFile": "docs/01-plan.md"
+        },
+        {
+          "title": "Configuration",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Give the configuration of the server as tables of file, key, value and reason, for each file that changes from its default: server.properties, the Paper configuration, spigot.yml, bukkit.yml, and the proxy's where there is one. Name the gameplay cost of every performance setting. Give the start command with the memory values of the plan; take the JVM flags from the Paper documentation and say where they came from, or say that they are to be taken from there.",
+          "acceptanceCriteria": "A table for each file with a reason for every value, the gameplay cost of each performance setting, and a start command whose flags have a named source.",
+          "outputFile": "docs/02-configuration.md"
+        },
+        {
+          "title": "Plugin stack and permissions",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Choose the plugins: a small set of maintained ones, each with its job, whether it is free, and what breaks without it; say for each whether you could check that it supports the server version. Then design the permission groups (default, member, moderator, admin) with what each may do, without wildcards for staff, and the first settings of each plugin that matter.",
+          "acceptanceCriteria": "A plugin list with a job each and a version check or a note that it could not be checked, permission groups, and first settings.",
+          "outputFile": "docs/03-plugins-and-permissions.md"
+        },
+        {
+          "title": "Security and backups",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Write the security and backup plan: who can join as whom (online mode, or a proxy with secured forwarding and backends closed to the internet); operators and staff access; the firewall as a list of ports with protocol and reason; RCON and the database; where each secret is generated and kept, never its value; the update policy; and the backups: what, how often, how many, where off the machine, and the restore rehearsal.",
+          "acceptanceCriteria": "Join security, staff access, a port list, secrets by place and not by value, an update policy, and backups with a rehearsed restore.",
+          "outputFile": "docs/04-security-and-backups.md"
+        },
+        {
+          "title": "Deployment",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the steps to put the server up where the plan says it runs (a panel such as Pterodactyl, or a VPS): each step with what to do, and a check that shows it worked. On a panel: the egg or image and Java version, the start-up command and its variables, the memory limit that fits the heap, the allocations (TCP for Java, UDP for Bedrock players), and which files to edit in the file manager. End with accepting the Minecraft EULA, which the owner does themselves.",
+          "acceptanceCriteria": "Numbered steps with a check after each, the memory limit and heap set together, the allocations, and the EULA left to the owner.",
+          "outputFile": "docs/05-deployment.md"
+        },
+        {
+          "title": "Launch checklist",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Write the launch checklist, each item with what to do and what should be seen: a start without errors in the log; tick times in the profiler; joining as a default player and trying what they must not be able to do; a griefing attempt at spawn; killing the process and starting again; restoring a backup to a test server; a Bedrock player joining where the plan has them. Read the documents in the workspace first.",
+          "acceptanceCriteria": "A checklist that covers start-up, performance, permissions, protection, crash recovery and restore, each item with its expected result.",
+          "outputFile": "docs/06-launch-checklist.md"
+        },
+        {
+          "title": "Review",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Review the configuration, the plugin stack, the security plan and the deployment steps against the plan and the skills of this team: a setting with no reason; a value that contradicts another document; a secret written down; a port open that nothing needs; a step without a check; a plugin whose support for the version was not checked; a list of flags with no source. Findings most harmful first, each with its place and its fix.",
+          "acceptanceCriteria": "Findings with place and fix, what is good, what could not be verified, and a verdict.",
+          "outputFile": "docs/07-review.md"
+        },
+        {
+          "title": "Handover document",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "objective": "Write the handover document for the owner from the documents in the workspace: how to start, stop and update the server; where each configuration file is and what the important settings mean; the staff groups; how backups run and how to restore one; what to look at first when it lags; where the secrets are kept (not the secrets); what was assumed and not verified; and what the owner still has to do.",
+          "acceptanceCriteria": "Day-to-day operation, update and restore steps, the staff groups, where secrets are kept, the assumptions, and the owner's to-do list.",
+          "outputFile": "docs/08-handover.md"
+        }
+      ]
+    },
+    {
+      "name": "Fitur Minecraft Custom",
+      "description": "A custom Minecraft feature on whichever platform fits: the specification decides between a Java plugin, a Bedrock add-on and server configuration, and the steps for the parts that do not apply say so in a line. Then a test list, a review and the documentation. Use the team \"Developer Minecraft\".",
+      "steps": [
+        {
+          "title": "Specification and platform",
+          "role": "Minecraft Game Designer",
+          "dependsOn": [],
+          "objective": "Write the specification of the feature for the project goal: what a player does and sees, step by step; every rule and number; the options an owner can change, with defaults; the commands and permissions; the edge cases. Then decide the platform, with the reason: which of a Java plugin (Paper), a Bedrock add-on, and server configuration are needed, one or several. State for each of the three whether it applies, and the game version targeted.",
+          "acceptanceCriteria": "The player's steps, rules, options, commands and edge cases, and a clear yes or no for each of the three parts, with a version.",
+          "outputFile": "docs/01-specification.md"
+        },
+        {
+          "title": "Java plugin part",
+          "role": "Minecraft Plugin Developer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "If the specification says the Java plugin part applies: design it in a few lines, then write the complete plugin: build files, plugin.yml, configuration and messages files, and every class. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do. If the specification says it does not apply, answer in one line that this part does not apply and why, and write nothing.",
+          "acceptanceCriteria": "The complete plugin of the specification; or one line saying the part does not apply."
+        },
+        {
+          "title": "Bedrock add-on part",
+          "role": "Minecraft Addon Developer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "If the specification says the Bedrock add-on part applies: design it in a few lines (namespace, identifiers, UUIDs), then write both packs complete: manifests, definitions, texture mapping and language files, scripts where needed, and the list of textures to add. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do. If the specification says it does not apply, answer in one line that this part does not apply and why, and write nothing.",
+          "acceptanceCriteria": "Both packs of the specification, in valid JSON; or one line saying the part does not apply."
+        },
+        {
+          "title": "Server configuration part",
+          "role": "Minecraft Server Admin",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Write what must be set up on the server for the feature to work: plugins to install with the settings that matter, permissions to grant to which group, settings to change as file, key, value and reason, and anything a Bedrock player needs. Read what the developers wrote first. If nothing has to be set up beyond installing what was built, say so and give the installation steps.",
+          "acceptanceCriteria": "The server-side steps with a reason for each setting; or the installation steps alone.",
+          "outputFile": "docs/04-server-configuration.md"
+        },
+        {
+          "title": "Test list",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "objective": "Write the test list for the feature, each test with what to do and what should happen, for each part that applies: on a Paper server for the plugin, in the game with the Content Log on for the add-on, and the server settings. Cover every step, rule and edge case of the specification. Read the files in the workspace first. Say that nothing was run.",
+          "acceptanceCriteria": "A test for every rule and edge case of the specification, for each part that applies, and what was not run.",
+          "outputFile": "docs/05-test-list.md"
+        },
+        {
+          "title": "Review",
+          "role": "Minecraft QA",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "objective": "Review what was built against the specification. Read the files themselves. For a plugin: threads, hard-coded values, permission checks, cleanup on disable, incomplete code. For an add-on: UUIDs, identifiers in every place, valid JSON, format versions. Findings most harmful first, each with file and place, the harm and the fix.",
+          "acceptanceCriteria": "Findings with file and place, harm and fix; what is good; what was read and not run; a verdict.",
+          "outputFile": "docs/06-review.md"
+        },
+        {
+          "title": "Documentation",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "objective": "Write the README for the feature from the specification and the files in the workspace: what it does; what is needed (edition, version, server software); installation for each part that applies; the commands, permissions and options as tables; known limits; and what a person still has to do (compile, add textures, package).",
+          "acceptanceCriteria": "A README with installation for each part, complete tables, limits, and what is left to do.",
+          "outputFile": "README.md"
+        }
+      ]
+    },
+    {
+      "name": "Install Panel + Wings Pterodactyl",
+      "description": "The runbooks for installing the Pterodactyl Panel and Wings on a customer's Linux server: intake and plan, the Panel, Wings and the first node, network and TLS, hardening and backups, verification and troubleshooting, a review, and the customer handover. Nothing is run on a server by this workflow: a technician follows the runbooks. Use the team \"Install Panel + Wings Pterodactyl\".",
+      "steps": [
+        {
+          "title": "Intake and plan",
+          "role": "Pterodactyl Engineer",
+          "dependsOn": [],
+          "objective": "Write the intake and the plan for the project goal. What the goal says and what you assume: the operating system and version of each machine, the architecture, root or sudo access, whether Docker can run there (the kind of virtualisation), one machine or separate ones, the domain names for the Panel and for each node, whether anything sits behind a proxy or CDN, and what will be hosted. Then the plan: the DNS records to create, the ports to open, the order of the work, what to back up first, and the questions the customer must answer before the work starts, each with the default you used. Say which official documentation pages you read, or that you could not read them.",
+          "acceptanceCriteria": "Known facts and assumptions, the Docker check, DNS records, ports, the order of work, open questions with defaults, and the documentation that was or was not read.",
+          "outputFile": "docs/01-intake-and-plan.md"
+        },
+        {
+          "title": "Panel runbook",
+          "role": "Pterodactyl Engineer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write the runbook for installing the Panel on the planned operating system, following the official documentation: dependencies; the database and its user; downloading the Panel; the environment set-up; the application key and its backup; the database migration; the first administrator (the customer types the password); file ownership; the scheduler entry; the queue worker service; the web server configuration with TLS. Every step: the command in a code block, what it does, and a check that shows it worked. No secret is written: <generated>, and where it is kept. Mark every version or package name you could not verify.",
+          "acceptanceCriteria": "Numbered steps with a command and a check each, the application key backed up, the scheduler and the queue worker both set up, no secret written, and everything unverified marked.",
+          "outputFile": "docs/02-panel.md"
+        },
+        {
+          "title": "Wings and first node runbook",
+          "role": "Pterodactyl Engineer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the runbook for Wings on the planned machine, following the official documentation: Docker; the Wings binary; creating the location and the node in the Panel with the right name, scheme and ports; putting the node's configuration from the Panel on the machine; the first start in the foreground and what its output should say; the service; allocations; and one small test server, created and started. Every step with a command or a click path, and a check.",
+          "acceptanceCriteria": "Numbered steps with a check each, the node's configuration taken from the Panel and not written by hand, a foreground start before the service, allocations, and a test server.",
+          "outputFile": "docs/03-wings.md"
+        },
+        {
+          "title": "Network, DNS, TLS and firewall",
+          "role": "DevOps",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Write the network part: the DNS records and how to check that each resolves; the certificates for the Panel's name and for each node's name, with unattended renewal that reloads the service that uses them; the firewall rules of the machine and of the provider as a table of port, protocol, source and reason (web, the Wings daemon port, SFTP, the allocation ranges); what must not be proxied by a CDN; and a check from outside the machine that lists which ports answer. Before any firewall is enabled, the step says to keep the current session open and test a second one.",
+          "acceptanceCriteria": "DNS with checks, certificates that renew and reload, a firewall table, the CDN rule, an outside check, and the lock-out warning.",
+          "outputFile": "docs/04-network.md"
+        },
+        {
+          "title": "Hardening and backups",
+          "role": "Security Engineer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "objective": "Write the hardening and backup part for these machines: access by SSH key with a tested second session before passwords are switched off; automatic security updates and the reboot plan; services that return after a reboot; the database and cache on localhost; two-factor sign-in for Panel administrators; where each secret is kept and how it is rotated; and the backups: the Panel's database and its environment file with the application key, off the machine, daily, with a restore tried once. Each step with a command and a check. State what this baseline does not cover.",
+          "acceptanceCriteria": "Steps with a check each, the lock-out warning, secrets by place and not by value, backups that include the application key with a tried restore, and what is not covered.",
+          "outputFile": "docs/05-hardening-and-backups.md"
+        },
+        {
+          "title": "Verification and troubleshooting",
+          "role": "Pterodactyl Engineer",
+          "dependsOn": [
+            2,
+            3,
+            4
+          ],
+          "objective": "Write the verification checklist to run after the installation, each item with the command or click and what should be seen: the Panel signs in over HTTPS; the scheduler and the queue worker run; the node shows as connected; a server installs, starts and is reachable from outside; SFTP works; everything is back after a reboot. Then the troubleshooting table: symptom, likely causes, and the command that tells which, for at least: node offline, Panel error 500, a 502 or blank page, servers stuck installing, a game server not reachable, SFTP refusing the login.",
+          "acceptanceCriteria": "A verification checklist with expected results, including a reboot, and a troubleshooting table of at least six symptoms with the command that confirms each cause.",
+          "outputFile": "docs/06-verification-and-troubleshooting.md"
+        },
+        {
+          "title": "Runbook review",
+          "role": "QA",
+          "dependsOn": [
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "objective": "Review the runbooks as the technician who must follow them on a customer's server. Read the files themselves. For every step: is there a check; is the command complete and in the right order; is anything guessed or marked unverified; is a secret written anywhere; would it survive a reboot; do the firewall ports match the ports the node uses; could a step lock the operator out. Findings most harmful first, each with file and step, the harm and the fix. List everything that must be confirmed against the official documentation before use.",
+          "acceptanceCriteria": "Findings with file and step, harm and fix; the list to confirm against the official documentation; what is good; a verdict.",
+          "outputFile": "docs/07-review.md"
+        },
+        {
+          "title": "Customer handover",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "objective": "Write the handover document for the customer from the documents in the workspace: what was installed and where (addresses, folders, services, accounts by name, never passwords); where the secrets are kept; how to add a server, an allocation and a user; how to update the Panel and Wings, with a backup first; what is backed up and how to restore it; what was assumed and not verified; and what the customer still has to do.",
+          "acceptanceCriteria": "What was installed, where secrets are kept, day-to-day tasks, update and restore, the assumptions, and the customer's to-do list. No secret in it.",
+          "outputFile": "docs/08-handover.md"
+        }
+      ]
+    },
+    {
+      "name": "Bot Discord",
+      "description": "A Discord bot: its design, the source, a test list, a code review, and the documentation with deployment notes. The source goes to the project workspace; nothing is run by this workflow. Use the team \"Bot Discord\".",
+      "steps": [
+        {
+          "title": "Design",
+          "role": "Discord Bot Developer",
+          "dependsOn": [],
+          "objective": "Design the bot for the project goal: the slash commands as a table (name, options, who may use it, whether the reply is private); the events it listens to; the intents, the smallest set that works, with the reason for each; the permissions its invite asks for; what data it keeps, where, and how it is deleted; what the user sees when something fails; the library and runtime with their versions (what the goal names, otherwise discord.js on a current Node.js LTS, stated as an assumption); and the file layout.",
+          "acceptanceCriteria": "A command table, events, minimal intents with reasons, invite permissions, data kept and deleted, failure messages, versions, and the file layout.",
+          "outputFile": "docs/01-design.md"
+        },
+        {
+          "title": "Source",
+          "role": "Discord Bot Developer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write the bot as designed: the entry point, one file per command and per event, the script that registers the commands, the storage, .env.example with the names of the variables and no values, package.json, and a .gitignore that keeps the environment file out. Every interaction is answered in time; every handler catches its errors; mentions from user input are off. Write complete, working files into the project workspace. Answer with the list of the files you wrote, how to build or run and test them, and what you could not do.",
+          "acceptanceCriteria": "Every command and event of the design exists; the token comes from the environment only; no interaction is left unanswered."
+        },
+        {
+          "title": "Test list",
+          "role": "Tester",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the test list for the bot, each test with what to do and what should happen: each command with valid and invalid input, without the permission, in a direct message, with the bot's role too low, and after a restart; the bot joining and leaving a server; the database or Discord being slow. Read the source in the workspace first. Say that nothing was run.",
+          "acceptanceCriteria": "A test for every command and failure of the design, and what was not run.",
+          "outputFile": "docs/03-test-list.md"
+        },
+        {
+          "title": "Code review",
+          "role": "Tester",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Review the source in the workspace against the design. Read the files themselves. Look for: a privileged intent that is not needed; a path where an interaction is not answered in time; a secret in code or logs; user input that can cause a mention, a crash or an unintended action; handlers without error handling; code that is named and not written. Findings most harmful first, each with file and line, the harm and the fix.",
+          "acceptanceCriteria": "Findings with file and line, harm and fix; what is good; what was read and not run; a verdict.",
+          "outputFile": "docs/04-code-review.md"
+        },
+        {
+          "title": "Documentation and deployment",
+          "role": "Technical Writer",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Write the README of the bot from the design and the files in the workspace: creating the application and the bot in Discord's developer portal; which intents to switch on; the invite link with its scopes and permissions; the environment variables; registering the commands; running it; and deployment where the client hosts it: a process manager or a container that restarts on failure, or on a game panel the Node.js image, the start command and the variables. End with the commands table.",
+          "acceptanceCriteria": "Set-up in the developer portal, intents, the invite, variables, registration, running, deployment notes and a commands table. No token in it.",
+          "outputFile": "README.md"
+        }
+      ]
+    },
+    {
+      "name": "Konten Carousel",
+      "description": "A carousel of five square slides for a social media feed: the plan with the words of every slide, the five pictures, the caption with hashtags and alt text, and a review. The words are set on the pictures afterwards: generated pictures carry no lettering. Use the team \"Konten Media Sosial\"; the project needs an image model.",
+      "steps": [
+        {
+          "title": "Carousel plan",
+          "role": "Social Media Strategist",
+          "dependsOn": [],
+          "objective": "Plan a carousel of exactly 5 square slides for the project goal. Give: the audience in one line; the goal of the post (reach, trust or sale) and the one action it asks for; one style line that fixes the look of all five pictures; then for each slide: the headline (five to seven words), the body (at most twenty words, or none), the picture (what it shows), and where the text sits on it (which area of the picture stays calm and empty). Slide 1 is the cover and must make sense alone; slide 5 is the summary and the action. Facts from the goal only; gaps as TODO(client).",
+          "acceptanceCriteria": "An audience, one goal and one action, a style line, and exactly 5 numbered slides, each with a headline, a body, a picture and a place for the text. No invented fact.",
+          "outputFile": "social/01-carousel-plan.md"
+        },
+        {
+          "title": "Slide 1 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of slide 1 of the plan, and only that slide. End with the plan's style line, word for word, so that the five pictures belong together. Leave the area that the plan names for the text calm and empty. No text, no lettering and no logos in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Slide 2 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of slide 2 of the plan, and only that slide. End with the plan's style line, word for word, so that the five pictures belong together. Leave the area that the plan names for the text calm and empty. No text, no lettering and no logos in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Slide 3 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of slide 3 of the plan, and only that slide. End with the plan's style line, word for word, so that the five pictures belong together. Leave the area that the plan names for the text calm and empty. No text, no lettering and no logos in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Slide 4 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of slide 4 of the plan, and only that slide. End with the plan's style line, word for word, so that the five pictures belong together. Leave the area that the plan names for the text calm and empty. No text, no lettering and no logos in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Slide 5 picture",
+          "role": "Designer",
+          "dependsOn": [
+            1
+          ],
+          "objective": "The picture of slide 5 of the plan, and only that slide. End with the plan's style line, word for word, so that the five pictures belong together. Leave the area that the plan names for the text calm and empty. No text, no lettering and no logos in the image.",
+          "kind": "image",
+          "media": {
+            "aspectRatio": "1:1"
+          }
+        },
+        {
+          "title": "Caption, hashtags and alt text",
+          "role": "Copywriter",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write what goes with the carousel: the caption (the first line carries the point, then two or three short lines of what the slides do not say, then the one action of the plan); 3 to 8 hashtags the audience searches; one line of alt text for each of the five slides; and a suggestion for the first comment.",
+          "acceptanceCriteria": "A caption that opens with the point and ends with the plan's action, 3 to 8 hashtags, five alt texts, and a first comment.",
+          "outputFile": "social/02-caption.md"
+        },
+        {
+          "title": "Review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            7
+          ],
+          "objective": "Review the carousel plan and the caption against the project goal and the skills of this team: one point a slide and one action; a cover that makes sense alone; word counts within the limits; any fact, price or result that is not in the goal; any phrase from the lists of words to cut. Quote each phrase you object to and give the rewritten line. Say that the pictures themselves were not seen.",
+          "acceptanceCriteria": "Findings with the quoted phrase and its rewrite, what is good, what was not seen, and a verdict.",
+          "outputFile": "social/03-review.md"
+        }
+      ]
+    },
+    {
+      "name": "Artikel SEO",
+      "description": "An article that answers what people search for: the query, intent and outline; the draft; the SEO pass with title, description and structured data; and a review. Use the team \"Artikel SEO\".",
+      "steps": [
+        {
+          "title": "Query, intent and outline",
+          "role": "SEO Specialist",
+          "dependsOn": [],
+          "objective": "Plan an article for the project goal: the main query a person types and two or three close variants; what they want when they type it; what would satisfy them that the usual results do not give; the outline as headings in the order a reader asks; for each heading the point to make and the fact, example or table it needs; and what must come from the client, as TODO(client). Say that the choice of query is a reasoned assumption until it is measured.",
+          "acceptanceCriteria": "A query with variants and intent, what makes the article worth reading, an outline with a point and a source for each heading, and the open TODOs.",
+          "outputFile": "article/01-outline.md"
+        },
+        {
+          "title": "Draft",
+          "role": "Copywriter",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write the article from the outline, in the language of the goal: the answer in the first paragraph; one point a section; examples with real numbers where the goal gives them; a clear recommendation and for whom. No fact, statistic or quote that the goal or the outline does not give: mark each gap as TODO(client). No filler opening, no summary that repeats the text.",
+          "acceptanceCriteria": "An article that follows the outline, answers the query in its first paragraph, and has no invented fact and no filler.",
+          "outputFile": "article/02-article.md"
+        },
+        {
+          "title": "SEO pass",
+          "role": "SEO Specialist",
+          "dependsOn": [
+            1,
+            2
+          ],
+          "objective": "Give what the article needs to be found: the title (50 to 60 characters), the meta description (120 to 155 characters), the URL, the final heading outline, the JSON-LD (Article with headline, dates and author as TODO(client), and FAQPage only for questions the text really answers), image file names and alt texts, internal links in and out by the words they are set on, and the edits to the draft that would help a searcher, each quoted with its replacement. No keyword stuffing.",
+          "acceptanceCriteria": "An exact title, description and URL, the JSON-LD, links, and quoted edits.",
+          "outputFile": "article/03-seo.md"
+        },
+        {
+          "title": "Review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Review the article against the project goal and the skills of this team: does the first paragraph answer the query; is every fact from the goal or marked TODO; are there phrases from the lists of words to cut (quote each and give the rewritten line); does the structured data match the text. Findings most harmful first.",
+          "acceptanceCriteria": "Findings with the quoted phrase and its rewrite, a check of every fact against its source, and a verdict.",
+          "outputFile": "article/04-review.md"
+        }
+      ]
+    },
+    {
+      "name": "Proposal & Penawaran",
+      "description": "A service proposal or quotation a client can say yes to: needs and scope, the proposal with options and a price table, the polished text, and a review. Prices come from the project goal; a missing one stays a TODO. Use the team \"Proposal & Penawaran\".",
+      "steps": [
+        {
+          "title": "Needs and scope",
+          "role": "Sales Consultant",
+          "dependsOn": [],
+          "objective": "Work out what is to be offered for the project goal: the client's situation and the result they want, in their words; what the goal says about volume, deadline and budget, and what it does not say; the scope as deliverables a client can check; what is not included; what is needed from the client; the questions that would change the scope, each with the assumption used; and every price, name, date and legal detail the goal gives, listed, with each missing one as TODO(provider).",
+          "acceptanceCriteria": "The need in the client's words, deliverables, exclusions, what the client must provide, open questions with assumptions, and the facts given and missing.",
+          "outputFile": "proposal/01-scope.md"
+        },
+        {
+          "title": "Proposal",
+          "role": "Sales Consultant",
+          "dependsOn": [
+            1
+          ],
+          "objective": "Write the proposal from the scope, two to four pages: the summary; what the client asked for; what will be done, as deliverables; what is not included; at most three options named by what they are, with the recommended one and why; the timeline with what is needed from the client at each step; the price table (item, what it includes, quantity, unit price, amount) with subtotal, tax treatment and total; payment schedule and methods; the validity of the offer; the terms that prevent disputes (revisions, acceptance, support, changes of scope, ownership); and one next step. Prices from the scope only; a missing one stays TODO(provider). Check that the totals add up.",
+          "acceptanceCriteria": "A proposal with every section, options named by what they are, a price table whose totals add up or carry a TODO, terms, and one next step. No invented price or client.",
+          "outputFile": "proposal/02-proposal.md"
+        },
+        {
+          "title": "Polish",
+          "role": "Copywriter",
+          "dependsOn": [
+            2
+          ],
+          "objective": "Edit the proposal so that a client who is not technical can read it in one go: plain words, short sentences, the same name for the same thing everywhere, no promise the provider cannot keep. Do not change a number, a date, a deliverable or a term. The deliverable is the complete edited proposal.",
+          "acceptanceCriteria": "The complete proposal, clearer, with every number, date, deliverable and term unchanged.",
+          "outputFile": "proposal/03-proposal-final.md"
+        },
+        {
+          "title": "Review",
+          "role": "QA",
+          "dependsOn": [
+            1,
+            2,
+            3
+          ],
+          "objective": "Review the final proposal as the client's cautious partner: can they tell exactly what they get, by when, for how much and what is extra; does every number come from the project goal or carry a TODO; do the totals add up (do the arithmetic); did the polish change any number or term (compare the two versions); is there one next step; what would they object to. Findings most harmful first.",
+          "acceptanceCriteria": "The arithmetic checked, every number traced to its source, differences between the two versions, objections, and a verdict.",
+          "outputFile": "proposal/04-review.md"
+        }
+      ]
     }
   ],
   "tryRun": {
-    "goal": "A welcome message of two sentences for a coffee cart called Kopi Pagi, and three test cases for its online order form.",
+    "goal": "A small premium Paper plugin called FlyPass: a player who holds a pass may switch flight on and off in the lobby world, for as many minutes a day as the pass gives. Say what it does for the player and the owner, and list its commands and permissions.",
     "manager": "ovh-gpt-oss",
+    "team": "Plugin Minecraft Premium",
     "maxTasks": 3,
     "everyAgent": true
   }

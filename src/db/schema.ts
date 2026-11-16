@@ -1000,6 +1000,84 @@ export const apiKeys = sqliteTable(
   }),
 );
 
+// ─── Skills (v1.7.0) ─────────────────────────────────────────────────────────
+
+/**
+ * A way of working, written down: what a SKILL.md says. Agents and teams are
+ * given skills; an agent reads them with each task it works on.
+ */
+export const skills = sqliteTable(
+  "skills",
+  {
+    id: id(),
+    name: text("name").notNull(),
+    // The name in lower case: two skills cannot differ by case only.
+    nameKey: text("name_key").notNull(),
+    description: text("description").notNull().default(""),
+    // The body of SKILL.md, without its front matter.
+    instructions: text("instructions").notNull().default(""),
+    // Other front matter (license, version, ...), as a JSON object of strings.
+    metadata: text("metadata").notNull().default("{}"),
+    // The file it was uploaded as, when it was.
+    sourceName: text("source_name"),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ nameUnique: uniqueIndex("skills_name_unique").on(t.nameKey) }),
+);
+
+/** A text file that came with a skill: a reference, a template, a script to read. */
+export const skillFiles = sqliteTable(
+  "skill_files",
+  {
+    id: id(),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+    sizeBytes: integer("size_bytes").notNull().default(0),
+  },
+  (t) => ({ unique: uniqueIndex("skill_files_unique").on(t.skillId, t.path) }),
+);
+
+export const agentSkills = sqliteTable(
+  "agent_skills",
+  {
+    id: id(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    unique: uniqueIndex("agent_skills_unique").on(t.agentId, t.skillId),
+    bySkill: index("agent_skills_skill_idx").on(t.skillId),
+  }),
+);
+
+/** A skill of a team: every agent has it while it works in a project of the team. */
+export const teamSkills = sqliteTable(
+  "team_skills",
+  {
+    id: id(),
+    teamId: text("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    unique: uniqueIndex("team_skills_unique").on(t.teamId, t.skillId),
+    bySkill: index("team_skills_skill_idx").on(t.skillId),
+  }),
+);
+
 // Convenience exported types
 export type User = typeof users.$inferSelect;
 export type Provider = typeof providers.$inferSelect;
@@ -1029,5 +1107,7 @@ export type KnowledgeDocument = typeof knowledgeDocuments.$inferSelect;
 export type KnowledgeChunk = typeof knowledgeChunks.$inferSelect;
 export type AgentMemory = typeof agentMemories.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
+export type Skill = typeof skills.$inferSelect;
+export type SkillFile = typeof skillFiles.$inferSelect;
 
 export const _sqlKeepalive = sql``;

@@ -15,8 +15,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/templates.ts";
+import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
+import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "runs", "notifications", "api", "adapters", "reel"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1206,7 +1208,164 @@ export async function automation(ctx) {
     check("the manager is offered voice-overs, pictures to start clips from, and the join", /"audio"/.test(planPrompt) && /imageFrom/.test(planPrompt) && /"kind":"render"/.test(planPrompt), planPrompt.slice(0, 200));
   }
 
-  const parts = { speech, render, knowledge, tools, runs, notifications: notificationChecks, api: publicApi, adapters, reel };
+  // ─── Skills ────────────────────────────────────────────────────────────────
+
+  async function skills() {
+    const file = (path, text) => ({ path, data: Buffer.from(text, "utf8") });
+    const skillMd = (name, description, body) => `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
+    const names = async (user = admin) => ((await user.get("/api/skills")).data?.skills ?? []).map((s) => s.name);
+
+    begin("Skills: written down by hand");
+    const style = await admin.post("/api/skills", { name: "House style", description: "How we write here.", instructions: "Short sentences.\nNo filler words." });
+    eq("a skill is kept with its name, description and instructions", [style.status, style.data?.skill?.name, style.data?.skill?.description, style.data?.skill?.instructions, style.data?.skill?.enabled], [201, "House style", "How we write here.", "Short sentences.\nNo filler words.", true]);
+    const styleId = style.data?.skill?.id;
+    const again = await admin.post("/api/skills", { name: "  house   STYLE ", instructions: "Other words." });
+    check("a second skill of the same name, in other letters, is refused", again.status === 409 && /already/.test(again.error ?? ""), again.error);
+    const replaced = await admin.post("/api/skills", { name: "House style", description: "How we write here.", instructions: "Short sentences.\nNo filler words.\nNo exclamation marks.", onConflict: "replace" });
+    eq("  unless it is said to replace it: the same skill, with the new text", [replaced.status, replaced.data?.replaced, replaced.data?.skill?.id, /exclamation/.test(replaced.data?.skill?.instructions ?? "")], [200, true, styleId, true]);
+    eq("a skill without a name is refused", (await admin.post("/api/skills", { name: "  ", instructions: "x" })).status, 400);
+    eq("a file whose path leaves the skill is refused", (await admin.post("/api/skills", { name: "Sneaky", instructions: "x", files: [{ path: "../../etc/passwd", content: "x" }] })).status, 400);
+    eq("  and nothing of that skill is kept", (await names()).includes("Sneaky"), false);
+    eq("only an administrator writes skills", (await bob.post("/api/skills", { name: "Mine", instructions: "x" })).status, 403);
+    eq("signed out: no skills", (await ctx.anon.get("/api/skills")).status, 401);
+
+    begin("Skills: uploaded as SKILL.md, as .skill, as .zip");
+    const md = await upload(admin, "/api/skills/upload", Buffer.from(skillMd("seo-basics", "Titles and descriptions that are found. Use for any page that is published.", "# SEO basics\n\nOne H1 a page.")), "SKILL.md", "text/markdown");
+    eq("a SKILL.md becomes a skill: name and description from its front matter", [md.status, md.data?.skills?.map((s) => [s.name, s.description, s.instructions, s.replaced, s.sourceName])], [201, [["seo-basics", "Titles and descriptions that are found. Use for any page that is published.", "# SEO basics\n\nOne H1 a page.", false, "SKILL.md"]]]);
+    const plain = await upload(admin, "/api/skills/upload", Buffer.from("# Reply to a customer\r\n\r\nThank them first.\r\n"), "customer replies.txt", "text/plain");
+    eq("a text file without front matter: the heading is the name", [plain.status, plain.data?.skills?.[0]?.name, plain.data?.skills?.[0]?.instructions], [201, "Reply to a customer", "# Reply to a customer\n\nThank them first."]);
+
+    const packed = writeZip([
+      file("brochure-layout/SKILL.md", skillMd("brochure-layout", "Lay out a brochure or a catalogue. Use when a task asks for one.", "# Brochure layout\n\nStart from the grid in references/grid.md.")),
+      file("brochure-layout/references/grid.md", "# Grid\n\nTwelve columns, 8 mm gutters.\n"),
+      file("brochure-layout/templates/page.html", "<main class=\"page\"></main>\n"),
+      { path: "brochure-layout/assets/logo.png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x00]) },
+      file("__MACOSX/brochure-layout/._SKILL.md", "junk"),
+    ]);
+    const skillFile = await upload(admin, "/api/skills/upload", packed, "brochure-layout.skill");
+    eq("a .skill is a folder with SKILL.md: its text files come with it", [skillFile.status, skillFile.data?.skills?.map((s) => [s.name, s.files.map((f) => f.path)])], [201, [["brochure-layout", ["references/grid.md", "templates/page.html"]]]]);
+    check("  what is not text is left out, and said", skillFile.data?.leftOut?.length === 1 && /logo\.png: it is not text/.test(skillFile.data.leftOut[0]), skillFile.data?.leftOut);
+    const brochureId = skillFile.data?.skills?.[0]?.id;
+
+    const two = writeZip([
+      file("pack/review/SKILL.md", skillMd("review-checklist", "What a review looks for.", "Name the rule that is broken.")),
+      file("pack/minecraft/skill.md", "# Paper plugin\n\nUse the Paper API, Java 21.\n"),
+      file("pack/minecraft/examples/plugin.yml", "name: Example\nmain: x.Example\n"),
+    ]);
+    const pack = await upload(admin, "/api/skills/upload", two, "pack.zip", "application/zip");
+    eq("a .zip of several skill folders gives several skills", [pack.status, pack.data?.skills?.map((s) => [s.name, s.files.length]).sort()], [201, [["Paper plugin", 1], ["review-checklist", 0]]]);
+    const reviewId = pack.data?.skills?.find((s) => s.name === "review-checklist")?.id;
+
+    const clash = await upload(admin, "/api/skills/upload", writeZip([
+      file("a/SKILL.md", skillMd("brand-new", "New.", "New.")),
+      file("b/SKILL.md", skillMd("SEO-Basics", "Other.", "Other words.")),
+    ]), "mixed.zip");
+    check("an upload with a name that is taken is refused as a whole", clash.status === 409 && /seo-basics/i.test(clash.error ?? ""), clash.error);
+    eq("  the skill beside it in the archive is not kept either", (await names()).includes("brand-new"), false);
+    const over = await upload(admin, "/api/skills/upload?onConflict=replace", Buffer.from(skillMd("seo-basics", "Titles and descriptions that are found.", "# SEO basics\n\nOne H1 a page. A title under 60 characters.")), "seo.md");
+    eq("  with onConflict=replace the skill gets the new text", [over.status, over.data?.skills?.[0]?.replaced, over.data?.skills?.[0]?.id === md.data?.skills?.[0]?.id, /60 characters/.test(over.data?.skills?.[0]?.instructions ?? "")], [201, true, true, true]);
+
+    const picture = await upload(admin, "/api/skills/upload", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff]), "skill.png", "image/png");
+    check("a picture is not a skill", picture.status === 400 && /neither text nor a ZIP/.test(picture.error ?? ""), picture.error);
+    const noSkill = await upload(admin, "/api/skills/upload", writeZip([file("readme.txt", "hello")]), "nothing.zip");
+    check("an archive without a SKILL.md is refused, with the reason", noSkill.status === 400 && /no SKILL\.md/.test(noSkill.error ?? ""), noSkill.error);
+    const escaping = writeZip([file("SKILL.md", skillMd("escape-artist", "x", "x")), file("../../outside.md", "nope"), file("inside.md", "fine")]);
+    const escaped = await upload(admin, "/api/skills/upload", escaping, "escape.zip");
+    eq("a file of an archive whose path leaves the folder is left out", [escaped.status, escaped.data?.skills?.[0]?.files.map((f) => f.path), /leaves the archive/.test(escaped.data?.leftOut?.[0] ?? "")], [201, ["inside.md"], true]);
+    const cutOff = await upload(admin, "/api/skills/upload", packed.subarray(0, packed.length - 40), "cut.skill");
+    eq("a damaged archive is refused", cutOff.status, 400);
+    const tooLarge = await upload(admin, "/api/skills/upload", Buffer.alloc(SKILL_UPLOAD_MAX_BYTES + 1024, 0x61), "huge.md");
+    eq("a file over the limit is refused", tooLarge.status, 413);
+    eq("only an administrator uploads skills", (await upload(bob, "/api/skills/upload", Buffer.from("# Mine\n\nx\n"), "mine.md")).status, 403);
+    eq("empty: refused", (await upload(admin, "/api/skills/upload", Buffer.alloc(0), "empty.md")).status, 400);
+
+    begin("Skills: reading them back");
+    const listed = await bob.get("/api/skills");
+    eq("every user sees which skills there are", [listed.status, listed.data?.skills?.map((s) => s.name)], [200, ["brochure-layout", "escape-artist", "House style", "Paper plugin", "Reply to a customer", "review-checklist", "seo-basics"]]);
+    check("  the list has their sizes, not their text", listed.data?.skills?.every((s) => s.instructions === undefined && s.instructionChars > 0), listed.data?.skills?.[0]);
+    const one = await bob.get(`/api/skills/${brochureId}`);
+    check("one skill is read with its instructions", /Start from the grid/.test(one.data?.skill?.instructions ?? ""), one.data?.skill);
+    const grid = await bob.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("references/grid.md")}`);
+    eq("  and each of its files", [grid.status, grid.data?.content], [200, "# Grid\n\nTwelve columns, 8 mm gutters.\n"]);
+    eq("  a file it does not have: not found", (await bob.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("../../etc/passwd")}`)).status, 404);
+    const download = await admin.raw(`/api/skills/${brochureId}/download`);
+    const archive = readZip(Buffer.from(await download.arrayBuffer()), { maxEntries: 50, maxEntryBytes: 1024 * 1024, maxTotalBytes: 4 * 1024 * 1024 });
+    eq("a skill is downloaded as a .skill that holds the same folder", [download.status, download.headers.get("content-disposition"), archive.entries.map((e) => e.path)], [200, 'attachment; filename="brochure-layout.skill"', ["brochure-layout/SKILL.md", "brochure-layout/references/grid.md", "brochure-layout/templates/page.html"]]);
+    const roundTrip = await upload(admin, "/api/skills/upload?onConflict=replace", Buffer.from(await (await admin.raw(`/api/skills/${brochureId}/download`)).arrayBuffer()), "brochure-layout.skill");
+    eq("  and uploaded again it is the same skill", [roundTrip.status, roundTrip.data?.skills?.map((s) => [s.id === brochureId, s.replaced, s.description, s.files.length])], [201, [[true, true, "Lay out a brochure or a catalogue. Use when a task asks for one.", 2]]]);
+    const asMd = await admin.raw(`/api/skills/${styleId}/download?format=md`);
+    check("  or as its SKILL.md alone", asMd.status === 200 && /^---\nname: House style\ndescription: How we write here\.\n---\n\nShort sentences\./.test(await asMd.text()));
+
+    begin("Skills: given to agents and to teams");
+    const stylist = await agent("Stylist", "Copy Stylist", { skillIds: [styleId, md.data?.skills?.[0]?.id] });
+    eq("an agent keeps its skills", stylist.data?.agent?.skillIds?.length, 2);
+    const reader = await agent("Layouter", "Layout Designer", { tools: ["list_files"], skillIds: [brochureId] });
+    const checker = await agent("Checker", "Skill QA Reviewer", { skillIds: [reviewId] });
+    eq("a skill that does not exist cannot be given", (await admin.post("/api/agents", { name: "Nobody", role: "Nobody", skillIds: ["no-such-skill"] })).status, 400);
+    eq("  and no half agent is left behind", ((await admin.get("/api/agents")).data?.agents ?? []).some((a) => a.name === "Nobody"), false);
+    eq("only an administrator gives skills", (await bob.patch(`/api/agents/${state.agents.Stylist}`, { skillIds: [] })).status, 403);
+    const team = await admin.post("/api/teams", { name: "Print team", agentIds: [state.agents.Stylist, state.agents.Layouter, state.agents.Checker], skillIds: [styleId] });
+    eq("a team keeps its skills too", [team.status, team.data?.team?.skillIds], [201, [styleId]]);
+    const teamId = team.data?.team?.id;
+    const usedBy = (await admin.get(`/api/skills/${styleId}`)).data?.skill;
+    eq("a skill says who has it", [usedBy?.agentIds, usedBy?.teamIds], [[state.agents.Stylist], [teamId]]);
+    void reader;
+    void checker;
+
+    begin("Skills: at work in a project");
+    const wf = await workflow("Print", [
+      { title: "Write the copy", objective: "Two lines.", role: "Copy Stylist" },
+      { title: "Tool: skill", objective: "Lay it out.", role: "Layout Designer" },
+      { title: "Cover picture", objective: "The cover.", role: "Layout Designer", kind: "image" },
+    ]);
+    const projectId = await project(admin, { title: "Print project", workflowId: wf, teamId, imageModelRowId: ids.models.img_openai });
+    await mockReset();
+    const run = await runProject(admin, projectId);
+    eq("the run finishes", run.events.at(-1)?.status, "succeeded");
+    const copy = taskOf(run.events, 1);
+    check("an agent is given its own skills", /\[with:skills=House style\|seo-basics\]/.test(copy?.artifact ?? ""), copy?.artifact);
+    const calls = run.events.filter((e) => e.type === "tool" && e.seq === 2).map((e) => `${e.call.name}${e.call.isError ? "!" : ""}`);
+    eq("an agent with tools can read its skills: the skill, and its files", calls, ["read_skill", "read_skill!", "read_skill!", "read_skill"]);
+    const layout = taskOf(run.events, 2);
+    check("  a file of the skill is read as it was uploaded", /Twelve columns, 8 mm gutters/.test(layout?.artifact ?? ""), layout?.artifact);
+    const log = await mockLog();
+    const chats = log.filter((l) => l.path.endsWith("/chat/completions"));
+    const systemOf = (title) => String(chats.find((l) => String(l.body?.messages?.[1]?.content ?? "").startsWith(`Task: ${title}`))?.body?.messages?.[0]?.content ?? "");
+    const layoutSystem = systemOf("Tool: skill");
+    check("  its own skill comes first, then the team's, each in full", layoutSystem.indexOf("### Skill: brochure-layout") > 0 && layoutSystem.indexOf("### Skill: brochure-layout") < layoutSystem.indexOf("### Skill: House style") && /Start from the grid in references\/grid\.md\./.test(layoutSystem) && /No exclamation marks\./.test(layoutSystem), layoutSystem.slice(0, 900));
+    check("  the files of a skill are named, to be read with the tool", /Files of this skill: references\/grid\.md \(\d+ B\), templates\/page\.html \(\d+ B\)\. Read one with read_skill/.test(layoutSystem), layoutSystem.slice(0, 1200));
+    const toolResults = chats.flatMap((l) => (l.body?.messages ?? []).filter((m) => m.role === "tool").map((m) => String(m.content)));
+    check("  a path that leaves the skill is refused, and so is another agent's skill", toolResults.some((t) => /has no file "\.\.\/\.\.\/etc\/passwd"/.test(t)) && toolResults.some((t) => /You have no skill of that name\. Your skills: brochure-layout; House style\./.test(t)), toolResults);
+    const coverSystem = systemOf("Cover picture");
+    check("a task that writes a picture's prompt is given the skills as well", /### Skill: brochure-layout/.test(coverSystem) && !/read_skill/.test(coverSystem), coverSystem.slice(0, 600));
+    const detail = (await admin.get(`/api/projects/${projectId}`)).data?.project;
+    check("the reviewer reviews by its skills, and by the team's", /\[by:review-checklist\|House style\]/.test(detail?.reviewNotes ?? ""), detail?.reviewNotes);
+
+    begin("Skills: the one who plans sees them");
+    const planned = await project(admin, { title: "Planned print", teamId });
+    await mockReset();
+    await runProject(admin, planned);
+    const planPrompt = String((await mockLog()).find((l) => l.path.endsWith("/chat/completions") && String(l.body?.messages?.[0]?.content).includes("AI Manager of an engineering team"))?.body?.messages?.[0]?.content ?? "");
+    check("each agent is listed with what it has a skill for", /- Layouter \(Layout Designer\) \[skills: brochure-layout, House style\]/.test(planPrompt) && /- Stylist \(Copy Stylist\) \[skills: House style, seo-basics\]/.test(planPrompt), planPrompt.slice(planPrompt.indexOf("Available agents"), planPrompt.indexOf("Available agents") + 500));
+
+    begin("Skills: switched off, changed, deleted");
+    eq("a skill can be switched off", (await admin.patch(`/api/skills/${styleId}`, { enabled: false })).data?.skill?.enabled, false);
+    const renamed = await admin.patch(`/api/skills/${md.data?.skills?.[0]?.id}`, { name: "House style" });
+    check("a skill cannot take the name of another", renamed.status === 409, renamed.error);
+    eq("only an administrator changes a skill", (await bob.patch(`/api/skills/${styleId}`, { enabled: true })).status, 403);
+    const second = await runProject(admin, projectId);
+    check("a skill that is off is not given, the others still are", /\[with:[^\]]*skills=seo-basics\]/.test(taskOf(second.events, 1)?.artifact ?? ""), taskOf(second.events, 1)?.artifact);
+    eq("only an administrator deletes a skill", (await bob.del(`/api/skills/${brochureId}`)).status, 403);
+    eq("a skill is deleted", (await admin.del(`/api/skills/${brochureId}`)).status, 200);
+    eq("  the agent that had it has it no more", ((await admin.get("/api/agents")).data?.agents ?? []).find((a) => a.name === "Layouter")?.skillIds, []);
+    eq("  and its files are gone with it", (await admin.get(`/api/skills/${brochureId}/files?path=references/grid.md`)).status, 404);
+    const auditDb = database();
+    const actions = new Set(auditDb.prepare("select distinct action from audit_logs where action like 'skill.%'").all().map((row) => row.action));
+    auditDb.close();
+    check("adding, replacing, changing and deleting skills is in the audit log", ["skill.create", "skill.replace", "skill.update", "skill.delete"].every((a) => actions.has(a)), [...actions].filter((a) => a.startsWith("skill")));
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

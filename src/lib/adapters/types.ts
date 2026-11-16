@@ -83,6 +83,14 @@ export interface ListedModel {
   contextWindow?: number;
   /** What the provider's list says the model can do, when it says so. */
   capabilities?: Capability[];
+  /**
+   * What the provider's list says the model costs, in USD per million tokens,
+   * when it says so. Both 0 is a model the provider gives away.
+   */
+  inputPricePerMTok?: number;
+  outputPricePerMTok?: number;
+  /** Whether the list names any price above zero for the model (per token, per request or per image). */
+  billed?: boolean;
 }
 
 export interface EmbedRequest {

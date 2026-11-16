@@ -203,6 +203,7 @@ function embedding(text, dimensions = 24) {
  *   "Tool: loop"      make the same call for ever
  *   "Tool: knowledge" search the knowledge base
  *   "Tool: memory"    keep a note, then look it up
+ *   "Tool: skill"     read a file of a skill, the skill itself, and a file it does not have
  *
  * Returns the tool calls of this step, or null to answer in text.
  */
@@ -252,6 +253,14 @@ function nextToolCalls(body) {
   if (title.startsWith("Tool: memory")) {
     if (done === 0) return call("remember", { note: "The client prefers short sentences and no exclamation marks." });
     if (done === 1) return call("recall", { query: "client prefers sentences" });
+    return null;
+  }
+  if (title.startsWith("Tool: skill")) {
+    // Written the way a model writes a name: in other letters than the skill has.
+    if (done === 0) return call("read_skill", { skill: "BROCHURE layout" });
+    if (done === 1) return call("read_skill", { skill: "brochure-layout", file: "../../etc/passwd" });
+    if (done === 2) return call("read_skill", { skill: "Someone else's skill" });
+    if (done === 3) return call("read_skill", { skill: "brochure-layout", file: "references/grid.md" });
     return null;
   }
   return null;
@@ -318,7 +327,9 @@ function chatAnswer(body) {
     return `FINAL DELIVERABLE. mentions-media=${/cannot (be seen|see)/i.test(system + user)}`;
   }
   if (system.includes("You are a QA/Security reviewer")) {
-    return "All tasks meet their criteria.\nVERDICT: pass";
+    // A reviewer that was given skills says which, so that a test can see them arrive.
+    const by = [...system.matchAll(/^### Skill: (.*)$/gm)].map((m) => m[1]);
+    return `All tasks meet their criteria.${by.length ? ` [by:${by.join("|")}]` : ""}\nVERDICT: pass`;
   }
   if (user.includes("Reply with the single word: ok")) return "ok";
   if (system.includes("Passages from the user's knowledge base follow")) {
@@ -330,10 +341,12 @@ function chatAnswer(body) {
   // what else was put in front of the agent.
   const deps = [...user.matchAll(/### Output of task (\d+)/g)].map((m) => m[1]).join("+") || "none";
   const title = (user.match(/^Task: (.*)$/m) ?? [])[1] ?? "?";
+  const skills = [...system.matchAll(/^### Skill: (.*)$/gm)].map((m) => m[1]);
   const extras = [
     system.includes("Notes you kept from earlier work") ? "notes" : "",
     user.includes("This project has been run before") ? "earlier-runs" : "",
     system.includes("For this run in particular") ? "run-input" : "",
+    skills.length ? `skills=${skills.join("|")}` : "",
   ].filter(Boolean);
   return `OUTPUT of "${title}" [deps:${deps}]${extras.length ? ` [with:${extras.join(",")}]` : ""}`;
 }
@@ -344,6 +357,9 @@ function chat(req, res, body) {
     return send(res, 404, { error: { message: `The model \`${body.model}\` does not support chat completions`, type: "invalid_request_error" } });
   }
   if (model === "chat-down") return send(res, 500, { error: { message: "The model is down." } });
+  // Listed by the gateway, and not to be had: a plan without it, or a price and no key.
+  if (model === "chat-noaccess") return send(res, 403, { error: { message: "This model is not available on your plan." } });
+  if (model === "chat-paid" || model === "auto-paid") return send(res, 401, { error: { message: "Sign in to use this model." } });
   if (model === "chat-limited") return send(res, 429, { error: { message: "Rate limit reached for requests." } });
   if (model === "chat-notools" && Array.isArray(body?.tools) && body.tools.length > 0) {
     return send(res, 400, { error: { message: "This model does not support tools.", type: "invalid_request_error", param: "tools" } });
@@ -921,17 +937,32 @@ const api = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && path === "/models") {
+    const data = [
+      ...(prefix === KEYLESS ? [{ id: "chat-busy" }, { id: "chat-slow" }] : []),
+      { id: "chat-mini" },
+      { id: "img-ok" },
+      { id: "vid-ok" },
+      { id: "tts-1" },
+      { id: "text-embedding-3-small" },
+      { id: "whisper-1" },
+      { id: "omni-moderation-latest" },
+    ];
+    if (prefix !== KEYLESS) return send(res, 200, { object: "list", data });
+    // A gateway that gives some models away says which, the way such gateways
+    // do: a price of "0" for each of them, and its real price for the others.
+    const free = { prompt: "0", completion: "0" };
     return send(res, 200, {
       object: "list",
       data: [
-        ...(prefix === KEYLESS ? [{ id: "chat-busy" }, { id: "chat-slow" }] : []),
-        { id: "chat-mini" },
-        { id: "img-ok" },
-        { id: "vid-ok" },
-        { id: "tts-1" },
-        { id: "text-embedding-3-small" },
-        { id: "whisper-1" },
-        { id: "omni-moderation-latest" },
+        ...data.map((model) => ({ ...model, pricing: free })),
+        // Free by the list, and still not to be had or not answering.
+        { id: "chat-noaccess", pricing: free },
+        { id: "chat-limited", pricing: free },
+        { id: "chat-down", pricing: free },
+        // Billed: nobody without a key gets an answer from these.
+        { id: "chat-paid", name: "Paid Chat", pricing: { prompt: "0.000002", completion: "0.00001" } },
+        { id: "auto-paid", name: "Auto (paid)", pricing: { prompt: "-1", completion: "-1" }, isFree: false },
+        { id: "img-paid", pricing: { prompt: "0", completion: "0", image: "0.04" } },
       ],
     });
   }

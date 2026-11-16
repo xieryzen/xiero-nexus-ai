@@ -12,13 +12,21 @@ export interface AgentLite {
   role: string;
 }
 
+export interface SkillLite {
+  id: string;
+  name: string;
+  description: string;
+}
+
 function TeamForm({
   agents,
+  skills,
   initial,
   onSaved,
   onCancel,
 }: {
   agents: AgentLite[];
+  skills: SkillLite[];
   initial?: TeamDTO;
   onSaved: (t: TeamDTO) => void;
   onCancel: () => void;
@@ -27,6 +35,7 @@ function TeamForm({
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [members, setMembers] = useState<Set<string>>(new Set(initial?.agentIds ?? []));
+  const [skillIds, setSkillIds] = useState<Set<string>>(new Set(initial?.skillIds ?? []));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -43,7 +52,7 @@ function TeamForm({
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const payload = { name, description: description || undefined, agentIds: [...members] };
+    const payload = { name, description: description || undefined, agentIds: [...members], skillIds: [...skillIds] };
     try {
       const res = editing
         ? await apiFetch<{ team: TeamDTO }>(`/api/teams/${initial!.id}`, { method: "PATCH", body: JSON.stringify(payload) })
@@ -87,6 +96,41 @@ function TeamForm({
           </div>
         )}
       </Field>
+      <Field
+        label="Skills of the team"
+        hint={
+          skills.length === 0
+            ? "No skill yet. Upload a SKILL.md or a .skill on the Skills page."
+            : "Every member works by these in a project of this team, on top of its own skills."
+        }
+      >
+        {skills.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {skills.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                title={s.description || undefined}
+                aria-pressed={skillIds.has(s.id)}
+                onClick={() =>
+                  setSkillIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(s.id)) next.delete(s.id);
+                    else next.add(s.id);
+                    return next;
+                  })
+                }
+                className={cn(
+                  "rounded-full border px-3 py-1 text-xs font-medium transition",
+                  skillIds.has(s.id) ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                )}
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </Field>
       <div className="flex justify-end gap-2">
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
         <Button type="submit" loading={loading}>{editing ? "Save changes" : "Create team"}</Button>
@@ -98,16 +142,19 @@ function TeamForm({
 export function TeamsManager({
   initialTeams,
   agents,
+  skills,
   isAdmin,
 }: {
   initialTeams: TeamDTO[];
   agents: AgentLite[];
+  skills: SkillLite[];
   isAdmin: boolean;
 }) {
   const [list, setList] = useState(initialTeams);
   const [form, setForm] = useState<{ mode: "new" | "edit"; team?: TeamDTO } | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const nameById = new Map(agents.map((a) => [a.id, a.name] as const));
+  const skillById = new Map(skills.map((s) => [s.id, s.name] as const));
 
   function patch(t: TeamDTO) {
     setList((l) => {
@@ -138,7 +185,7 @@ export function TeamsManager({
     >
       {form && (
         <div className="mb-5 rounded-md border border-line bg-surface-2/40 p-4">
-          <TeamForm agents={agents} initial={form.team} onSaved={(t) => { patch(t); setForm(null); }} onCancel={() => setForm(null)} />
+          <TeamForm agents={agents} skills={skills} initial={form.team} onSaved={(t) => { patch(t); setForm(null); }} onCancel={() => setForm(null)} />
         </div>
       )}
       {list.length === 0 ? (
@@ -151,6 +198,13 @@ export function TeamsManager({
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-ink">{t.name}</span>
                   <Badge tone="neutral">{t.agentIds.length} agents</Badge>
+                  {t.skillIds.length > 0 && (
+                    <span title={t.skillIds.map((id) => skillById.get(id) ?? "a skill").join(", ")}>
+                      <Badge tone="signal">
+                        <Icon name="skill" size={12} /> {t.skillIds.length} {t.skillIds.length === 1 ? "skill" : "skills"}
+                      </Badge>
+                    </span>
+                  )}
                 </div>
                 {t.description && <p className="mt-0.5 text-xs text-ink-3">{t.description}</p>}
                 <p className="mt-1 text-xs text-ink-3">{t.agentIds.map((id) => nameById.get(id) ?? "?").join(", ") || "—"}</p>

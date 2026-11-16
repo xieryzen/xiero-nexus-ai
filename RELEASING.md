@@ -277,6 +277,12 @@ server.
 - The app now waits and asks again when a provider answers "too many
   requests" or "busy". `PROVIDER_RETRIES=0` in `.env` turns that off.
 
+### From 1.6 to 1.7
+
+- Nothing has to be configured. At its first start 1.7 adds four tables to
+  the database, for skills; going back to 1.6 needs no backup of `data/` to
+  be put back, the tables are left alone.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of
