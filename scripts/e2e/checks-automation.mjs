@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1559,7 +1559,116 @@ export async function automation(ctx) {
     check("  what changed is, by name", rows.some((row) => row.action === "admin.user.update" && /"changed":\["username","email"\]/.test(row.metadata ?? "")) && rows.some((row) => row.action === "admin.user.update" && /"changed":\["password"\]/.test(row.metadata ?? "") && /"signedOut":true/.test(row.metadata ?? "")), rows.filter((row) => row.action === "admin.user.update").map((row) => row.metadata).slice(0, 4));
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts };
+  // ─── Model checks (v1.8) ─────────────────────────────────────
+
+  async function health() {
+    const openai = ids.providers.openai;
+    const force = (modelId, status, times) => fetch(`${MOCK}/__force?model=${modelId}&status=${status}${times ? `&times=${times}` : ""}`);
+    const round = (modelIds) => admin.post("/api/models/health", { modelIds, wait: true });
+    const byName = async () => new Map(((await admin.get("/api/models")).data?.models ?? []).map((m) => [m.modelId, m]));
+    const apiKey = (await admin.post("/api/account/api-keys", { name: "Model checks", scopes: ["chat"], rateLimitPerMinute: 600 })).data?.secret;
+    const listedModels = async () => (await (await v1("/models", { key: apiKey })).json().catch(() => null))?.data ?? [];
+    const listed = async () => (await listedModels()).map((m) => m.name);
+    const asks = async (modelId) => (await mockLog()).filter((l) => l.method === "POST" && l.body?.model === modelId && l.body?.messages?.[0]?.content === "Reply with the single word: ok").length;
+    const page = async (who, path) => {
+      const res = await who.raw(path);
+      return res.status === 200 ? await res.text() : "";
+    };
+
+    begin("Model checks: a model that fails is left out of the lists");
+    const steady = await model("health-steady", openai, "health-steady", ["text"]);
+    const flip = await model("health-switch", openai, "health-switch", ["text"]);
+    const brief = await model("health-brief", openai, "health-brief", ["text"]);
+    const picture = await model("health-picture", openai, "img-health", ["image_generation"]);
+    const status = await admin.get("/api/models/health");
+    eq("an administrator reads how the check is set", [status.status, status.data?.health?.automatic, status.data?.health?.running], [200, false, false]);
+    eq("an ordinary user does not", (await bob.get("/api/models/health")).status, 403);
+    eq("  and starts none", (await bob.post("/api/models/health", {})).status, 403);
+    check("a model that was never checked is offered", (await listed()).includes("health-switch") && (await page(admin, "/dashboard/chat")).includes("health-switch"), await listed());
+    const publicId = (await listedModels()).find((m) => m.name === "health-switch")?.id;
+
+    await force("health-switch", 403);
+    await mockReset();
+    const first = await round([steady.id, flip.id, brief.id, picture.id]);
+    eq("a round asks the models it is given, each for one word", [first.status, first.data?.round?.checked, first.data?.round?.passed, first.data?.round?.failed], [200, 3, 2, 1]);
+    check("  and says which model it took away", first.data?.round?.hidden?.length === 1 && /^health-switch · /.test(first.data.round.hidden[0]) && first.data.round.restored.length === 0, first.data?.round);
+    let now = await byName();
+    eq("the model that failed is marked, with what its provider said", [now.get("health-switch")?.lastTestStatus, now.get("health-switch")?.hidden, now.get("health-switch")?.checkFailures, /Provider responded 403/.test(now.get("health-switch")?.lastTestError ?? "")], ["error", true, 1, true]);
+    eq("  the ones that answered are not", [now.get("health-steady")?.lastTestStatus, now.get("health-steady")?.hidden, now.get("health-brief")?.hidden], ["ok", false, false]);
+    eq("  a refusal is not asked a second time", await asks("health-switch"), 1);
+    eq("a model that makes pictures is not checked, and stays in the lists", [now.get("img-health")?.lastTestStatus, now.get("img-health")?.hidden, (await mockLog()).some((l) => l.body?.model === "img-health")], [null, false, false]);
+    const names = await listed();
+    check("the public list of models leaves the failing one out", names.includes("health-steady") && !names.includes("health-switch"), names.filter((n) => n.startsWith("health-")));
+    const chatPage = await page(admin, "/dashboard/chat");
+    check("  and so does the list a chat offers", chatPage.includes("health-steady") && !chatPage.includes("health-switch"), null);
+    const modelsPage = await page(admin, "/dashboard/models");
+    check("the Models page says that it is left out, and how the check is set", modelsPage.includes("left out of the lists") && /\d+ models? (is|are) left out now\./.test(modelsPage) && modelsPage.includes("The automatic check is switched off") && modelsPage.includes("Check all now"), /[^>]{0,40}left out now[^<]{0,10}/.exec(modelsPage)?.[0]);
+    await v1("/chat/completions", { key: apiKey, method: "POST", body: { model: publicId, messages: [{ role: "user", content: "Hello, health." }] } });
+    check("a request that names the failing model is still passed on to its provider", (await mockLog()).some((l) => l.body?.model === "health-switch" && l.body?.messages?.some((m) => m.content === "Hello, health.")), publicId);
+
+    begin("Model checks: a busy moment does not take a model away");
+    await force("health-brief", 429, 1);
+    await mockReset();
+    const busy = await round([brief.id]);
+    eq("a model that worked and is limited for a moment is asked once more, and stays", [busy.data?.round?.passed, busy.data?.round?.hidden?.length, await asks("health-brief")], [1, 0, 2]);
+    await force("health-brief", 429);
+    const limited = await round([brief.id]);
+    now = await byName();
+    eq("limited both times, it is left out", [limited.data?.round?.failed, limited.data?.round?.hidden?.length, now.get("health-brief")?.hidden, now.get("health-brief")?.checkFailures], [1, 1, true, 1]);
+    await mockReset();
+    await round([brief.id]);
+    now = await byName();
+    eq("a failing model is asked once in a round, and its failures are counted", [await asks("health-brief"), now.get("health-brief")?.checkFailures], [1, 2]);
+
+    begin("Model checks: a model that answers again is back");
+    await force("health-switch", 200);
+    await force("health-brief", 200);
+    const back = await round([flip.id, brief.id]);
+    now = await byName();
+    eq("the round says which models it gave back", [back.data?.round?.passed, back.data?.round?.restored?.length, back.data?.round?.hidden?.length], [2, 2, 0]);
+    eq("  they are offered again, their failures forgotten", [now.get("health-switch")?.hidden, now.get("health-switch")?.checkFailures, now.get("health-brief")?.hidden, (await listed()).includes("health-switch")], [false, 0, false, true]);
+    await force("health-switch", 500);
+    const byHand = await admin.post(`/api/models/${flip.id}/test`, {});
+    now = await byName();
+    eq("the Test button counts as a check: a model that fails it is left out", [byHand.data?.ok, now.get("health-switch")?.hidden, (await listed()).includes("health-switch")], [false, true, false]);
+    await force("health-switch", 200);
+    const byHandAgain = await admin.post(`/api/models/${flip.id}/test`, {});
+    eq("  and one that passes it is back at once", [byHandAgain.data?.ok, (await byName()).get("health-switch")?.hidden], [true, false]);
+
+    begin("Model checks: the automatic choice of a model");
+    const cheap = await model("health-cheap", openai, "health-cheap", ["text"], { inputPricePerMTok: 0.000001, outputPricePerMTok: 0.000001 });
+    await agent("Autopick", "Autopicker", { routingMode: "auto" });
+    const autoWf = await workflow("Autopick", [{ title: "Pick", objective: "Answers.", role: "Autopicker" }]);
+    const firstModelOf = async (title) => {
+      const id = await project(admin, { title, workflowId: autoWf, managerModelRowId: ids.models.chat });
+      const run = await runProject(admin, id);
+      const attempts = (await admin.get(`/api/projects/${id}/attempts`)).data?.attempts ?? [];
+      return [taskOf(run.events, 1)?.status, attempts[0]?.modelId];
+    };
+    eq("an agent that takes the cheapest model takes it while it answers", await firstModelOf("Autopick, the cheapest answers"), ["succeeded", "health-cheap"]);
+    await force("health-cheap", 403);
+    await round([cheap.id]);
+    await mockReset();
+    const second = await firstModelOf("Autopick, the cheapest fails");
+    check("a model that failed its check is not chosen", second[0] === "succeeded" && second[1] !== "health-cheap" && !(await mockLog()).some((l) => l.body?.model === "health-cheap"), second);
+    // Out of the way of whatever chooses a model after this.
+    await admin.patch(`/api/models/${cheap.id}`, { enabled: false });
+    await force("health-cheap", 200);
+
+    begin("Model checks: an agent keeps the model it is set to");
+    await force("health-switch", 403);
+    await round([flip.id]);
+    const keeper = await agent("Health keeper", "Keeper", { primaryModelRowId: flip.id, fallbackModelRowId: ids.models.chat });
+    eq("an agent can be set to a failing model by its ID, and keeps it", [keeper.status, keeper.data?.agent?.primaryModelRowId], [201, flip.id]);
+    const auditDb = database();
+    const actions = auditDb.prepare("SELECT action, actor_user_id AS actor, metadata FROM audit_logs WHERE action LIKE 'model.health.%'").all();
+    auditDb.close();
+    const count = (action) => actions.filter((row) => row.action === action).length;
+    check("the audit log has the rounds, and each model that was taken away or given back", count("model.health.run") === 7 && count("model.health.hidden") === 4 && count("model.health.restored") === 2 && actions.every((row) => row.actor), [count("model.health.run"), count("model.health.hidden"), count("model.health.restored")]);
+    eq("a round is refused when its models are not named properly", (await admin.post("/api/models/health", { modelIds: [] })).status, 400);
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

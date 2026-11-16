@@ -1,15 +1,18 @@
 import "server-only";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { modelCapabilities, models, providers, type Capability } from "@/db/schema";
 import { adapterIsImplemented, getAdapter } from "./adapters";
 import { resolveMediaApi, type MediaApi } from "./adapters/media-protocol";
 import { MEDIA_CAPABILITY, isMediaOnly } from "./capabilities";
+import { isFailing } from "./model-health-rules";
 
 /**
  * The models a user can pick from: enabled, on an enabled provider whose
- * adapter is implemented. One query, shared by the pages that offer a model
- * list, so they all agree on what "usable" means.
+ * adapter is implemented, and not failing: a model that failed its last check
+ * is left out until a check passes again (model-health.ts). One query, shared
+ * by the pages that offer a model list, so they all agree on what "usable"
+ * means.
  */
 export interface UsableModel {
   id: string;
@@ -37,6 +40,7 @@ export function usableModels(): UsableModel[] {
       pricePerImage: models.pricePerImage,
       pricePerSecond: models.pricePerSecond,
       pricePerMChars: models.pricePerMChars,
+      lastTestStatus: models.lastTestStatus,
       providerName: providers.name,
       adapter: providers.adapter,
       baseUrl: providers.baseUrl,
@@ -47,7 +51,7 @@ export function usableModels(): UsableModel[] {
     .where(and(eq(models.enabled, true), eq(providers.status, "enabled")))
     .orderBy(asc(models.modelId))
     .all()
-    .filter((m) => adapterIsImplemented(m.adapter));
+    .filter((m) => adapterIsImplemented(m.adapter) && !isFailing(m));
   if (rows.length === 0) return [];
 
   const caps = new Map<string, Capability[]>();
@@ -70,6 +74,50 @@ export function usableModels(): UsableModel[] {
     pricePerMChars: m.pricePerMChars,
     tools: getAdapter(m.adapter).supports.includes("tool_calling"),
   }));
+}
+
+export interface SetModel {
+  id: string;
+  /** "<name> · <provider>" */
+  label: string;
+  /** Why it is not in the list. */
+  why: string;
+}
+
+/**
+ * Models that something is set to and that are not offered: switched off, or
+ * failing. A form shows them as what is set, so that nobody takes an empty
+ * field for the truth and nothing changes by saving.
+ */
+export function setButNotOffered(ids: (string | null | undefined)[], offered: { id: string }[]): SetModel[] {
+  const listed = new Set(offered.map((m) => m.id));
+  const missing = [...new Set(ids.filter((id): id is string => Boolean(id) && !listed.has(id!)))];
+  if (missing.length === 0) return [];
+  return db
+    .select({
+      id: models.id,
+      modelId: models.modelId,
+      displayName: models.displayName,
+      enabled: models.enabled,
+      lastTestStatus: models.lastTestStatus,
+      providerName: providers.name,
+      providerStatus: providers.status,
+    })
+    .from(models)
+    .innerJoin(providers, eq(models.providerId, providers.id))
+    .where(inArray(models.id, missing))
+    .all()
+    .map((m) => ({
+      id: m.id,
+      label: `${m.displayName || m.modelId} · ${m.providerName}`,
+      why: !m.enabled
+        ? "switched off"
+        : m.providerStatus !== "enabled"
+          ? "its provider is switched off"
+          : isFailing(m)
+            ? "failed its last check"
+            : "not offered",
+    }));
 }
 
 /** Models that can answer a chat request: everything except media and embedding models. */

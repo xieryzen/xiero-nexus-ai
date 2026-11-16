@@ -859,7 +859,9 @@ def tested_text(item):
     if status == "ok":
         return "last test ok"
     if status == "error":
-        return "last test failed: " + short(item.get("lastTestError") or "no reason kept", 160)
+        # From 1.8 the app leaves a model that failed its last check out of its lists, and says so.
+        return "%s: %s" % ("last test failed, left out of the lists" if item.get("hidden") else "last test failed",
+                           short(item.get("lastTestError") or "no reason kept", 160))
     return "never tested"
 
 

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { serializeModels } from "@/lib/models";
+import { healthStatus } from "@/lib/model-health";
 import { adapterAbilities, adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
 import { ModelsManager } from "@/components/models/models-manager";
 import { isAdminRole } from "@/lib/roles";
@@ -31,6 +32,7 @@ export default function ModelsPage() {
         status: p.status,
       }))}
       isAdmin={isAdminRole(user?.role)}
+      initialHealth={healthStatus()}
     />
   );
 }

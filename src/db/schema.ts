@@ -199,6 +199,8 @@ export const models = sqliteTable(
     lastTestedAt: integer("last_tested_at", { mode: "timestamp_ms" }),
     lastTestStatus: text("last_test_status", { enum: ["ok", "error"] }),
     lastTestError: text("last_test_error"),
+    // Checks failed in a row (v1.8): 0 when the last one passed. Decides how soon a failing model is asked again.
+    checkFailures: integer("check_failures").notNull().default(0),
     notes: text("notes"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

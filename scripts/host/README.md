@@ -418,6 +418,11 @@ and its tools. Both are deleted again (`--keep-try-run` keeps them). One word
 from a model says that it answers; whether a provider allows the many
 requests of a project is only seen in one.
 
+From 1.8 the app itself leaves a chat model that fails its check out of its
+lists, and takes it back when it answers again. `--only-usable` goes further
+and switches models off, also the ones a provider without a key would bill
+for: what it switches off stays off until somebody switches it on.
+
 `--only-usable` is for an app whose model list has grown past what can be
 used, as it does when everything a gateway lists is imported. It looks at
 every model that is switched on and that the file does not name, and

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { SerializedModel } from "@/lib/models";
+import type { HealthStatus } from "@/lib/model-health";
 import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatNumber } from "@/lib/format";
@@ -22,16 +23,28 @@ interface ProviderLite {
   status: "enabled" | "disabled";
 }
 
+/** How often the models are checked, in words. */
+function every(minutes: number): string {
+  if (minutes % 1440 === 0) return minutes === 1440 ? "every day" : `every ${minutes / 1440} days`;
+  if (minutes % 60 === 0) return minutes === 60 ? "every hour" : `every ${minutes / 60} hours`;
+  return `every ${minutes} minutes`;
+}
+
 export function ModelsManager({
   initialModels,
   providers,
   isAdmin,
+  initialHealth,
 }: {
   initialModels: SerializedModel[];
   providers: ProviderLite[];
   isAdmin: boolean;
+  initialHealth: HealthStatus;
 }) {
   const [models, setModels] = useState(initialModels);
+  const [health, setHealth] = useState(initialHealth);
+  const [checking, setChecking] = useState(false);
+  const [checkNote, setCheckNote] = useState<string | null>(null);
   const [form, setForm] = useState<{ mode: "new" | "edit"; model?: SerializedModel } | null>(null);
   const [busy, setBusy] = useState<Record<string, string | undefined>>({});
   const [testNote, setTestNote] = useState<Record<string, { ok: boolean; text: string } | undefined>>({});
@@ -94,6 +107,8 @@ export function ModelsManager({
         lastTestedAt: new Date(),
         lastTestStatus: res.ok ? "ok" : "error",
         lastTestError: res.ok ? null : res.error ?? "Test failed",
+        checkFailures: res.ok ? 0 : m.checkFailures + 1,
+        hidden: m.enabled && !res.ok,
       });
       setTestNote((n) => ({
         ...n,
@@ -120,7 +135,31 @@ export function ModelsManager({
     }
   }
 
+  /** Check every model now, and show what the check found when it has ended. */
+  async function checkAll() {
+    setChecking(true);
+    setCheckNote(null);
+    try {
+      const started = await apiFetch<{ health: HealthStatus }>("/api/models/health", { method: "POST", body: JSON.stringify({}) });
+      let now = started.health;
+      // A round asks one model after the other: with many models it takes minutes.
+      for (let i = 0; now.running && i < 400; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        now = (await apiFetch<{ health: HealthStatus }>("/api/models/health")).health;
+      }
+      setHealth(now);
+      const fresh = await apiFetch<{ models: SerializedModel[] }>("/api/models");
+      setModels(fresh.models);
+      setTestNote({});
+    } catch (err) {
+      setCheckNote(err instanceof ApiError ? err.message : "The check could not be started.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
   const canAdd = isAdmin && providers.length > 0;
+  const hiddenCount = models.filter((m) => m.hidden).length;
 
   return (
     <div>
@@ -129,12 +168,41 @@ export function ModelsManager({
         description="The catalog of models available through your providers."
         actions={
           canAdd && !form ? (
-            <Button onClick={() => setForm({ mode: "new" })}>
-              <Icon name="plus" /> Add model
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {models.length > 0 && (
+                <Button variant="ghost" loading={checking} disabled={checking} onClick={checkAll}>
+                  Check all now
+                </Button>
+              )}
+              <Button onClick={() => setForm({ mode: "new" })}>
+                <Icon name="plus" /> Add model
+              </Button>
+            </div>
           ) : undefined
         }
       />
+
+      {isAdmin && models.length > 0 && (
+        <div className="mb-5 rounded-md border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" data-testid="model-health">
+          <p>
+            {health.automatic
+              ? `Every chat model that is switched on is asked for one word ${every(health.intervalMinutes)}, and soon after it is added.`
+              : "The automatic check is switched off (MODEL_HEALTH_INTERVAL_MINUTES=0): models are checked with Test and with Check all now."}{" "}
+            A model that fails is left out of the model lists and of the automatic choice until a check passes again; a failing model is asked again sooner.
+          </p>
+          <p className="mt-1 text-xs text-ink-3">
+            {hiddenCount === 0 ? "No model is left out now." : `${hiddenCount} ${hiddenCount === 1 ? "model is" : "models are"} left out now.`}
+            {checking || health.running ? " A check is running." : ""}
+            {!checking && health.last && health.last.endedAt ? (
+              <>
+                {" "}Last check <RelativeTime at={new Date(health.last.endedAt)} />: {health.last.checked} asked, {health.last.passed} answered, {health.last.failed} failed.
+              </>
+            ) : null}
+            {" "}Image, video, speech and embedding models are not checked: a check would generate one each time.
+          </p>
+          {checkNote && <p className="mt-1 text-xs text-danger">{checkNote}</p>}
+        </div>
+      )}
 
       {isAdmin && providers.length === 0 && (
         <EmptyState
@@ -191,6 +259,11 @@ export function ModelsManager({
                                 <StatusDot tone={m.lastTestStatus === "ok" ? "ok" : "danger"} />
                                 test {m.lastTestStatus}
                               </Badge>
+                            )}
+                            {m.hidden && (
+                              <span title="It failed its last check. It is left out of the model lists until a check passes again.">
+                                <Badge tone="warn">left out of the lists</Badge>
+                              </span>
                             )}
                           </div>
                           {m.capabilities.length > 0 && (

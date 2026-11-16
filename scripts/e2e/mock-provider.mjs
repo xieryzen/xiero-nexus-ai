@@ -373,8 +373,21 @@ function chatAnswer(body) {
   return `OUTPUT of "${title}" [deps:${deps}]${extras.length ? ` [with:${extras.join(",")}]` : ""}`;
 }
 
+/**
+ * Models that the checks switch: /__force?model=<id>&status=<code> makes the
+ * chat requests to that model fail with that status, &times=<n> only the next
+ * n of them; status=200 lets it answer again.
+ */
+const forced = new Map();
+
 function chat(req, res, body) {
   const model = String(body?.model ?? "");
+  const force = forced.get(model);
+  if (force) {
+    force.left -= 1;
+    if (force.left <= 0) forced.delete(model);
+    return send(res, force.status, { error: { message: `The checks made ${model} answer ${force.status}.` } });
+  }
   if (/^(img|vid|tts|embed)-/.test(model)) {
     return send(res, 404, { error: { message: `The model \`${body.model}\` does not support chat completions`, type: "invalid_request_error" } });
   }
@@ -929,6 +942,14 @@ const api = http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/__jobs") return send(res, 200, [...jobs.values()]);
+  if (url.pathname === "/__force") {
+    const model = url.searchParams.get("model") ?? "";
+    const status = Number(url.searchParams.get("status") ?? 200);
+    const times = Number(url.searchParams.get("times") ?? 0);
+    if (status === 200) forced.delete(model);
+    else forced.set(model, { status, left: times > 0 ? times : Infinity });
+    return send(res, 200, { ok: true });
+  }
 
   const body = req.method === "POST" ? await readBody(req) : null;
   record("api", req, body);

@@ -41,6 +41,7 @@ import {
 import { AppError, sanitizeUpstreamError } from "@/lib/errors";
 import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
 import { collectionIdsForAgent } from "@/lib/knowledge/service";
+import { isFailing } from "@/lib/model-health-rules";
 import { skillNames, skillsBlock } from "@/lib/skills/prompt";
 import { skillsForWork } from "@/lib/skills/service";
 import { serializeAsset, type MediaAssetDTO } from "@/lib/media/dto";
@@ -149,20 +150,24 @@ async function invoke(
   return { content: r.content, prompt, completion };
 }
 
-/** Enabled models (on enabled, implemented-adapter providers) with prices + caps. */
+/**
+ * Enabled models (on enabled, implemented-adapter providers) with prices + caps.
+ * A model that failed its last check is not chosen automatically.
+ */
 function loadRoutableModels(): RoutableModel[] {
   const rows = db
     .select({
       id: models.id,
       inputPricePerMTok: models.inputPricePerMTok,
       outputPricePerMTok: models.outputPricePerMTok,
+      lastTestStatus: models.lastTestStatus,
       adapter: providers.adapter,
     })
     .from(models)
     .innerJoin(providers, eq(models.providerId, providers.id))
     .where(eq(models.enabled, true))
     .all()
-    .filter((m) => adapterIsImplemented(m.adapter));
+    .filter((m) => adapterIsImplemented(m.adapter) && !isFailing(m));
   if (rows.length === 0) return [];
   const caps = new Map<string, string[]>();
   for (const c of db.select().from(modelCapabilities).all()) {

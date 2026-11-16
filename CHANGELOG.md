@@ -5,13 +5,33 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.8.0-rc.1] - 2026-11-16
 
-Changes to the host scripts since 1.7.0. They are not part of a release
-bundle: the Deploy workflow runs the ones of the branch it is started on.
+The first candidate for 1.8: the app checks by itself that its models answer,
+and offers only the ones that do. More of 1.8 follows in further candidates.
 
 ### Added
 
+- **Models are checked automatically.** The background worker asks every chat
+  model that is switched on for one word: soon after the model is added, then
+  every six hours (`MODEL_HEALTH_INTERVAL_MINUTES`; `0` switches it off). It
+  is the check the Test button of the Models page makes.
+- **A model that fails its check is left out**: of the model lists of chats,
+  projects, agents and settings, of the list of the public API
+  (`GET /api/v1/models`) and of the automatic choice of the cheapest model.
+  When a check passes again it is back. Nothing is switched off or deleted:
+  the Models page shows the model as "left out of the lists", with what its
+  provider said.
+- A failing model is asked again after 15 minutes, then after twice as long
+  each time, up to the interval, so that a model whose limit has passed comes
+  back soon and one without credit is not asked all day. A model that worked
+  and is limited or busy for a moment is asked once more after 20 seconds
+  before it is taken away.
+- **Check all now** on the Models page, and `GET` / `POST /api/models/health`
+  for administrators: how the check is set, what the last round found, and a
+  round on demand (all models, or the ones named).
+- The audit log says when the check took a model away
+  (`model.health.hidden`) and when it gave one back (`model.health.restored`).
 - `workforce.py --skill-url <address>`: a skill file at an https address is
   fetched and uploaded as the Skills page does; the address of a file's
   page at MediaFire is followed to the file. `workforce.sh` also takes the
@@ -20,8 +40,24 @@ bundle: the Deploy workflow runs the ones of the branch it is started on.
 
 ### Changed
 
+- An agent that is set to a model which is not offered (switched off, or
+  failing) shows that model in its form, with the reason, in place of an
+  empty field. Saving the form changes nothing about it.
 - What the app left out of an uploaded skill is said by its reason, with
-  how many files and the first of them by name.
+  how many files and the first of them by name (host scripts).
+
+### Not in it
+
+- Image, video, speech and embedding models are not checked: a check would
+  generate, and bill, a picture, a clip or a recording each time. They stay
+  in the lists as before.
+- An agent that is set to a failing model still asks it first, then its
+  fallback: what an administrator chose by name is not overruled.
+
+### Database
+
+- One column, `models.check_failures`, added at the first start
+  (`drizzle/0009_model_health.sql`).
 
 ## [1.7.0] - 2026-11-16
 

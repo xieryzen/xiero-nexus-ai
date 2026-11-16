@@ -227,7 +227,7 @@ PIDS+=("$!")
 (cd "${root}" && exec env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 DATABASE_PATH="${WORK}/nexus.db" MEDIA_PATH="${WORK}/media" \
   SECRET_ENCRYPTION_KEY="$(head -c 32 /dev/urandom | base64)" APP_URL="https://nexus.example.test" COOKIE_SECURE="" \
   ALLOW_PRIVATE_PROVIDER_HOSTS=127.0.0.1 BOOTSTRAP_ADMIN_EMAIL="boss@example.test" BOOTSTRAP_ADMIN_USERNAME="boss" BOOTSTRAP_ADMIN_PASSWORD="${PASS}" \
-  SANDBOX_URL="" SEARCH_PROVIDER="" FFMPEG_PATH="${FFMPEG:-${WORK}/no-ffmpeg-here}" RUN_CONCURRENCY="" NEXUS_WORKER="" PROVIDER_RETRIES="" \
+  SANDBOX_URL="" SEARCH_PROVIDER="" FFMPEG_PATH="${FFMPEG:-${WORK}/no-ffmpeg-here}" RUN_CONCURRENCY="" NEXUS_WORKER="" PROVIDER_RETRIES="" MODEL_HEALTH_INTERVAL_MINUTES="0" \
   node node_modules/next/dist/bin/next start -p "${APP_PORT}" -H 127.0.0.1) > "${WORK}/app.log" 2>&1 &
 PIDS+=("$!")
 for _ in $(seq 1 240); do
@@ -636,6 +636,16 @@ import workforce
 plain = '<a class="input popsok" aria-label="Download file" href="https://download1.mediafire.com/a/k/x.zip?p=1&amp;q=2" id="downloadButton">'
 scrambled = '<a class="input popsok" href="javascript:void(0)" data-scrambled-url="%s" id="downloadButton">' % base64.b64encode(b"https://download22.mediafire.com/b/k/y.skill.zip").decode()
 print(workforce.mediafire_direct(plain), workforce.mediafire_direct(scrambled), workforce.mediafire_direct("<html>Just a moment...</html>"))
+PYTHON_END
+)"
+is "the inventory says which failing models the app leaves out of its lists" "last test failed, left out of the lists: no credit | last test failed: no credit | last test ok" "$(python3 - "${host}" << 'PYTHON_END'
+import sys
+sys.path.insert(0, sys.argv[1])
+import workforce
+print(" | ".join(workforce.tested_text(item) for item in (
+    {"lastTestStatus": "error", "lastTestError": "no credit", "hidden": True},
+    {"lastTestStatus": "error", "lastTestError": "no credit", "hidden": False},
+    {"lastTestStatus": "ok", "hidden": False})))
 PYTHON_END
 )"
 is "a site passes a request on to another https address, and to no other" "onwards refused refused" "$(python3 - "${host}" << 'PYTHON_END'

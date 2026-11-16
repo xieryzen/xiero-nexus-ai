@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `check_failures` integer DEFAULT 0 NOT NULL;

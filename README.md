@@ -494,6 +494,42 @@ mock. **How well a given model follows a skill was not measured.**
 Anyone who can reach the site can still register an account of their own,
 as an ordinary user: there is no switch for that yet.
 
+## Models that answer (v1.8.0)
+
+The app checks by itself that its models answer, and offers only the ones
+that do.
+
+- **The check.** The background worker asks every chat model that is switched
+  on (on a provider that is switched on) for one word. It is the check the
+  **Test** button of the Models page makes. A new model is asked soon after it
+  is added; a model that answers, again every six hours.
+- **A model that fails is left out** of the model lists (chat, projects,
+  agents, settings), of `GET /api/v1/models`, and of the automatic choice of
+  the cheapest model. It is not switched off: the Models page shows it as
+  "left out of the lists" with what its provider said, and a request that
+  names it is still passed on.
+- **A model that answers again is back.** A failing model is asked again
+  after 15 minutes, then after twice as long each time, up to the interval.
+  **Test** and **Check all now** on the Models page bring it back at once.
+- **A busy moment is not a failure.** A model that worked and now answers
+  "too many requests", "busy" or not at all is asked once more after 20
+  seconds; only when that fails too is it left out. A refusal (no credit, no
+  access, no such model) is not asked twice.
+- **What an agent is set to stays.** An agent whose model is left out keeps
+  it, asks it first and then its fallback; its form shows the model with the
+  reason.
+
+`MODEL_HEALTH_INTERVAL_MINUTES` sets how often a working model is checked
+(default 360, between 5 minutes and a week); `0` switches the automatic check
+off, and models are then checked with the two buttons only. Each check is one
+small request, recorded under Usage as a test. Administrators can also read
+and start checks over the API: `GET /api/models/health`, and
+`POST /api/models/health` with `{"modelIds": [...], "wait": true}` (both
+optional).
+
+Not checked: image, video, speech and embedding models, since a check would
+generate (and bill) one each time. They are offered as before.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -738,6 +774,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again) | 🚧 release candidate: the first part of 1.8 |
 
 ---
 
@@ -800,6 +837,8 @@ account you register through the UI becomes the owner.
 | `SUBTITLE_FONT_FILE` / `SUBTITLE_FONT_NAME` | no | A `.ttf` or `.otf` font for subtitles, instead of the bundled Noto Sans Bold; the name is only needed when it cannot be read from the file. |
 | `RUN_CONCURRENCY` | no | Project runs worked on at the same time: 1 to 10, default 3. |
 | `NEXUS_WORKER` | no | `0` switches the background worker off, for a second server process on the same database. |
+| `MODEL_HEALTH_INTERVAL_MINUTES` | no | How often the app checks that a chat model still answers, in minutes: default 360, between 5 and 10080; `0` = no automatic check. A model that fails is left out of the model lists until a check passes. |
+| `MODEL_HEALTH_RETRY_SECONDS` | no | Before a model that worked is left out for "too many requests", "busy" or no answer, it is asked once more after this many seconds: default 20, at most 300. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |

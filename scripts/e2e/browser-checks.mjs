@@ -614,6 +614,33 @@ try {
   check("  a change without the right password is refused, and said", await waitText("Password is incorrect"), null);
   await snap("settings-account");
 
+  // ─── Model checks ─────────────────────────────────────────────────────────
+  // Last, since Check all now asks every model of these checks, also the ones made to fail.
+  begin("Browser: model checks");
+  await open("/dashboard/agents");
+  const keeperOpened = await page.evaluate(() => {
+    const row = [...document.querySelectorAll("main li, main article, main div")].filter((el) => el.innerText?.includes("Health keeper") && [...el.querySelectorAll("button")].some((b) => b.innerText.trim() === "Edit")).pop();
+    const edit = row ? [...row.querySelectorAll("button")].find((b) => b.innerText.trim() === "Edit") : null;
+    edit?.click();
+    return Boolean(edit);
+  });
+  await page.waitForSelector("#a-pri").catch(() => undefined);
+  const setTo = await page.$eval("#a-pri", (select) => select.selectedOptions[0]?.textContent ?? "").catch(() => "");
+  check("an agent that is set to a failing model shows it in its form, with the reason", keeperOpened && /^health-switch · .* \(not offered: failed its last check\)$/.test(setTo), setTo);
+  const offered = await page.$$eval("#a-fb option", (options) => options.map((o) => o.textContent));
+  check("  the model is not offered for anything else", offered.length > 2 && !offered.some((o) => o.startsWith("health-switch")), offered.length);
+  await snap("agent-failing-model");
+
+  await open("/dashboard/models");
+  check("the Models page says how the models are checked, and marks the ones left out", (await has("The automatic check is switched off")) && /\d+ models? (is|are) left out now\./.test(await text()) && (await has("left out of the lists")), null);
+  await clickText(/Check all now/);
+  check("Check all now asks every model, and says what it found", await waitText(/Last check .*: \d+ asked, \d+ answered, \d+ failed\./, 240_000), (await text()).slice(0, 400));
+  const found = /Last check .*: (\d+) asked, (\d+) answered, (\d+) failed\./.exec(await text());
+  const leftOut = Number(/(\d+) models? (is|are) left out now\./.exec(await text())?.[1] ?? -1);
+  const marked = await page.$$eval("main .badge", (badges) => badges.filter((b) => b.innerText.trim() === "left out of the lists").length);
+  check("  every model that failed is marked in the list, without a reload", found !== null && Number(found[3]) > 1 && leftOut === marked && marked >= Number(found[3]), { found: found?.slice(1), leftOut, marked });
+  await snap("models-checked");
+
   begin("Browser: errors");
   check("no page logged an error", pageErrors.length === 0, pageErrors.slice(0, 8));
 } catch (err) {

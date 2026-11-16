@@ -26,6 +26,20 @@ export interface ModelOption {
   tools?: boolean;
 }
 
+/** A model that an agent is set to and that is not in the list: switched off, or failing its check. */
+export interface SetModelOption {
+  id: string;
+  label: string;
+  why: string;
+}
+
+/** The entry of a model list for what is set and not offered, so that the field shows the truth. */
+function SetOption({ value, models, setModels }: { value: string; models: ModelOption[]; setModels: SetModelOption[] }) {
+  if (!value || models.some((m) => m.id === value)) return null;
+  const set = setModels.find((m) => m.id === value);
+  return <option value={value}>{set ? `${set.label} (not offered: ${set.why})` : "A model that is no longer offered"}</option>;
+}
+
 /** What the server is set up for: which tools would work if an agent had them. */
 export interface ToolSetup {
   sandbox: boolean;
@@ -49,6 +63,7 @@ const GROUPS: ToolGroup[] = ["workspace", "execution", "web"];
 
 function AgentForm({
   models,
+  setModels,
   toolSetup,
   collections,
   skills,
@@ -57,6 +72,7 @@ function AgentForm({
   onCancel,
 }: {
   models: ModelOption[];
+  setModels: SetModelOption[];
   toolSetup: ToolSetup;
   collections: CollectionOption[];
   skills: SkillOption[];
@@ -169,6 +185,7 @@ function AgentForm({
         <Field label="Primary model" htmlFor="a-pri">
           <Select id="a-pri" value={primary} onChange={(e) => setPrimary(e.target.value)}>
             <option value="">— none —</option>
+            <SetOption value={primary} models={models} setModels={setModels} />
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label}</option>
             ))}
@@ -177,6 +194,7 @@ function AgentForm({
         <Field label="Fallback model" htmlFor="a-fb" hint="Used if primary fails">
           <Select id="a-fb" value={fallback} onChange={(e) => setFallback(e.target.value)}>
             <option value="">— none —</option>
+            <SetOption value={fallback} models={models} setModels={setModels} />
             {models.map((m) => (
               <option key={m.id} value={m.id}>{m.label}</option>
             ))}
@@ -491,6 +509,7 @@ function MemoryPanel({
 export function AgentsManager({
   initialAgents,
   models,
+  setModels = [],
   toolSetup,
   collections,
   skills,
@@ -498,6 +517,8 @@ export function AgentsManager({
 }: {
   initialAgents: AgentDTO[];
   models: ModelOption[];
+  /** Models that agents are set to and that are not in `models`. */
+  setModels?: SetModelOption[];
   toolSetup: ToolSetup;
   collections: CollectionOption[];
   skills: SkillOption[];
@@ -541,6 +562,7 @@ export function AgentsManager({
         <div className="mb-5 rounded-md border border-line bg-surface-2/40 p-4">
           <AgentForm
             models={models}
+            setModels={setModels}
             toolSetup={toolSetup}
             collections={collections}
             skills={skills}
