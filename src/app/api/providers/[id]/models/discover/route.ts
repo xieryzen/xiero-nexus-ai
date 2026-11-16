@@ -42,6 +42,11 @@ export const POST = handle(async (req, { params }) => {
   const discovered = listed.map((m) => m.id);
   // What each model is for: from the provider's list, else guessed from its id.
   const suggested = new Map(listed.map((m) => [m.id, suggestModel(m)] as const));
+  const pricing = new Map(
+    listed
+      .filter((m) => m.billed !== undefined)
+      .map((m) => [m.id, { billed: m.billed!, inputPricePerMTok: m.inputPricePerMTok, outputPricePerMTok: m.outputPricePerMTok }] as const),
+  );
 
   const existing = new Set(
     db
@@ -67,6 +72,9 @@ export const POST = handle(async (req, { params }) => {
             modelId,
             displayName: suggestion.displayName ?? null,
             contextWindow: suggestion.contextWindow ?? null,
+            // What the provider's list says of its price, where it says so.
+            inputPricePerMTok: pricing.get(modelId)?.inputPricePerMTok ?? null,
+            outputPricePerMTok: pricing.get(modelId)?.outputPricePerMTok ?? null,
             source: "discovered",
           })
           .returning({ id: models.id })
@@ -94,8 +102,10 @@ export const POST = handle(async (req, { params }) => {
     ok: true,
     models: discovered,
     suggested: Object.fromEntries(
-      [...suggested].map(([id, s]) => [id, { type: s.type, capabilities: s.capabilities }]),
+      [...suggested].map(([id, s]) => [id, { type: s.type, capabilities: s.capabilities, ...(pricing.get(id) ?? {}) }]),
     ),
+    // Whether the provider's list says what its models cost at all.
+    pricesListed: pricing.size > 0,
     existing: [...existing],
     imported,
   });

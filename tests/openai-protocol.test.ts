@@ -230,3 +230,58 @@ test("speech: a default voice and format, speed only when it is not normal", () 
   });
   assert.equal("speed" in buildSpeechBody({ model: "m", input: "x", speed: 1 }), false);
 });
+
+test("a model list that gives prices: what is given away is told from what is billed", () => {
+  const listed = parseModelList({
+    data: [
+      { id: "lab/free-one:free", pricing: { prompt: "0", completion: "0" } },
+      { id: "lab/paid-one", pricing: { prompt: "0.00000015", completion: "0.0000006", request: "0", image: "0" } },
+      { id: "lab/per-request", pricing: { prompt: "0", completion: "0", request: "0.01" } },
+      { id: "lab/in-numbers", pricing: { prompt: 0.000002, completion: 0.00001 } },
+      { id: "lab/no-prices" },
+      { id: "lab/half-a-price", pricing: { prompt: "0" } },
+      { id: "lab/not-a-price", pricing: { prompt: "free", completion: "-1" } },
+    ],
+  });
+  const of = (id: string) => listed.find((m) => m.id === id)!;
+  assert.deepEqual(
+    [of("lab/free-one:free").billed, of("lab/free-one:free").inputPricePerMTok, of("lab/free-one:free").outputPricePerMTok],
+    [false, 0, 0],
+  );
+  assert.deepEqual(
+    [of("lab/paid-one").billed, of("lab/paid-one").inputPricePerMTok, of("lab/paid-one").outputPricePerMTok],
+    [true, 0.15, 0.6],
+  );
+  assert.equal(of("lab/per-request").billed, true, "a price for each request is a price");
+  assert.deepEqual([of("lab/in-numbers").billed, of("lab/in-numbers").inputPricePerMTok, of("lab/in-numbers").outputPricePerMTok], [true, 2, 10]);
+  for (const id of ["lab/no-prices", "lab/half-a-price", "lab/not-a-price"]) {
+    assert.equal(of(id).billed, undefined, `${id}: nothing is said of what is not known`);
+    assert.equal(of(id).inputPricePerMTok, undefined, id);
+  }
+});
+
+test("a model list in a gateway's own words: its word on what is free goes before a sum", () => {
+  const listed = parseModelList({
+    data: [
+      // A router whose price depends on the model it picks.
+      { id: "gate/auto", pricing: { prompt: "-1", completion: "-1", request: "0" }, isFree: false },
+      { id: "gate/auto-free", pricing: { prompt: "0", completion: "0" }, isFree: true },
+      { id: "gate/priced-but-free", pricing: { prompt: "0.000001", completion: "0.000002" }, isFree: true },
+      { id: "gate/variable", pricing: { prompt: "-1", completion: "-1" } },
+      // Per million tokens, as numbers; "usage_based_only" for what no free allowance covers.
+      { id: "other/turbo", pricing: { input: 0.02, output: 0.04, unit: "1M tokens" }, usage_based_only: false },
+      { id: "other/pro", pricing: { input: 3, output: 15, unit: "1M tokens" }, usage_based_only: true },
+      { id: "other/plain", pricing: { input: 0.5, output: 1.2 } },
+      { id: "other/voice", pricing: { price: 0.00002, unit: "second" }, usage_based_only: true },
+    ],
+  });
+  const of = (id: string) => listed.find((m) => m.id === id)!;
+  assert.deepEqual(
+    ["gate/auto", "gate/auto-free", "gate/priced-but-free", "gate/variable", "other/turbo", "other/pro", "other/plain", "other/voice"].map((id) => of(id).billed),
+    [true, false, false, true, false, true, true, true],
+  );
+  assert.equal(of("gate/auto").inputPricePerMTok, undefined, "a price that depends on the model picked is no price");
+  assert.deepEqual([of("gate/priced-but-free").inputPricePerMTok, of("gate/priced-but-free").outputPricePerMTok], [1, 2]);
+  assert.deepEqual([of("other/turbo").inputPricePerMTok, of("other/turbo").outputPricePerMTok], [0.02, 0.04]);
+  assert.deepEqual([of("other/pro").inputPricePerMTok, of("other/pro").outputPricePerMTok], [3, 15]);
+});
