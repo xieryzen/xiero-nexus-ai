@@ -1306,12 +1306,19 @@ def holds(name, content):
             return "neither text nor an archive"
         return 'the skill "%s"' % called if called else "one skill, named by its first heading or by the file"
     files = entries_of(archive)
+    folders = [os.path.dirname(i.filename) for i in files if os.path.basename(i.filename).lower() == "skill.md"]
+
+    def inside(path, folder):
+        return not folder or path.startswith(folder + "/")
+
     found = []
     for info in files:
         if os.path.basename(info.filename).lower() != "skill.md":
             continue
         folder = os.path.dirname(info.filename)
-        beside = sum(1 for other in files if other is not info and (not folder or other.filename.startswith(folder + "/")))
+        # As the app reads it: a file of a skill folder further down belongs to that skill.
+        beside = sum(1 for other in files if other is not info and inside(other.filename, folder)
+                     and not any(deeper != folder and inside(deeper, folder) and inside(other.filename, deeper) for deeper in folders))
         called = ""
         if info.file_size <= 1024 * 1024 and not info.flag_bits & 0x1:
             try:

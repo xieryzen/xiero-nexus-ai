@@ -5,6 +5,23 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+Changes to the host scripts since 1.7.0. They are not part of a release
+bundle: the Deploy workflow runs the ones of the branch it is started on.
+
+### Added
+
+- `workforce.py --skill-url <address>`: a skill file at an https address is
+  fetched and uploaded as the Skills page does; the address of a file's
+  page at MediaFire is followed to the file. `workforce.sh` also takes the
+  address sealed for the node (`--skill-url-sealed`). A dry run fetches the
+  file and says what it holds.
+- An archive that holds packed skills (`.skill` or `.zip` files inside a
+  `.zip`) is opened one level deep by `--upload-skill` and `--skill-url`,
+  and each of them is uploaded. The app does not open an archive inside an
+  archive: on the Skills page such a file is still refused.
+
 ## [1.7.0] - 2026-11-16
 
 Skills, and owners. A skill is a way of working, written down once and read
