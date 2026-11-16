@@ -1753,8 +1753,16 @@ def try_project(state, definition, spec, manager, keep, every_agent):
                 row("FAILED", "the tasks were not summed up: %s did not answer. %s" % (manager["label"], short(summary, 400)))
             else:
                 row("ok", 'the project ended as "%s"; summed up by %s, beginning: %s' % (ended, manager["label"], short(summary, 200)))
-            verdict = [line for line in (now.get("reviewNotes") or "").splitlines() if "VERDICT" in line.upper()]
+            notes = now.get("reviewNotes") or ""
+            verdict = [line for line in notes.splitlines() if "VERDICT" in line.upper()]
             row("Review", verdict[-1].strip() if verdict else "there was none: no model of the reviewer answered")
+            if verdict and "PASS" not in verdict[-1].upper():
+                # Why: a reviewer that fails a project says what it missed, and
+                # that is worth more than the word. Nothing is failed for it:
+                # the tasks of this check are small on purpose.
+                reasons = " ".join(line.strip() for line in notes.splitlines() if line.strip() and "VERDICT" not in line.upper())
+                if reasons:
+                    more("the reviewer said: %s" % short(reasons, 1400), indent=15)
         else:
             failed += 1
             row("FAILED", 'the project ended as "%s"%s' % (ended, ": " + short(now["error"], 600) if now.get("error") else ""))
