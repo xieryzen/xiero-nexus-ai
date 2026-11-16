@@ -303,7 +303,14 @@ server.
   which, and why. Models whose last test had failed before the upgrade are
   left out from the first moment, and asked again in that first round.
 - `MODEL_HEALTH_INTERVAL_MINUTES` in `.env` sets how often (`0` = never).
-- Going back to 1.7 needs nothing: 1.7 does not read the new column.
+- **Every account that is not an owner gets a limit of 10,000,000 tokens**,
+  and starts at 0 used: what it used before the upgrade is not counted. From
+  then on its work is counted, and refused when nothing is left, until an
+  owner raises its limit under **Users & Roles**. Look at that page after the
+  upgrade, and give the accounts that run much (a team's shared account, the
+  account the host scripts sign in with) the limit they need. An owner is
+  not limited. `DEFAULT_TOKEN_LIMIT` in `.env` sets what a new account gets.
+- Going back to 1.7 needs nothing: 1.7 does not read the new columns.
 
 ### Roll back
 

@@ -5,15 +5,66 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.8.0-rc.2] - 2026-11-16
 
-Changes to the host scripts since 1.8.0-rc.1. They are not part of a release
-bundle: the Deploy workflow runs the ones of the branch it is started on.
+The second candidate for 1.8: every account has a number of tokens it may
+use, and an owner sets it.
 
 ### Added
 
+- **A token limit for every account.** A new account may use 10,000,000
+  tokens in all (`DEFAULT_TOKEN_LIMIT`), whether it registers or an owner
+  makes it. What its work uses is counted against that: chat, the runs of its
+  projects with every task in them, images, videos, voice-overs, the
+  knowledge base, and the public API with its keys. Nothing is given back by
+  the calendar: there is more when an owner raises the limit.
+- **An owner sets the limit** of each account under **Users & Roles**, which
+  shows every account with what it used and may use, and when making an
+  account. An administrator sees the numbers and changes none. An owner is
+  not held to a limit; what an owner uses is counted all the same.
+- **With no tokens left, new work is refused** with 402 `token_limit_reached`
+  and a sentence that says how much was used, of how much, and who can change
+  that. Nothing is asked of a provider. **A run in progress stops:** the
+  tasks that have not started are not started and say why, nothing more is
+  asked of a model, and the run ends "for a look" with what its finished
+  tasks made. A run of a project spends the tokens of the account the project
+  belongs to, whoever starts it.
+- The account is told in its notifications the moment its last tokens go.
+  Everyone sees their own tokens under **Settings** and, in short, next to
+  their name on every page; an account with none left is told on every page.
+- `tokenLimit`, `tokensUsed` and `tokensLeft` in the answers about accounts
+  (`GET /api/account/me`, `GET /api/admin/users`); `tokenLimit` in
+  `POST /api/admin/users` and `PATCH /api/admin/users/{id}` (owners). The
+  audit log has every change of a limit, from what to what, and each time an
+  account used its last tokens (`account.tokens.used_up`).
 - The inventory of `workforce.py` says how the app checks its models, what
   its last round found, and how many models it leaves out of its lists now.
+  (The host scripts are not part of a release bundle: the Deploy workflow
+  runs the ones of the branch it is started on.)
+
+### Changed
+
+- An image, a video and a voice-over are recorded with the tokens of their
+  prompt where the provider counts none for them, as a chat already was.
+  Usage shows those tokens.
+
+### Not counted, and not exact
+
+- A check of a model, by the worker or by an administrator, is counted for
+  nobody. A request that the provider failed is not counted.
+- The request in progress when the last tokens go is finished and counted in
+  full, so an account can end somewhat above its limit; tasks of a run that
+  work side by side can each use what was left.
+- An image or a video costs its prompt in tokens, which is little: a limit in
+  tokens does not hold media back the way it holds chat and runs back.
+
+### Upgrade notes
+
+- At its first start this version adds two columns to the database. Every
+  account that is there gets a limit of 10,000,000 tokens and starts at 0
+  used: what it used before the upgrade is not counted against it.
+- The account the host scripts sign in with spends its own tokens on
+  `--test` and `--try-run`, unless it is an owner.
 
 ## [1.8.0-rc.1] - 2026-11-16
 
