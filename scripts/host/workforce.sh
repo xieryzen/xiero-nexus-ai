@@ -29,7 +29,19 @@
 #   --dry-run            Say what would be done, and do nothing.
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but differs.
-#   --only <parts>       providers, models, skills, agents, teams, workflows (separated by commas).
+#   --only <parts>       accounts, providers, models, skills, agents, teams,
+#                        workflows (separated by commas).
+#   --account <name>     An account the app is to have, with --account-email
+#                        <address> and --account-role owner|admin|user. Its
+#                        password comes in NEXUS_ACCOUNT_PASSWORD, or sealed:
+#   --account-password-sealed <text>
+#                        The password of that account, sealed for this node
+#                        (see below), so that it can be given where others
+#                        can read.
+#   --upload-skill <f>   A skill of your own, uploaded as on the Skills page: a
+#                        SKILL.md, or a .skill or .zip. May be given again.
+#   --skill-sealed <text>
+#                        The same, with the file itself sealed for this node.
 #   --test               Afterwards, ask each chat model of the file for one word.
 #   --test-all           The same, for every chat model that is in the app.
 #   --only-usable        Afterwards, switch off the models that cannot be used:
@@ -45,6 +57,13 @@
 # The password is read from the app's .env by workforce.py, or taken from
 # NEXUS_PASSWORD when that is set; it is not printed and is on no command
 # line. Needs python3 (3.8 or newer) on the node.
+#
+# Sealed for this node: a password or a skill that has to pass through a place
+# others can read (the inputs of a workflow in a public repository) is sealed
+# with the node's public key, and only this node opens it. The key is made by
+# the action "input-key" of over-ssh.sh, which prints its public half; seal
+# with `sealed-output.sh seal-line <that line> < file`. This script opens it
+# with the private half, named by XIERO_INPUT_KEY.
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -54,6 +73,8 @@ ENV_FILE=""
 VOLUMES=""
 WINGS_CONFIG="/etc/pterodactyl/config.yml"
 PASS_ON=()
+SEALED_PASSWORD=""
+SEALED_SKILLS=()
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -68,10 +89,12 @@ while [ "$#" -gt 0 ]; do
     --env-file) need_value "$@"; ENV_FILE="$2"; shift 2 ;;
     --volumes) need_value "$@"; VOLUMES="$2"; shift 2 ;;
     --wings-config) need_value "$@"; WINGS_CONFIG="$2"; shift 2 ;;
-    --file | --user | --only) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
+    --file | --user | --only | --account | --account-email | --account-role | --upload-skill) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
+    --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
+    --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
     --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
     -h | --help)
-      sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;
@@ -185,4 +208,36 @@ fi
 
 ARGS=(--url "${URL}")
 [ ! -f "${ENV_FILE}" ] || ARGS+=(--env-file "${ENV_FILE}")
-exec "${PYTHON}" "${here}/workforce.py" "${ARGS[@]}" ${PASS_ON[@]+"${PASS_ON[@]}"}
+
+# ── What was sealed for this node ────────────────────────────────────────────
+
+OPENED=""
+tidy() { [ -z "${OPENED}" ] || rm -rf "${OPENED}"; }
+trap tidy EXIT
+if [ -n "${SEALED_PASSWORD}" ] || [ "${#SEALED_SKILLS[@]}" -gt 0 ]; then
+  key="${XIERO_INPUT_KEY:-}"
+  [ -n "${key}" ] && [ -f "${key}" ] || die "something was sealed for this node, and the node has no key to open it with yet (XIERO_INPUT_KEY). Make one with the action \"input-key\", and seal for the key it prints."
+  [ -f "${here}/sealed-output.sh" ] || die "sealed-output.sh is not next to this script."
+  umask 077
+  OPENED="$(mktemp -d)"
+  if [ -n "${SEALED_PASSWORD}" ]; then
+    NEXUS_ACCOUNT_PASSWORD="$(bash "${here}/sealed-output.sh" open-line "${key}" "${SEALED_PASSWORD}")" \
+      || die "the sealed password does not open with the key of this node: it was sealed for another key, or it is damaged."
+    [ -n "${NEXUS_ACCOUNT_PASSWORD}" ] || die "the sealed password is empty."
+    export NEXUS_ACCOUNT_PASSWORD
+  fi
+  number=0
+  for sealed in ${SEALED_SKILLS[@]+"${SEALED_SKILLS[@]}"}; do
+    number=$((number + 1))
+    mkdir "${OPENED}/${number}"
+    # Markdown or an archive: the app tells them apart by what is in the file.
+    bash "${here}/sealed-output.sh" open-line "${key}" "${sealed}" > "${OPENED}/${number}/SKILL.md" \
+      || die "sealed skill ${number} does not open with the key of this node: it was sealed for another key, or it is damaged."
+    PASS_ON+=(--upload-skill "${OPENED}/${number}/SKILL.md")
+  done
+fi
+
+"${PYTHON}" "${here}/workforce.py" "${ARGS[@]}" ${PASS_ON[@]+"${PASS_ON[@]}"}
+code=$?
+tidy
+exit "${code}"

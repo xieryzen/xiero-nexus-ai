@@ -13,6 +13,11 @@
 #       Fetches what that run of the Deploy workflow sealed, and opens it.
 #       Needs gh, signed in; the repository is GITHUB_REPOSITORY or the one of
 #       the current folder.
+#   bash scripts/host/sealed-output.sh seal-line <public key line> < secret
+#   bash scripts/host/sealed-output.sh open-line <folder>/key.pem <sealed line>
+#       The same in one line without spaces, for what goes the other way: a
+#       password or a file sealed for a node (its key: the action "input-key"
+#       of over-ssh.sh), given as an option where others can read.
 #
 # Sealed text is three lines: the name of the format, the key of that one
 # time (256 random bits, encrypted for the public key with RSA-OAEP), and the
@@ -81,6 +86,16 @@ case "${1:-}" in
     ;;
   seal) seal "${2:-}" ;;
   open) open "${2:-}" ;;
+  seal-line)
+    seal "${2:-}" > "${TMP}/lines.txt"
+    paste -s -d . "${TMP}/lines.txt"
+    ;;
+  open-line)
+    line="${3:-}"
+    [ -n "${line}" ] || line="$(cat)"
+    [[ "${line}" =~ ^${FORMAT}\.[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$ ]] || die "that is not a sealed line (${FORMAT}.<key>.<text>)."
+    printf '%s\n' "${line}" | tr '.' '\n' | open "${2:-}"
+    ;;
   read)
     key="${2:-}"
     run="${3:-}"
@@ -96,6 +111,6 @@ case "${1:-}" in
     [[ "${blob}" =~ ^[0-9a-f]{40,64}$ ]] || die "run ${run} sealed no output. It does so when it is started with an output_key."
     gh api "repos/${repo}/git/blobs/${blob}" --jq '.content | gsub("\n"; "") | @base64d' | open "${key}"
     ;;
-  "" | -h | --help | help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//' ;;
-  *) die "\"$1\" is not something this does. There are: keygen, seal, open, read." ;;
+  "" | -h | --help | help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "\"$1\" is not something this does. There are: keygen, seal, open, read, seal-line, open-line." ;;
 esac

@@ -40,9 +40,9 @@ summary() { if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$*" >> "${
 
 ACTION="$(input action)"
 case "${ACTION}" in
-  check | plan | upgrade | install-plan | install | disk-report | site-plan | site | workforce-plan | workforce | last-log) ;;
+  check | plan | upgrade | install-plan | install | disk-report | site-plan | site | workforce-plan | workforce | last-log | input-key) ;;
   *)
-    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log."
+    problem "Deploy" "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log, input-key."
     exit 1
     ;;
 esac
