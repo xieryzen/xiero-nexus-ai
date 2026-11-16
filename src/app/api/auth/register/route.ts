@@ -35,9 +35,9 @@ export const POST = handle(async (req) => {
     );
   }
 
-  // The very first account becomes admin so the instance is manageable.
+  // The very first account is the owner, so that the instance is manageable.
   const userCount = db.select({ id: users.id }).from(users).all().length;
-  const role = userCount === 0 ? "admin" : "user";
+  const role = userCount === 0 ? "owner" : "user";
 
   const inserted = db
     .insert(users)

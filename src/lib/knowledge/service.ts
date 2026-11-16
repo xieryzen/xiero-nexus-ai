@@ -23,6 +23,7 @@ import {
   fuseRankings,
   vectorToBytes,
 } from "./chunk";
+import { isAdminRole } from "@/lib/roles";
 
 /**
  * The knowledge base: collections of documents that agents and the chat can
@@ -47,7 +48,7 @@ const VECTOR_PAGE = 2000;
 // ─── Access ──────────────────────────────────────────────────────────────────
 
 export function canManageCollection(collection: KnowledgeCollection, user: User): boolean {
-  return user.role === "admin" || collection.createdBy === user.id;
+  return isAdminRole(user.role) || collection.createdBy === user.id;
 }
 
 export function canReadCollection(collection: KnowledgeCollection, user: User): boolean {
@@ -141,7 +142,7 @@ export function listCollections(user: User): CollectionDTO[] {
     .select()
     .from(knowledgeCollections)
     .where(
-      user.role === "admin"
+      isAdminRole(user.role)
         ? undefined
         : or(eq(knowledgeCollections.createdBy, user.id), eq(knowledgeCollections.visibility, "shared")),
     )

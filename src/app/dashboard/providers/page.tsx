@@ -4,6 +4,7 @@ import { models, providers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { serializeProvider } from "@/lib/providers";
 import { ProvidersManager } from "@/components/providers/providers-manager";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Providers" };
@@ -28,7 +29,7 @@ export default function ProvidersPage() {
     <ProvidersManager
       initialProviders={rows.map(serializeProvider)}
       modelCounts={modelCounts}
-      isAdmin={user?.role === "admin"}
+      isAdmin={isAdminRole(user?.role)}
     />
   );
 }

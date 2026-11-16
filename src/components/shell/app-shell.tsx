@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/client";
 import { APP_VERSION, BUILD_SHA, releaseChannel } from "@/lib/version";
 import { cn } from "@/components/ui";
 import { NotificationBell } from "./notification-bell";
+import { isAdminRole, roleLabel, type Role } from "@/lib/roles";
 
 interface NavItem {
   href: string;
@@ -56,7 +57,7 @@ const groups: { heading: string; items: NavItem[] }[] = [
 export interface ShellUser {
   username: string;
   email: string;
-  role: "admin" | "user";
+  role: Role;
 }
 
 export function AppShell({
@@ -88,7 +89,7 @@ export function AppShell({
   const nav = (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-5">
       {groups.map((group) => {
-        const items = group.items.filter((i) => !i.adminOnly || user.role === "admin");
+        const items = group.items.filter((i) => !i.adminOnly || isAdminRole(user.role));
         if (items.length === 0) return null;
         return (
           <div key={group.heading}>
@@ -175,7 +176,7 @@ export function AppShell({
           <NotificationBell />
           <div className="text-right leading-tight">
             <p className="text-sm font-medium text-ink">{user.username}</p>
-            <p className="text-xs capitalize text-ink-3">{user.role}</p>
+            <p className="text-xs text-ink-3">{roleLabel(user.role)}</p>
           </div>
           <div
             className="grid h-9 w-9 place-items-center rounded-full border border-line bg-surface-2 text-sm font-semibold text-signal"

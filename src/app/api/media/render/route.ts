@@ -7,6 +7,7 @@ import { checkRenderInput, createRenderAsset, queueRender } from "@/lib/media/re
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
 import { renderCreateSchema } from "@/lib/validation";
 import { kickWorker } from "@/lib/worker";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export const POST = handle(async (req) => {
     );
   }
   // Only what the user may see can go into their video.
-  checkRenderInput(body, (asset) => asset.userId === user.id || user.role === "admin");
+  checkRenderInput(body, (asset) => asset.userId === user.id || isAdminRole(user.role));
 
   const asset = createRenderAsset({ ...body, userId: user.id });
   queueRender(asset);

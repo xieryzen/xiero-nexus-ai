@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { env } from "@/lib/env";
 import { hashPassword } from "@/lib/crypto";
 import * as schema from "./schema";
@@ -45,6 +45,7 @@ function create(): DB {
   }
 
   ensureBootstrapAdmin(db);
+  ensureOwner(db);
   return db;
 }
 
@@ -58,7 +59,7 @@ function ensureBootstrapAdmin(db: DB) {
       username: admin.username,
       email: admin.email,
       passwordHash: hashPassword(admin.password),
-      role: "admin",
+      role: "owner",
       status: "active",
     })
     .run();
@@ -66,6 +67,36 @@ function ensureBootstrapAdmin(db: DB) {
   console.log(
     `[xiero-nexus] bootstrap admin created: ${admin.username} <${admin.email}>`,
   );
+}
+
+/**
+ * An installation has an owner: the one who manages its accounts. One from
+ * before there were owners has none, and then its first administrator is the
+ * owner: the account that set it up. Done when the database is opened, so an
+ * upgrade needs no step by hand.
+ */
+function ensureOwner(db: DB) {
+  const owner = db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.role, "owner")).get();
+  if (owner) return;
+  const first = db
+    .select({ id: schema.users.id, username: schema.users.username })
+    .from(schema.users)
+    .where(and(eq(schema.users.role, "admin"), eq(schema.users.status, "active")))
+    .orderBy(asc(schema.users.createdAt), asc(schema.users.id))
+    .get();
+  if (!first) return;
+  db.update(schema.users).set({ role: "owner", updatedAt: new Date() }).where(eq(schema.users.id, first.id)).run();
+  db.insert(schema.auditLogs)
+    .values({
+      actorUserId: null,
+      action: "system.owner.assigned",
+      targetType: "user",
+      targetId: first.id,
+      metadata: JSON.stringify({ username: first.username, reason: "there was no owner; the first administrator is the owner" }),
+    })
+    .run();
+  // eslint-disable-next-line no-console
+  console.log(`[xiero-nexus] there was no owner: ${first.username}, the first administrator, is the owner now`);
 }
 
 function getDb(): DB {

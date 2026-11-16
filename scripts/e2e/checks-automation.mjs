@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1411,7 +1411,152 @@ export async function automation(ctx) {
     check("adding, replacing, changing and deleting skills is in the audit log", ["skill.create", "skill.replace", "skill.update", "skill.delete"].every((a) => actions.has(a)), [...actions].filter((a) => a.startsWith("skill")));
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel };
+  // ─── Accounts: the owner, and what an owner does with the others ───────────
+
+  async function accounts() {
+    begin("Accounts: roles");
+    const me = (await admin.get("/api/account/me")).data?.user;
+    eq("the first account is the owner", me?.role, "owner");
+    const listed = await admin.get("/api/admin/users");
+    const roleOf = (list, name) => (list ?? []).find((u) => u.username === name)?.role;
+    eq("an owner sees every account, with its role", [listed.status, roleOf(listed.data?.users, "admin"), roleOf(listed.data?.users, "bob")], [200, "owner", "user"]);
+    eq("an ordinary user does not see the accounts", (await bob.get("/api/admin/users")).status, 403);
+    eq("  nor makes one", (await bob.post("/api/admin/users", { username: "mallory", email: "mallory@example.com", password: "a-long-password-0" })).status, 403);
+
+    begin("Accounts: an owner makes one");
+    const PASS = { dina: "dina-first-password-1", eko: "eko-first-password-1", ekoSet: "eko-password-set-by-owner", ekoOwn: "eko-password-of-his-own" };
+    const made = await admin.post("/api/admin/users", { username: "dina", email: "Dina@Example.com", password: PASS.dina, role: "admin" });
+    const dinaId = made.data?.user?.id;
+    eq("the account is made with the role it was given, its email in small letters", [made.status, made.data?.user?.username, made.data?.user?.email, made.data?.user?.role, made.data?.user?.status], [201, "dina", "dina@example.com", "admin", "active"]);
+    check("  the answer holds no password", !JSON.stringify(made.data).includes(PASS.dina) && !/password/i.test(JSON.stringify(made.data)), made.data);
+    const dina = client();
+    eq("it signs in with the password the owner gave it", (await dina.post("/api/auth/login", { identifier: "dina", password: PASS.dina })).status, 200);
+    eq("  and by its email as well", (await client().post("/api/auth/login", { identifier: "DINA@example.com", password: PASS.dina })).status, 200);
+    const madeUser = await admin.post("/api/admin/users", { username: "eko", email: "eko@example.com", password: PASS.eko });
+    const ekoId = madeUser.data?.user?.id;
+    eq("without a role, the account is an ordinary user", [madeUser.status, madeUser.data?.user?.role], [201, "user"]);
+    const taken = await admin.post("/api/admin/users", { username: "dina", email: "other@example.com", password: PASS.dina });
+    eq("a username that is taken is refused", [taken.status, taken.error], [409, "That username is taken"]);
+    const takenEmail = await admin.post("/api/admin/users", { username: "dina2", email: "dina@example.com", password: PASS.dina });
+    eq("  and so is an email", [takenEmail.status, takenEmail.error], [409, "An account with that email already exists"]);
+    eq("a password that is too short is refused", (await admin.post("/api/admin/users", { username: "short", email: "short@example.com", password: "short" })).status, 400);
+    eq("  and a role there is not", (await admin.post("/api/admin/users", { username: "root", email: "root@example.com", password: PASS.dina, role: "root" })).status, 400);
+
+    begin("Accounts: an administrator sees them, and changes none");
+    eq("an administrator sees the accounts", (await dina.get("/api/admin/users")).status, 200);
+    const denied = await dina.patch(`/api/admin/users/${ekoId}`, { role: "admin" });
+    eq("  changes no role", [denied.status, denied.error], [403, "Only an owner manages accounts"]);
+    eq("  sets no password", (await dina.patch(`/api/admin/users/${ekoId}`, { password: "taken-over-by-dina-1" })).status, 403);
+    eq("  makes no account", (await dina.post("/api/admin/users", { username: "frank", email: "frank@example.com", password: PASS.dina })).status, 403);
+    eq("  deletes none", (await dina.del(`/api/admin/users/${ekoId}`)).status, 403);
+    const dinaFlow = await dina.post("/api/workflows", { name: "Dina's flow", steps: [{ title: "One", objective: "One.", role: "Engineer" }] });
+    eq("  and is an administrator of everything else: it makes a workflow, which an ordinary user does not", [dinaFlow.status, (await bob.post("/api/workflows", { name: "Bob's flow", steps: [{ title: "One", objective: "One.", role: "Engineer" }] })).status], [201, 403]);
+
+    begin("Accounts: an owner changes one");
+    const eko = client();
+    await eko.post("/api/auth/login", { identifier: "eko", password: PASS.eko });
+    const renamed = await admin.patch(`/api/admin/users/${ekoId}`, { username: "eko.w", email: "Eko.W@Example.com" });
+    eq("its username and its email", [renamed.status, renamed.data?.user?.username, renamed.data?.user?.email], [200, "eko.w", "eko.w@example.com"]);
+    eq("  it stays signed in, under its new name", (await eko.get("/api/account/me")).data?.user?.username, "eko.w");
+    eq("  the old name signs in no more", (await client().post("/api/auth/login", { identifier: "eko", password: PASS.eko })).status, 401);
+    const clash = await admin.patch(`/api/admin/users/${ekoId}`, { username: "bob" });
+    eq("a name another account has is refused", [clash.status, clash.error], [409, "That username is taken"]);
+    eq("  and so is an email", (await admin.patch(`/api/admin/users/${ekoId}`, { email: "bob@example.com" })).status, 409);
+    eq("an unknown account is not found", (await admin.patch("/api/admin/users/no-such-account", { role: "admin" })).status, 404);
+    eq("nothing to change is refused", (await admin.patch(`/api/admin/users/${ekoId}`, {})).status, 400);
+
+    const newPass = await admin.patch(`/api/admin/users/${ekoId}`, { password: PASS.ekoSet });
+    check("its password: the answer does not hold it", newPass.status === 200 && !JSON.stringify(newPass.data).includes(PASS.ekoSet), newPass.data);
+    eq("  the account is signed out everywhere", (await eko.get("/api/account/me")).status, 401);
+    eq("  the old password signs in no more", (await client().post("/api/auth/login", { identifier: "eko.w", password: PASS.eko })).status, 401);
+    eq("  the new one does", (await eko.post("/api/auth/login", { identifier: "eko.w", password: PASS.ekoSet })).status, 200);
+
+    const promoted = await admin.patch(`/api/admin/users/${ekoId}`, { role: "owner" });
+    eq("its role: a second owner", [promoted.status, promoted.data?.user?.role], [200, "owner"]);
+    eq("  who manages accounts at once, without signing in again", (await eko.patch(`/api/admin/users/${dinaId}`, { role: "user" })).data?.user?.role, "user");
+    eq("  (and gives the role back)", (await eko.patch(`/api/admin/users/${dinaId}`, { role: "admin" })).data?.user?.role, "admin");
+    eq("  back to an ordinary user", (await admin.patch(`/api/admin/users/${ekoId}`, { role: "user" })).data?.user?.role, "user");
+    eq("  who manages none any more", (await eko.patch(`/api/admin/users/${dinaId}`, { role: "user" })).status, 403);
+
+    const off = await admin.patch(`/api/admin/users/${ekoId}`, { status: "disabled" });
+    eq("its status: switched off", [off.status, off.data?.user?.status], [200, "disabled"]);
+    eq("  it is signed out", (await eko.get("/api/account/me")).status, 401);
+    eq("  and cannot sign in", (await client().post("/api/auth/login", { identifier: "eko.w", password: PASS.ekoSet })).status, 401);
+    eq("  switched on again, it can", [(await admin.patch(`/api/admin/users/${ekoId}`, { status: "active" })).data?.user?.status, (await eko.post("/api/auth/login", { identifier: "eko.w", password: PASS.ekoSet })).status], ["active", 200]);
+    eq("signed out everywhere by the owner", [(await admin.patch(`/api/admin/users/${ekoId}`, { signOut: true })).status, (await eko.get("/api/account/me")).status], [200, 401]);
+
+    // A second factor that was lost: set as the app would have it, then taken off by the owner.
+    const tfa = database();
+    tfa.prepare("UPDATE users SET two_factor_enabled = 1, two_factor_secret = 'not-a-real-secret', two_factor_confirmed_at = ? WHERE id = ?").run(Date.now(), ekoId);
+    tfa.prepare("INSERT INTO recovery_codes (id, user_id, code_hash, created_at) VALUES ('rc-eko-1', ?, 'hash', ?)").run(ekoId, Date.now());
+    tfa.close();
+    const asked = await client().post("/api/auth/login", { identifier: "eko.w", password: PASS.ekoSet });
+    eq("an account with two-factor sign-in is asked for its code", asked.data?.twoFactorRequired, true);
+    const reset = await admin.patch(`/api/admin/users/${ekoId}`, { resetTwoFactor: true });
+    eq("  the owner switches a lost second factor off", [reset.status, reset.data?.user?.twoFactorEnabled], [200, false]);
+    const tfaAfter = database();
+    const leftOver = tfaAfter.prepare("SELECT two_factor_secret AS secret, (SELECT count(*) FROM recovery_codes WHERE user_id = users.id) AS codes FROM users WHERE id = ?").get(ekoId);
+    tfaAfter.close();
+    eq("  its secret and its recovery codes are gone", leftOver, { secret: null, codes: 0 });
+    const plain = await eko.post("/api/auth/login", { identifier: "eko.w", password: PASS.ekoSet });
+    eq("  and it signs in with its password alone", [plain.status, plain.data?.twoFactorRequired ?? false], [200, false]);
+
+    begin("Accounts: what an owner cannot do");
+    const own = await admin.patch(`/api/admin/users/${me?.id}`, { role: "user" });
+    eq("change their own role", [own.status, own.error], [400, "You cannot change your own role or status"]);
+    eq("switch themselves off", (await admin.patch(`/api/admin/users/${me?.id}`, { status: "disabled" })).status, 400);
+    const ownName = await admin.patch(`/api/admin/users/${me?.id}`, { username: "boss" });
+    eq("change their own name here: that is done under Settings, with their password", [ownName.status, ownName.error], [400, "Change your own account under Settings"]);
+    eq("delete themselves", [(await admin.del(`/api/admin/users/${me?.id}`)).status, (await admin.get("/api/account/me")).data?.user?.role], [400, "owner"]);
+
+    begin("Accounts: one's own username, email and password");
+    const wrong = await eko.patch("/api/account/me", { currentPassword: "not-the-password", username: "eko" });
+    eq("without the current password nothing changes", [wrong.status, wrong.error, (await eko.get("/api/account/me")).data?.user?.username], [401, "Password is incorrect", "eko.w"]);
+    const mine = await eko.patch("/api/account/me", { currentPassword: PASS.ekoSet, username: "eko", email: "Eko@Example.com" });
+    eq("with it, the username and the email are changed", [mine.status, mine.data?.user?.username, mine.data?.user?.email, mine.data?.passwordChanged], [200, "eko", "eko@example.com", false]);
+    eq("a name that is taken is refused", (await eko.patch("/api/account/me", { currentPassword: PASS.ekoSet, username: "bob" })).status, 409);
+    eq("nothing to change is refused", (await eko.patch("/api/account/me", { currentPassword: PASS.ekoSet })).status, 400);
+    eq("a role cannot be given to oneself this way", [(await eko.patch("/api/account/me", { currentPassword: PASS.ekoSet, username: "eko", role: "owner" })).status, (await eko.get("/api/account/me")).data?.user?.role], [200, "user"]);
+    const elsewhere = client();
+    await elsewhere.post("/api/auth/login", { identifier: "eko", password: PASS.ekoSet });
+    const changed = await eko.patch("/api/account/me", { currentPassword: PASS.ekoSet, newPassword: PASS.ekoOwn });
+    eq("a new password of one's own", [changed.status, changed.data?.passwordChanged], [200, true]);
+    eq("  this session goes on", (await eko.get("/api/account/me")).status, 200);
+    eq("  the others are signed out", (await elsewhere.get("/api/account/me")).status, 401);
+    eq("  the old password signs in no more, the new one does", [(await client().post("/api/auth/login", { identifier: "eko", password: PASS.ekoSet })).status, (await client().post("/api/auth/login", { identifier: "eko", password: PASS.ekoOwn })).status], [401, 200]);
+    eq("signed out, nobody changes an account", (await client().patch("/api/account/me", { currentPassword: PASS.ekoOwn, username: "ghost" })).status, 401);
+
+    begin("Accounts: an owner deletes one");
+    const gone = await admin.del(`/api/admin/users/${dinaId}`);
+    eq("the account is deleted", [gone.status, ((await admin.get("/api/admin/users")).data?.users ?? []).some((u) => u.username === "dina")], [200, false]);
+    eq("  it is signed out, and signs in no more", [(await dina.get("/api/account/me")).status, (await client().post("/api/auth/login", { identifier: "dina", password: PASS.dina })).status], [401, 401]);
+    check("  what it made is still there", ((await admin.get("/api/workflows")).data?.workflows ?? []).some((w) => w.name === "Dina's flow"), null);
+    eq("  its name is free again", (await admin.post("/api/admin/users", { username: "dina", email: "dina@example.com", password: PASS.dina })).status, 201);
+    const again = ((await admin.get("/api/admin/users")).data?.users ?? []).find((u) => u.username === "dina");
+    eq("  (and that account is deleted too)", (await admin.del(`/api/admin/users/${again?.id}`)).status, 200);
+    eq("the account of the earlier checks is deleted as well", (await admin.del(`/api/admin/users/${ekoId}`)).status, 200);
+
+    begin("Accounts: the pages, and the audit log");
+    const pageOf = async (who, path) => {
+      const res = await who.raw(path);
+      return { status: res.status, html: res.status === 200 ? await res.text() : "", location: res.headers.get("location") };
+    };
+    const usersPage = await pageOf(admin, "/dashboard/users");
+    check("Users & Roles, for an owner: the accounts, and a way to make one", usersPage.status === 200 && usersPage.html.includes("New account") && usersPage.html.includes("bob@example.com"), usersPage.status);
+    const forUser = await pageOf(bob, "/dashboard/users");
+    check("  an ordinary user is sent away from it", forUser.status === 307 && /\/dashboard$/.test(forUser.location ?? ""), [forUser.status, forUser.location]);
+    const settings = await pageOf(bob, "/dashboard/settings");
+    check("Settings lets a person change their username, email and password", settings.status === 200 && settings.html.includes("Username and email") && settings.html.includes("Change the password"), settings.status);
+    const auditDb = database();
+    const rows = auditDb.prepare("SELECT action, metadata FROM audit_logs WHERE action LIKE 'admin.user.%' OR action LIKE 'account.%'").all();
+    auditDb.close();
+    const actions = new Set(rows.map((row) => row.action));
+    check("making, changing and deleting accounts is in the audit log", ["admin.user.create", "admin.user.update", "admin.user.delete", "account.updated", "account.password.changed", "account.update.denied"].every((a) => actions.has(a)), [...actions]);
+    check("  no password is", !rows.some((row) => Object.values(PASS).some((p) => String(row.metadata ?? "").includes(p))), null);
+    check("  what changed is, by name", rows.some((row) => row.action === "admin.user.update" && /"changed":\["username","email"\]/.test(row.metadata ?? "")) && rows.some((row) => row.action === "admin.user.update" && /"changed":\["password"\]/.test(row.metadata ?? "") && /"signedOut":true/.test(row.metadata ?? "")), rows.filter((row) => row.action === "admin.user.update").map((row) => row.metadata).slice(0, 4));
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

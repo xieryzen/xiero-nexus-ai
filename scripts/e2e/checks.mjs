@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,runs,notifications,api,adapters,reel
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
@@ -154,7 +154,7 @@ async function setup() {
   begin("Setup: accounts, providers, models");
   const a = await admin.post("/api/auth/register", { username: "admin", email: "admin@example.com", password: "correct-horse-battery" });
   eq("first account registers", a.status, 201);
-  eq("first account is the administrator", a.data?.user?.role, "admin");
+  eq("first account is the owner", a.data?.user?.role, "owner");
   const b = await bob.post("/api/auth/register", { username: "bob", email: "bob@example.com", password: "correct-horse-battery" });
   eq("second account is an ordinary user", b.data?.user?.role, "user");
   const c = await carol.post("/api/auth/register", { username: "carol", email: "carol@example.com", password: "correct-horse-battery" });

@@ -3,6 +3,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@/db/schema";
 import { Errors } from "./errors";
+import { isAdminRole, isOwnerRole } from "./roles";
 import { readSession } from "./session";
 
 export type SessionState =
@@ -43,10 +44,17 @@ export function requireUser(): User {
   return user;
 }
 
-/** Require an admin user. Throws AppError. */
+/** Require an administrator: an admin or an owner. Throws AppError. */
 export function requireAdmin(): User {
   const user = requireUser();
-  if (user.role !== "admin") throw Errors.forbidden();
+  if (!isAdminRole(user.role)) throw Errors.forbidden();
+  return user;
+}
+
+/** Require an owner: the one who manages the accounts. Throws AppError. */
+export function requireOwner(): User {
+  const user = requireUser();
+  if (!isOwnerRole(user.role)) throw Errors.forbidden("Only an owner manages accounts");
   return user;
 }
 

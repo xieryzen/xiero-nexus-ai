@@ -3,13 +3,14 @@ import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projects } from "@/db/schema";
 import { unixSeconds, v1 } from "@/lib/public-api/server";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
 /** The user's projects (all projects, for an administrator's key). */
 export const GET = v1("projects", (_req, { caller }) => {
   const rows =
-    caller.user.role === "admin"
+    isAdminRole(caller.user.role)
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).limit(200).all()
       : db
           .select()

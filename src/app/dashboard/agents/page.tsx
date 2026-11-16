@@ -11,13 +11,14 @@ import { serializeAgents, serializeTeam } from "@/lib/workforce";
 import { PageHeader } from "@/components/ui";
 import { AgentsManager, type ModelOption } from "@/components/agents/agents-manager";
 import { TeamsManager } from "@/components/agents/teams-manager";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Agents" };
 
 export default function AgentsPage() {
   const user = getCurrentUser();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
 
   const agentRows = db.select().from(agentsTable).orderBy(asc(agentsTable.name)).all();
   const teamRows = db.select().from(teams).orderBy(asc(teams.name)).all();

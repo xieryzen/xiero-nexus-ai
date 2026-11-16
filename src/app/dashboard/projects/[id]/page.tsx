@@ -10,6 +10,7 @@ import { listRuns, serializeRun } from "@/lib/runs";
 import { listSchedules, serializeSchedule } from "@/lib/schedules";
 import { serializeProject } from "@/lib/workforce";
 import { ProjectRunner } from "@/components/projects/project-runner";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Project" };
@@ -18,7 +19,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
   const user = requirePageUser();
   const project = db.select().from(projects).where(eq(projects.id, params.id)).get();
   if (!project) notFound();
-  if (project.createdBy !== user.id && user.role !== "admin") redirect("/dashboard/projects");
+  if (project.createdBy !== user.id && !isAdminRole(user.role)) redirect("/dashboard/projects");
 
   const agentRows = db.select({ id: agents.id, name: agents.name }).from(agents).all();
   const agentNames: Record<string, string> = {};
@@ -47,7 +48,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       project={serializeProject(project, { withTasks: true })}
       agentNames={agentNames}
       canRun={canRun}
-      canApprove={user.role === "admin"}
+      canApprove={isAdminRole(user.role)}
       initialAssets={assetsForProject(project.id).map((a) => serializeAsset(a))}
       imageModelLabel={modelLabel(project.imageModelRowId)}
       videoModelLabel={modelLabel(project.videoModelRowId)}

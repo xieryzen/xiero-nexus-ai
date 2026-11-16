@@ -5,6 +5,7 @@ import { getAgentStats, getRecentAgentRuns } from "@/lib/stats";
 import { formatNumber } from "@/lib/format";
 import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader, StatusDot } from "@/components/ui";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Observability" };
@@ -34,7 +35,7 @@ function Item({
 
 export default async function ObservabilityPage() {
   const user = getCurrentUser();
-  if (user?.role !== "admin") redirect("/dashboard");
+  if (!isAdminRole(user?.role)) redirect("/dashboard");
 
   const stats = getAgentStats();
   const runs = getRecentAgentRuns(25);

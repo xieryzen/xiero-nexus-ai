@@ -7,6 +7,7 @@ import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { listAssets } from "@/lib/media/service";
 import { mediaModelOptions, usableModels } from "@/lib/model-options";
 import { StudioClient } from "@/components/studio/studio-client";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Creative Studio" };
@@ -26,7 +27,7 @@ export default async function StudioPage({
     ? db.select().from(projects).where(eq(projects.id, projectId)).get()
     : undefined;
   const project =
-    projectRow && (projectRow.createdBy === user.id || user.role === "admin")
+    projectRow && (projectRow.createdBy === user.id || isAdminRole(user.role))
       ? { id: projectRow.id, title: projectRow.title }
       : null;
 
@@ -46,7 +47,7 @@ export default async function StudioPage({
       render={{ available: ffmpeg.available && ffmpeg.h264, subtitles: ffmpeg.available && ffmpeg.subtitles }}
       initialAssets={rows.slice(0, PAGE_SIZE).map((r) => serializeAsset(r.asset))}
       initialNextOffset={rows.length > PAGE_SIZE ? PAGE_SIZE : null}
-      isAdmin={user.role === "admin"}
+      isAdmin={isAdminRole(user.role)}
       project={project}
     />
   );

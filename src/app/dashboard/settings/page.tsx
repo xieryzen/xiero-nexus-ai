@@ -7,7 +7,9 @@ import { usableModels } from "@/lib/model-options";
 import { serializeWebhook, webhookFor } from "@/lib/notifications";
 import { Badge, Card, PageHeader, StatusDot } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { AccountClient } from "@/components/account/account-client";
 import { IntegrationsClient } from "@/components/account/integrations-client";
+import { isAdminRole, isOwnerRole, roleLabel } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
@@ -26,7 +28,7 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between">
               <dt className="text-ink-3">Role</dt>
               <dd>
-                <Badge tone={user.role === "admin" ? "signal" : "neutral"}>{user.role}</Badge>
+                <Badge tone={isOwnerRole(user.role) ? "signal" : isAdminRole(user.role) ? "info" : "neutral"}>{roleLabel(user.role)}</Badge>
               </dd>
             </div>
             <div className="flex items-center justify-between">
@@ -57,6 +59,8 @@ export default function SettingsPage() {
           </Link>
         </Card>
       </div>
+
+      <AccountClient username={user.username} email={user.email} />
 
       <IntegrationsClient
         webhook={serializeWebhook(webhookFor(user.id))}

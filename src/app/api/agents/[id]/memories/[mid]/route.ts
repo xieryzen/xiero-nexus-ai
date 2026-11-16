@@ -2,6 +2,7 @@ import { deleteMemory } from "@/lib/agent/memory";
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,7 @@ export const DELETE = handle(async (_req, { params }) => {
   const user = requireUser();
   const id = Number(params.mid);
   if (!Number.isInteger(id) || id <= 0) throw Errors.notFound("Note not found");
-  const removed = deleteMemory(params.id!, id, user.role === "admin" ? undefined : user.id);
+  const removed = deleteMemory(params.id!, id, isAdminRole(user.role) ? undefined : user.id);
   if (!removed) throw Errors.notFound("Note not found");
   return json({ ok: true });
 });

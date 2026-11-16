@@ -7,6 +7,7 @@ import { chatModels, mediaModelOptions, usableModels } from "@/lib/model-options
 import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { CommandCenter } from "@/components/projects/command-center";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Manager" };
@@ -15,7 +16,7 @@ export default async function ProjectsPage() {
   const user = requirePageUser();
 
   const projectRows =
-    user.role === "admin"
+    isAdminRole(user.role)
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
       : db.select().from(projects).where(eq(projects.createdBy, user.id)).orderBy(desc(projects.updatedAt)).all();
 
