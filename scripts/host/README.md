@@ -345,6 +345,13 @@ The password in `.env` is the one of the first start: once it is changed in
 the app, give the current one as `NEXUS_PASSWORD`. An account with two-step
 sign-in cannot be used.
 
+From version 1.8 an account has a number of tokens it may use. The projects
+`--try-run` runs, and what `--test-media` generates, spend the tokens of the
+account the program signs in as, and the app refuses them (402, "Your token
+balance is used up") when none are left. An owner is not limited; an
+administrator's limit is raised by an owner under **Users & Roles**. The
+one-word checks of `--test` are counted for nobody.
+
 It adds what is missing and leaves the rest:
 
 - A model the file names is taken into the app from the provider's list, with

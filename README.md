@@ -465,8 +465,8 @@ mock. **How well a given model follows a skill was not measured.**
 
 | Role | What it does |
 |---|---|
-| **Owner** | Everything an administrator does, and the accounts. |
-| **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and changes none. |
+| **Owner** | Everything an administrator does, the accounts, and how many tokens each account may use. |
+| **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and their tokens, and changes none. |
 | **User** | Their own projects, chats, media, knowledge and API keys. |
 
 - **The first account is the owner.** An installation from before 1.7 has no
@@ -529,6 +529,49 @@ optional).
 
 Not checked: image, video, speech and embedding models, since a check would
 generate (and bill) one each time. They are offered as before.
+
+## Tokens of an account (v1.8.0)
+
+Every account has a number of tokens it may use, and an owner sets it.
+
+- **A new account may use 10,000,000 tokens** in all, whether it registers
+  or an owner makes it (`DEFAULT_TOKEN_LIMIT` changes that number). Nothing
+  is given back by the calendar: what was used stays counted, and there is
+  more when an owner raises the limit.
+- **Everything the account does is counted:** chat, the runs of its projects
+  with every task in them, images, videos, voice-overs, the knowledge base,
+  and the public API with its keys. A run of a project spends the tokens of
+  the account the project belongs to, whoever starts it.
+- **An owner sets the limit** under **Users & Roles**: the Tokens column
+  shows each account with what it used and may use, and **Change** sets the
+  limit. An administrator sees the numbers and changes none; nobody changes
+  their own. **An owner is not held to a limit**, since the tokens are spent
+  on the keys the owner brought; what an owner uses is counted all the same.
+- **With no tokens left, new work is refused**: 402 `token_limit_reached`
+  (to an API client `insufficient_quota`), with a sentence that says how much
+  was used, of how much, and that an owner can raise the limit. Nothing is
+  asked of a provider. What the account made stays, and can be read.
+- **A run in progress stops.** The tasks that have not started are not
+  started and say why; the result is not put together and not reviewed when
+  that would need tokens; the run ends "for a look" with what its finished
+  tasks made. The account is told in its notifications.
+- **Everyone sees their own tokens** under **Settings**, and in short next
+  to their name on every page.
+
+The limit is not exact to the token. The request in progress when the last
+tokens go is finished and counted in full, and tasks that work side by side
+can each use what was left, so an account can end somewhat above its limit.
+A check of a model is counted for nobody, and neither is a request the
+provider failed. An image or a video is counted with the tokens of its
+prompt, which is little: a limit in tokens holds chat and runs back, and
+media hardly.
+
+Over the API: `tokenLimit`, `tokensUsed` and `tokensLeft` are in
+`GET /api/account/me` and `GET /api/admin/users` (`tokenLimit` and
+`tokensLeft` are `null` for an owner). An owner sets a limit with
+`PATCH /api/admin/users/{id}` and `{"tokenLimit": 25000000}`, and gives a new
+account one with `tokenLimit` in `POST /api/admin/users`. Every change is in
+the audit log, with the limit before and after.
 
 ## Provider adapters
 
@@ -774,7 +817,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
-| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again) | 🚧 release candidate: the first part of 1.8 |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner) | 🚧 release candidate: the first two parts of 1.8 |
 
 ---
 
@@ -839,6 +882,7 @@ account you register through the UI becomes the owner.
 | `NEXUS_WORKER` | no | `0` switches the background worker off, for a second server process on the same database. |
 | `MODEL_HEALTH_INTERVAL_MINUTES` | no | How often the app checks that a chat model still answers, in minutes: default 360, between 5 and 10080; `0` = no automatic check. A model that fails is left out of the model lists until a check passes. |
 | `MODEL_HEALTH_RETRY_SECONDS` | no | Before a model that worked is left out for "too many requests", "busy" or no answer, it is asked once more after this many seconds: default 20, at most 300. |
+| `DEFAULT_TOKEN_LIMIT` | no | How many tokens a new account may use in all: default 10000000. An owner changes the limit of an account under Users & Roles; an owner is not limited. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |

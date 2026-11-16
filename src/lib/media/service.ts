@@ -32,7 +32,8 @@ import { safeFetch } from "../http-client";
 import { notify } from "../notifications";
 import { currentApiKeyId } from "../request-context";
 import { runtime } from "../runtime";
-import { recordUsage } from "../usage";
+import { assertTokensLeft } from "../tokens";
+import { estimateTokens, recordUsage } from "../usage";
 import { computeImageCost, computeSpeechCost, computeVideoCost } from "./cost";
 import { ffmpegStatusNow, probeFile } from "./ffmpeg";
 import { MAX_IMAGE_BYTES, mimeForFileName, pcmToWav, sniffMedia, type MediaKind } from "./files";
@@ -248,6 +249,7 @@ export interface GenerateImagesInput extends MediaRequestBase {
 
 /** Generate images and store them. Resolves to the new assets, all `ready`. */
 export async function generateImages(input: GenerateImagesInput): Promise<MediaAsset[]> {
+  assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "image");
   const adapter = getAdapter(resolved.provider.adapter);
   const wanted = Math.min(Math.max(1, Math.round(input.n ?? 1)), MAX_IMAGES_PER_REQUEST);
@@ -339,7 +341,8 @@ export async function generateImages(input: GenerateImagesInput): Promise<MediaA
       providerId: resolved.provider.id,
       modelRowId: resolved.model.id,
       kind: "image",
-      promptTokens: parsed.inputTokens ?? 0,
+      // A provider that counts no tokens for an image: the prompt is what was sent.
+      promptTokens: parsed.inputTokens ?? estimateTokens(input.prompt),
       completionTokens: parsed.outputTokens ?? 0,
       estimatedCost: cost,
       status: "ok",
@@ -416,6 +419,7 @@ export function pendingVideoCount(userId: string): number {
  * to `ready` or `failed`.
  */
 export async function startVideo(input: StartVideoInput): Promise<MediaAsset> {
+  assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "video");
   const adapter = getAdapter(resolved.provider.adapter);
   const started = Date.now();
@@ -669,6 +673,8 @@ async function refreshNow(asset: MediaAsset): Promise<RefreshResult> {
     modelRowId: asset.modelRowId,
     apiKeyId: asset.apiKeyId,
     kind: "video",
+    // No provider counts tokens for a video: the prompt is what was sent.
+    promptTokens: estimateTokens(asset.prompt),
     estimatedCost: cost,
     status: "ok",
     latencyMs: now.getTime() - asset.createdAt.getTime(),
@@ -920,6 +926,7 @@ export async function generateSpeech(input: GenerateSpeechInput): Promise<MediaA
   if (text.length > MAX_SPEECH_CHARS) {
     throw Errors.badRequest(`One request can speak at most ${MAX_SPEECH_CHARS} characters`);
   }
+  assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "audio");
   const adapter = getAdapter(resolved.provider.adapter);
   const started = Date.now();
@@ -981,6 +988,8 @@ export async function generateSpeech(input: GenerateSpeechInput): Promise<MediaA
       providerId: resolved.provider.id,
       modelRowId: resolved.model.id,
       kind: "speech",
+      // The text that was spoken is what was sent.
+      promptTokens: estimateTokens(text),
       estimatedCost: cost,
       status: "ok",
       latencyMs: Date.now() - started,

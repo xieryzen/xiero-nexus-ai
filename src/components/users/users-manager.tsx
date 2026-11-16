@@ -5,6 +5,7 @@ import { Fragment, useState } from "react";
 import type { PublicUser } from "@/lib/auth";
 import { apiFetch, ApiError } from "@/lib/client";
 import { ROLES, roleLabel, type Role } from "@/lib/roles";
+import { formatTokens, parseTokens } from "@/lib/token-rules";
 import { DateTime } from "@/components/time";
 import { Alert, Badge, Button, Card, Field, Input, Select, StatusDot } from "@/components/ui";
 
@@ -14,6 +15,7 @@ type Patch = {
   password?: string;
   role?: Role;
   status?: "active" | "disabled";
+  tokenLimit?: number;
   resetTwoFactor?: true;
   signOut?: true;
 };
@@ -32,11 +34,14 @@ export function UsersManager({
   initialUsers,
   currentUserId,
   canManage,
+  defaultTokenLimit,
 }: {
   initialUsers: PublicUser[];
   currentUserId: string;
   /** An owner manages the accounts; an administrator sees them. */
   canManage: boolean;
+  /** What a new account may use, unless the owner says otherwise. */
+  defaultTokenLimit: number;
 }) {
   const [users, setUsers] = useState(initialUsers);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -48,11 +53,16 @@ export function UsersManager({
   // The form for a new account.
   const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [fresh, setFresh] = useState({ username: "", email: "", password: "", role: "user" as Role });
+  const emptyAccount = { username: "", email: "", password: "", role: "user" as Role, tokenLimit: formatTokens(defaultTokenLimit) };
+  const [fresh, setFresh] = useState(emptyAccount);
   const [showPassword, setShowPassword] = useState(false);
 
   // What is typed for the account that is open.
   const [draft, setDraft] = useState({ username: "", email: "", password: "" });
+
+  // The account whose token limit is being changed, and what is typed for it.
+  const [limitOf, setLimitOf] = useState<string | null>(null);
+  const [limitDraft, setLimitDraft] = useState("");
 
   const fail = (err: unknown, fallback: string) => {
     setDone(null);
@@ -96,13 +106,20 @@ export function UsersManager({
     setError(null);
     setDone(null);
     try {
+      const tokenLimit = fresh.role === "owner" ? null : parseTokens(fresh.tokenLimit);
       const res = await apiFetch<{ user: PublicUser }>("/api/admin/users", {
         method: "POST",
-        body: JSON.stringify(fresh),
+        body: JSON.stringify({
+          username: fresh.username,
+          email: fresh.email,
+          password: fresh.password,
+          role: fresh.role,
+          ...(tokenLimit !== null ? { tokenLimit } : {}),
+        }),
       });
       setUsers((list) => [res.user, ...list]);
       setDone(`The account "${res.user.username}" was made. Give its owner the password: it is not shown again.`);
-      setFresh({ username: "", email: "", password: "", role: "user" });
+      setFresh(emptyAccount);
       setShowPassword(false);
       setAdding(false);
     } catch (err) {
@@ -200,8 +217,33 @@ export function UsersManager({
                   ))}
                 </Select>
               </Field>
+              <Field
+                label="Token limit"
+                htmlFor="new-token-limit"
+                hint={
+                  fresh.role === "owner"
+                    ? "An owner is not held to a limit."
+                    : parseTokens(fresh.tokenLimit) === null
+                      ? "A whole number of tokens, such as 10,000,000."
+                      : `${formatTokens(parseTokens(fresh.tokenLimit) ?? 0)} tokens in all, for everything the account does. You can change it later.`
+                }
+              >
+                <Input
+                  id="new-token-limit"
+                  inputMode="numeric"
+                  value={fresh.role === "owner" ? "No limit" : fresh.tokenLimit}
+                  disabled={fresh.role === "owner"}
+                  onChange={(e) => setFresh({ ...fresh, tokenLimit: e.target.value })}
+                  autoComplete="off"
+                />
+              </Field>
               <div className="sm:col-span-2">
-                <Button id="create-account" type="submit" loading={creating}>
+                <Button
+                  id="create-account"
+                  type="submit"
+                  loading={creating}
+                  disabled={fresh.role !== "owner" && parseTokens(fresh.tokenLimit) === null}
+                >
                   Make the account
                 </Button>
               </div>
@@ -227,6 +269,7 @@ export function UsersManager({
                 <th className="px-5 py-2.5 font-medium">User</th>
                 <th className="px-5 py-2.5 font-medium">2FA</th>
                 <th className="px-5 py-2.5 font-medium">Role</th>
+                <th className="px-5 py-2.5 font-medium">Tokens</th>
                 <th className="px-5 py-2.5 font-medium">Status</th>
                 <th className="px-5 py-2.5 font-medium">Joined</th>
                 {canManage && <th className="px-5 py-2.5 font-medium" />}
@@ -252,7 +295,7 @@ export function UsersManager({
                       <td className="px-5 py-3">
                         {editable ? (
                           <Select
-                            className="w-36"
+                            className="w-32"
                             aria-label={`Role of ${u.username}`}
                             value={u.role}
                             disabled={busy[u.id]}
@@ -268,6 +311,81 @@ export function UsersManager({
                           </Select>
                         ) : (
                           <Badge tone={roleTone(u.role)}>{roleLabel(u.role)}</Badge>
+                        )}
+                      </td>
+                      <td className="px-5 py-3" data-tokens={u.username}>
+                        {u.tokenLimit === null ? (
+                          <>
+                            <div className="text-ink-2">No limit</div>
+                            <div className="text-xs text-ink-3">{formatTokens(u.tokensUsed)} used</div>
+                          </>
+                        ) : limitOf === u.id ? (
+                          <form
+                            className="flex flex-wrap items-start gap-2"
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              const limit = parseTokens(limitDraft);
+                              if (limit === null) return;
+                              const ok = await update(
+                                u,
+                                { tokenLimit: limit },
+                                `"${u.username}" may use ${formatTokens(limit)} tokens in all now: ${formatTokens(Math.max(0, limit - u.tokensUsed))} are left.`,
+                              );
+                              if (ok) setLimitOf(null);
+                            }}
+                          >
+                            <div>
+                              <Input
+                                className="w-36"
+                                aria-label={`Token limit of ${u.username}`}
+                                inputMode="numeric"
+                                value={limitDraft}
+                                onChange={(e) => setLimitDraft(e.target.value)}
+                                autoComplete="off"
+                                autoFocus
+                              />
+                              <div className="mt-1 w-36 text-xs text-ink-3">
+                                {parseTokens(limitDraft) === null
+                                  ? "A whole number of tokens."
+                                  : `${formatTokens(u.tokensUsed)} used: ${formatTokens(Math.max(0, (parseTokens(limitDraft) ?? 0) - u.tokensUsed))} left after this.`}
+                              </div>
+                            </div>
+                            <Button
+                              type="submit"
+                              variant="ghost"
+                              loading={busy[u.id]}
+                              disabled={parseTokens(limitDraft) === null || parseTokens(limitDraft) === u.tokenLimit}
+                            >
+                              Save
+                            </Button>
+                            <Button type="button" variant="ghost" onClick={() => setLimitOf(null)}>
+                              Cancel
+                            </Button>
+                          </form>
+                        ) : (
+                          <>
+                            <div className={u.tokensLeft === 0 ? "whitespace-nowrap text-danger" : "whitespace-nowrap text-ink"}>
+                              {formatTokens(u.tokensUsed)} <span className="text-ink-3">of</span> {formatTokens(u.tokenLimit)}
+                            </div>
+                            <div className="whitespace-nowrap text-xs text-ink-3">
+                              {u.tokensLeft === 0 ? "used up" : `${formatTokens(u.tokensLeft ?? 0)} left`}
+                              {canManage && " · "}
+                              {canManage && (
+                                <button
+                                  type="button"
+                                  className="text-signal hover:underline"
+                                  aria-label={`Change the token limit of ${u.username}`}
+                                  onClick={() => {
+                                    setError(null);
+                                    setLimitOf(u.id);
+                                    setLimitDraft(formatTokens(u.tokenLimit ?? 0));
+                                  }}
+                                >
+                                  Change
+                                </button>
+                              )}
+                            </div>
+                          </>
                         )}
                       </td>
                       <td className="px-5 py-3">
@@ -295,11 +413,11 @@ export function UsersManager({
                           </span>
                         )}
                       </td>
-                      <td className="whitespace-nowrap px-5 py-3 text-ink-3">
+                      <td className="px-5 py-3 text-ink-3">
                         <DateTime at={u.createdAt} />
                       </td>
                       {canManage && (
-                        <td className="px-5 py-3 text-right">
+                        <td className="whitespace-nowrap px-5 py-3 text-right">
                           {isSelf ? (
                             <Link href="/dashboard/settings" className="text-sm text-signal hover:underline">
                               Your account
@@ -314,7 +432,7 @@ export function UsersManager({
                     </tr>
                     {editable && open === u.id && (
                       <tr data-manage={u.username} className="bg-surface-2">
-                        <td colSpan={6} className="px-5 py-4">
+                        <td colSpan={7} className="px-5 py-4">
                           <div className="grid gap-5 lg:grid-cols-2">
                             <form
                               className="space-y-3"
@@ -443,7 +561,7 @@ export function UsersManager({
 }
 
 function roleHint(role: Role): string {
-  if (role === "owner") return "Everything an administrator does, and the accounts.";
+  if (role === "owner") return "Everything an administrator does, the accounts, and everyone's token limit.";
   if (role === "admin") return "Providers, models, agents, teams, workflows, skills, and everyone's projects.";
   return "Their own projects, chats, media and keys.";
 }

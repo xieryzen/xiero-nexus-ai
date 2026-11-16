@@ -3,6 +3,7 @@ import { AppError, sanitizeUpstreamError } from "@/lib/errors";
 import { gatewayEmbed, resolveEmbeddingModel } from "@/lib/gateway";
 import { formatEmbeddings, parseEmbeddingsRequest } from "@/lib/public-api/openai-format";
 import { readJsonBody, resolveApiModel, v1 } from "@/lib/public-api/server";
+import { assertTokensLeft } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,7 @@ export const maxDuration = 300;
 /** Embeddings in the OpenAI format. */
 export const POST = v1("embeddings", async (req, { caller }) => {
   const request = parseEmbeddingsRequest(await readJsonBody(req));
+  assertTokensLeft(caller.user.id);
   const resolved = resolveEmbeddingModel(resolveApiModel(caller, request.model, "embeddings"));
   const started = Date.now();
   try {

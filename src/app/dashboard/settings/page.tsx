@@ -10,12 +10,14 @@ import { Icon } from "@/components/icons";
 import { AccountClient } from "@/components/account/account-client";
 import { IntegrationsClient } from "@/components/account/integrations-client";
 import { isAdminRole, isOwnerRole, roleLabel } from "@/lib/roles";
+import { formatTokens, tokenSummary } from "@/lib/token-rules";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Settings" };
 
 export default function SettingsPage() {
   const user = requirePageUser();
+  const tokens = tokenSummary(user);
   return (
     <div>
       <PageHeader title="Settings" description="Your account, its security, API keys and notifications." />
@@ -42,6 +44,34 @@ export default function SettingsPage() {
             </div>
             <Row label="Member since" value={<DateTime at={new Date(user.createdAt).getTime()} />} />
           </dl>
+        </Card>
+
+        <Card
+          title="Tokens"
+          description={
+            tokens.limit === null
+              ? "What your work has used. An owner is not held to a limit, and sets the limit of every other account under Users & Roles."
+              : "What your work may use in all, and what it has used: chat, the runs of your projects, media, knowledge, and your API keys. An owner of this installation sets the limit."
+          }
+        >
+          <dl className="space-y-3 text-sm" id="token-balance">
+            <Row label="Used" value={formatTokens(tokens.used)} />
+            <Row label="Limit" value={tokens.limit === null ? "No limit" : formatTokens(tokens.limit)} />
+            {tokens.left !== null && (
+              <Row
+                label="Left"
+                value={<span className={tokens.usedUp ? "font-medium text-danger" : "font-medium"}>{formatTokens(tokens.left)}</span>}
+              />
+            )}
+          </dl>
+          {tokens.left !== null && tokens.limit !== null && (
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-surface-2" aria-hidden="true">
+              <div
+                className={tokens.usedUp ? "h-full bg-danger" : "h-full bg-signal"}
+                style={{ width: `${tokens.limit === 0 ? 100 : Math.min(100, Math.round((tokens.used / tokens.limit) * 100))}%` }}
+              />
+            </div>
+          )}
         </Card>
 
         <Card title="Security" description="Protect your account.">

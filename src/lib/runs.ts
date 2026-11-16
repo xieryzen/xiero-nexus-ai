@@ -7,6 +7,7 @@ import { notify } from "./notifications";
 import { prepareRun } from "./orchestrator";
 import { publish } from "./run-bus";
 import { runtime } from "./runtime";
+import { assertTokensLeft } from "./tokens";
 import { kickWorker } from "./worker";
 
 /**
@@ -46,6 +47,9 @@ function link(projectId: string): string {
 
 /** Queue a run of a project. Throws 409 when one is waiting or in progress. */
 export function startRun(project: Project, opts: StartRunOptions): StartRunResult {
+  // A run spends the tokens of the account the project belongs to: with none
+  // left it is refused (402), and nothing about the project changes.
+  assertTokensLeft(project.createdBy, opts.requestedBy === project.createdBy ? "yours" : "project");
   const input = opts.input?.trim() ? opts.input.trim().slice(0, MAX_RUN_INPUT_CHARS) : null;
   const base = {
     projectId: project.id,

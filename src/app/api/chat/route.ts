@@ -12,6 +12,7 @@ import {
   searchKnowledge,
   type KnowledgeHit,
 } from "@/lib/knowledge/service";
+import { assertTokensLeft } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 import { chatRequestSchema } from "@/lib/validation";
 
@@ -26,6 +27,7 @@ function sse(obj: unknown): string {
 export const POST = handle(async (req) => {
   const user = requireUser();
   const body = await parseBody(req, chatRequestSchema);
+  assertTokensLeft(user.id); // 402 before anything is asked of a provider
   const resolved = resolveChatModel(body.modelRowId); // throws safe errors
 
   // Knowledge: the passages that fit the question are put in front of the model.

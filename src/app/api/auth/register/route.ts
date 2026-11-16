@@ -9,6 +9,7 @@ import { Errors } from "@/lib/errors";
 import { rateLimit } from "@/lib/ratelimit";
 import { getClientMeta } from "@/lib/request";
 import { assertSecureTransport, createSession, setSessionCookie } from "@/lib/session";
+import { defaultTokenLimit } from "@/lib/token-rules";
 import { registerSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,7 @@ export const POST = handle(async (req) => {
       email: body.email,
       passwordHash: hashPassword(body.password),
       role,
+      tokenLimit: defaultTokenLimit(),
     })
     .returning()
     .get();

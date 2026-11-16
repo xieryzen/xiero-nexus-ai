@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1668,7 +1668,229 @@ export async function automation(ctx) {
     eq("a round is refused when its models are not named properly", (await admin.post("/api/models/health", { modelIds: [] })).status, 400);
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health };
+  // ─── The tokens of an account (v1.8) ───────────────────────────────────
+
+  async function tokens() {
+    const PASS = "tokens-first-password-1";
+    const yours = (used, limit) => `Your token balance is used up: ${used} of ${limit} tokens used. An owner of this installation can raise your limit.`;
+    const ofProject = (used, limit) =>
+      `The token balance of the account this project belongs to is used up: ${used} of ${limit} tokens used. An owner of this installation can raise its limit.`;
+    /** What the account used, may use, and has left. */
+    const balance = async (who) => {
+      const u = (await who.get("/api/account/me")).data?.user;
+      return [u?.tokensUsed, u?.tokenLimit, u?.tokensLeft];
+    };
+    const hi = { modelRowId: ids.models.chat, messages: [{ role: "user", content: "hi" }] };
+    /** One chat: the mock provider counts 20 tokens in and 10 out for it. */
+    const say = (who) => sse(who, "/api/chat", { method: "POST", body: hi });
+    const answered = (chat) => chat.events.some((e) => e.done);
+    const signIn = async (name) => {
+      const who = client();
+      await who.post("/api/auth/login", { identifier: name, password: PASS });
+      return who;
+    };
+    const make = (username, extra = {}) => admin.post("/api/admin/users", { username, email: `${username}@example.com`, password: PASS, ...extra });
+    const lastStatus = (events) => events.filter((e) => e.type === "status").at(-1)?.status;
+    /** What reached a provider to be answered: not the worker asking after a video of an earlier check. */
+    const asked = async () => (await mockLog()).filter((l) => l.method === "POST").map((l) => l.path);
+
+    begin("Tokens: what an account may use");
+    const owner = (await admin.get("/api/account/me")).data?.user;
+    check("an owner is not held to a limit, and what it used is counted", owner?.tokenLimit === null && owner?.tokensLeft === null && Number.isInteger(owner?.tokensUsed), [owner?.tokenLimit, owner?.tokensLeft, owner?.tokensUsed]);
+    const tia = client();
+    const registered = await tia.post("/api/auth/register", { username: "tia", email: "tia@example.com", password: PASS });
+    eq("an account that registers may use ten million tokens", [registered.status, registered.data?.user?.tokenLimit, registered.data?.user?.tokensUsed, registered.data?.user?.tokensLeft], [201, 10_000_000, 0, 10_000_000]);
+    const uli = await make("uli");
+    eq("  and so may one that an owner makes", [uli.status, uli.data?.user?.tokenLimit, uli.data?.user?.tokensLeft], [201, 10_000_000, 10_000_000]);
+    const veraMade = await make("vera", { tokenLimit: 100 });
+    const veraId = veraMade.data?.user?.id;
+    eq("  unless the owner gives it another limit", [veraMade.status, veraMade.data?.user?.tokenLimit, veraMade.data?.user?.tokensLeft], [201, 100, 100]);
+    const wrong = [];
+    for (const [i, tokenLimit] of [-1, 1.5, "many", 10_000_000_000_000].entries()) wrong.push((await make(`wrong${i}`, { tokenLimit })).status);
+    eq("a limit that is no whole number of tokens, or too large, is refused", wrong, [400, 400, 400, 400]);
+
+    begin("Tokens: work uses them up");
+    const vera = await signIn("vera");
+    const first = await say(vera);
+    eq("a chat is answered, and what it used is counted", [answered(first), await balance(vera)], [true, [30, 100, 70]]);
+    await say(vera);
+    await say(vera);
+    eq("  chat after chat", await balance(vera), [90, 100, 10]);
+    const last = await say(vera);
+    eq("the chat that uses the last tokens is answered in full, and counted in full", [answered(last), await balance(vera)], [true, [120, 100, 0]]);
+
+    begin("Tokens: with none left, new work is refused");
+    await agent("Counter", "Counter");
+    const countWf = await workflow("Count to three", [
+      { title: "One", objective: "Say one.", role: "Counter" },
+      { title: "Two", objective: "Say two.", role: "Counter", dependsOn: [1] },
+      { title: "Three", objective: "Say three.", role: "Counter", dependsOn: [2] },
+    ]);
+    const veraProject = await project(vera, { title: "Vera counts", workflowId: countWf, maxParallel: 1 });
+    const keyMade = await vera.post("/api/account/api-keys", { name: "Vera's key", scopes: ["chat", "embeddings", "media", "projects"] });
+    const key = keyMade.data?.secret;
+    await mockReset();
+    const refused = await vera.post("/api/chat", hi);
+    eq("a chat: 402, and it says how much was used, of how much, and who can change that", [refused.status, refused.code, refused.error], [402, "token_limit_reached", yours("120", "100")]);
+    const image = await vera.post("/api/media/images", { modelRowId: ids.models.img_openai, prompt: "A lamp." });
+    const speech = await vera.post("/api/media/speech", { modelRowId: state.models.tts, text: "Hello." });
+    const video = await vera.post("/api/media/videos", { modelRowId: ids.models.vid_openai, prompt: "A lamp." });
+    eq("  an image, a voice-over and a video", [image.status, speech.status, video.status, image.code, video.error], [402, 402, 402, "token_limit_reached", yours("120", "100")]);
+    const start = await runProject(vera, veraProject);
+    let startError = null;
+    try {
+      startError = JSON.parse(start.error ?? "").error;
+    } catch {
+      /* not JSON */
+    }
+    eq("  a run of a project", [start.status, startError?.code, startError?.message], [402, "token_limit_reached", yours("120", "100")]);
+    eq("    which is left as it was: no run was made", (await vera.get(`/api/projects/${veraProject}/runs`)).data?.runs?.length, 0);
+    const apiChat = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "hi" }] } });
+    eq("the public API with the account's key: 402, in the shape API clients read", [keyMade.status, apiChat.status, apiChat.error?.type, apiChat.error?.code, apiChat.error?.message], [201, 402, "insufficient_quota", "token_limit_reached", yours("120", "100")]);
+    const apiOthers = [
+      await v1json("/embeddings", { key, method: "POST", body: { model: "text-embedding-3-small", input: "x" } }),
+      await v1json("/audio/speech", { key, method: "POST", body: { model: "tts-1", input: "Hello.", voice: "alloy" } }),
+      await v1json("/images/generations", { key, method: "POST", body: { model: "Mock OpenAI-style/img-ok", prompt: "x" } }),
+      await v1json(`/projects/${veraProject}/runs`, { key, method: "POST" }),
+    ];
+    eq("  embeddings, speech, an image and a run as well", apiOthers.map((res) => [res.status, res.error?.code]), Array(4).fill([402, "token_limit_reached"]));
+    eq("  what costs nothing is still answered: the list of models", (await v1json("/models", { key })).status, 200);
+    const col = (await vera.post("/api/knowledge", { name: "Vera's notes", embeddingModelRowId: state.models.embed })).data?.collection?.id;
+    const doc = await vera.post(`/api/knowledge/${col}/documents`, { title: "Lamps", text: "Every lamp has a wick. The wick is trimmed every four hours." });
+    const kept = await until(async () => (await vera.get(`/api/knowledge/${col}`)).data, (d) => d?.documents?.length > 0 && d.documents.every((x) => x.embeddingStatus !== "pending"));
+    const found = await vera.post("/api/knowledge/search", { query: "wick", collectionIds: [col] });
+    check(
+      "a document is kept and found by its words; it is not embedded, and says why",
+      doc.status === 201 && kept?.documents?.[0]?.embeddingStatus === "failed" && (kept.documents[0].error ?? "").includes("Your token balance is used up") && found.data?.hits?.[0]?.documentTitle === "Lamps",
+      [doc.status, kept?.documents?.[0]?.embeddingStatus, kept?.documents?.[0]?.error, found.data?.hits?.[0]?.documentTitle],
+    );
+    eq("nothing of all this was asked of a provider", await asked(), []);
+    eq("what the account used is what it was", await balance(vera), [120, 100, 0]);
+    const bell = (await vera.get("/api/notifications")).data?.notifications ?? [];
+    const told = bell.filter((n) => n.title === "Your token balance is used up");
+    check("the account was told once, when its last tokens went", told.length === 1 && told[0].level === "warning" && told[0].body.startsWith("120 of 100 tokens used."), told);
+
+    begin("Tokens: an owner sets the limit, and nobody else");
+    const wimMade = await make("wim", { role: "admin" });
+    const wim = await signIn("wim");
+    const seen = ((await wim.get("/api/admin/users")).data?.users ?? []).find((u) => u.username === "vera");
+    eq("an administrator sees what an account used and may use", [seen?.tokensUsed, seen?.tokenLimit, seen?.tokensLeft], [120, 100, 0]);
+    const byAdmin = await wim.patch(`/api/admin/users/${veraId}`, { tokenLimit: 5_000_000 });
+    eq("  and changes no limit", [byAdmin.status, byAdmin.error], [403, "Only an owner manages accounts"]);
+    eq("  its own neither", (await wim.patch(`/api/admin/users/${wimMade.data?.user?.id}`, { tokenLimit: 5_000_000 })).status, 403);
+    eq("  and makes no account with one", (await wim.post("/api/admin/users", { username: "zed", email: "zed@example.com", password: PASS, tokenLimit: 5_000_000 })).status, 403);
+    eq("an ordinary user changes none: not its own, not another's", [(await vera.patch(`/api/admin/users/${veraId}`, { tokenLimit: 5_000_000 })).status, (await bob.patch(`/api/admin/users/${veraId}`, { tokenLimit: 5_000_000 })).status], [403, 403]);
+    const bySettings = await vera.patch("/api/account/me", { currentPassword: PASS, tokenLimit: 5_000_000, tokensUsed: 0 });
+    eq("  and Settings takes no limit", [bySettings.status, await balance(vera)], [400, [120, 100, 0]]);
+    const raised = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: 1_000 });
+    eq("an owner raises the limit: what was used stays counted", [raised.status, raised.data?.user?.tokensUsed, raised.data?.user?.tokenLimit, raised.data?.user?.tokensLeft], [200, 120, 1_000, 880]);
+    const again = await say(vera);
+    eq("  and the account works again at once", [answered(again), await balance(vera)], [true, [150, 1_000, 850]]);
+    const lowered = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: 150 });
+    eq("an owner lowers the limit: at what was used, nothing is left", [lowered.data?.user?.tokensLeft, (await vera.post("/api/chat", hi)).status], [0, 402]);
+    const none = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: 0 });
+    eq("  a limit of 0 is a limit", [none.status, none.data?.user?.tokenLimit, none.data?.user?.tokensLeft], [200, 0, 0]);
+    const wrongChange = [];
+    for (const tokenLimit of [-1, 1.5, "many", null, 10_000_000_000_000]) wrongChange.push((await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit })).status);
+    eq("a limit that is no whole number of tokens, or too large, is refused", [wrongChange, (await balance(vera))[1]], [[400, 400, 400, 400, 400], 0]);
+    eq("the limit of an account there is not: 404", (await admin.patch("/api/admin/users/no-such-account", { tokenLimit: 5 })).status, 404);
+    const xena = await make("xena", { role: "owner", tokenLimit: 500 });
+    const xenaId = xena.data?.user?.id;
+    eq("another owner is not held to a limit either", [xena.status, xena.data?.user?.tokenLimit, xena.data?.user?.tokensLeft], [201, null, null]);
+    const forOwner = await admin.patch(`/api/admin/users/${xenaId}`, { tokenLimit: 5 });
+    eq("  and none can be set for it", [forOwner.status, forOwner.error], [400, "An owner is not held to a token limit: there is none to set"]);
+    const demoted = await admin.patch(`/api/admin/users/${xenaId}`, { role: "user" });
+    eq("an owner that becomes a user is held to the limit of its account", [demoted.status, demoted.data?.user?.tokenLimit], [200, 500]);
+    const promoted = await admin.patch(`/api/admin/users/${xenaId}`, { role: "admin", tokenLimit: 700 });
+    eq("  a role and a limit are changed in one go", [promoted.status, promoted.data?.user?.role, promoted.data?.user?.tokenLimit], [200, "admin", 700]);
+
+    begin("Tokens: a run stops when they are used up");
+    const yanMade = await make("yan", { tokenLimit: 50 });
+    const yanId = yanMade.data?.user?.id;
+    const yan = await signIn("yan");
+    const yanProject = await project(yan, { title: "Yan counts", workflowId: countWf, maxParallel: 1 });
+    await mockReset();
+    const run = await runProject(yan, yanProject);
+    const third = taskOf(run.events, 3);
+    eq(
+      "the tasks run while there are tokens; the one after is not started, and says why",
+      [taskOf(run.events, 1)?.status, taskOf(run.events, 2)?.status, third?.status, third?.error],
+      ["succeeded", "succeeded", "cancelled", ofProject("60", "50")],
+    );
+    const result = run.events.find((e) => e.type === "final")?.deliverable ?? "";
+    check("  the run ends for a look, and its result says that it was not put together, and why", lastStatus(run.events) === "review" && result.includes("was not put together into one deliverable") && result.includes(ofProject("60", "50")), [lastStatus(run.events), result]);
+    eq("  nothing more was asked of a model: two tasks, no summary, no review", [(await asked()).length, await balance(yan)], [2, [60, 50, 0]]);
+    const yanBell = (await yan.get("/api/notifications")).data?.notifications ?? [];
+    const look = yanBell.find((n) => n.title === "Run needs a look: Yan counts");
+    check("  the account is told: about the run, and that its tokens are used up", (look?.body ?? "") === `1 of 3 tasks did not succeed. ${ofProject("60", "50")}` && yanBell.filter((n) => n.title === "Your token balance is used up").length === 1, yanBell.map((n) => [n.title, n.body]));
+    const parse = (text) => {
+      try {
+        return JSON.parse(text ?? "").error?.message;
+      } catch {
+        return text;
+      }
+    };
+    const restart = await runProject(yan, yanProject);
+    const byOwner = await runProject(admin, yanProject);
+    eq("a new run is refused: to the account itself, and to an administrator who starts its project", [restart.status, parse(restart.error), byOwner.status, parse(byOwner.error)], [402, yours("60", "50"), 402, ofProject("60", "50")]);
+    // 100 more: the three tasks use 90, and putting the result together the last 10 and 20 beyond.
+    await admin.patch(`/api/admin/users/${yanId}`, { tokenLimit: 160 });
+    const second = await runProject(yan, yanProject);
+    eq(
+      "when putting the result together uses the last tokens, the run is not reviewed, and says so",
+      [finished(second.events).map((e) => e.status), lastStatus(second.events), second.events.find((e) => e.type === "review")?.notes, await balance(yan)],
+      [["succeeded", "succeeded", "succeeded"], "review", `(Not reviewed. ${ofProject("180", "160")})`, [180, 160, 0]],
+    );
+    await admin.patch(`/api/admin/users/${yanId}`, { tokenLimit: 1_000 });
+    const third2 = await runProject(yan, yanProject);
+    eq("with tokens enough, a run is whole: its tasks, its result, its review", [finished(third2.events).map((e) => e.status), lastStatus(third2.events), await balance(yan)], [["succeeded", "succeeded", "succeeded"], "succeeded", [330, 1_000, 670]]);
+
+    begin("Tokens: what is not counted");
+    const before = (await balance(wim))[0];
+    const tested = await wim.post(`/api/models/${ids.models.chat}/test`, {});
+    eq("a check of a model by an administrator is the installation's: it is counted for nobody", [tested.data?.ok, (await balance(wim))[0]], [true, before]);
+    await fetch(`${MOCK}/__force?model=chat-mini&status=500&times=1`);
+    const failedChat = await say(yan);
+    check("a chat that the provider failed is not counted", failedChat.events.some((e) => e.error) && (await balance(yan))[0] === 330, [failedChat.events, await balance(yan)]);
+
+    begin("Tokens: the pages, and the audit log");
+    const pageOf = async (who, path) => {
+      const res = await who.raw(path);
+      return res.status === 200 ? await res.text() : `status ${res.status}`;
+    };
+    const usersPage = await pageOf(admin, "/dashboard/users");
+    check("Users & Roles shows what each account used and may use", usersPage.includes(">Tokens</th>") && usersPage.includes('data-tokens="vera"') && usersPage.includes("used up") && usersPage.includes("No limit"), usersPage.length);
+    check("  an owner has a way to change a limit there", usersPage.includes('aria-label="Change the token limit of vera"') && !usersPage.includes('aria-label="Change the token limit of admin"'), null);
+    const forAdmin = await pageOf(wim, "/dashboard/users");
+    check("  an administrator sees the numbers, and no way to change them", forAdmin.includes('data-tokens="vera"') && !forAdmin.includes("Change the token limit of"), null);
+    const veraSettings = await pageOf(vera, "/dashboard/settings");
+    check("Settings shows an account its tokens: used, limit, left", veraSettings.includes('id="token-balance"') && />150</.test(veraSettings) && veraSettings.includes("An owner of this installation sets the limit"), null);
+    check("  an account with none left is told on every page", veraSettings.includes('id="tokens-used-up"') && (await pageOf(vera, "/dashboard")).includes("Your token balance is used up"), null);
+    const tiaHome = await pageOf(tia, "/dashboard");
+    check("  one with tokens sees how many are left, and no warning", tiaHome.includes('id="tokens-left"') && tiaHome.includes("10M tokens left") && !tiaHome.includes('id="tokens-used-up"'), null);
+    const ownerSettings = await pageOf(admin, "/dashboard/settings");
+    check("  an owner sees what it used, and that it has no limit", ownerSettings.includes('id="token-balance"') && ownerSettings.includes("No limit") && !ownerSettings.includes('id="tokens-left"'), null);
+    const auditDb = database();
+    const rows = auditDb.prepare("SELECT action, actor_user_id AS actor, target_id AS target, metadata FROM audit_logs WHERE action IN ('admin.user.create', 'admin.user.update', 'account.tokens.used_up')").all();
+    auditDb.close();
+    const meta = (row) => JSON.parse(row.metadata ?? "{}");
+    const changes = rows.filter((row) => row.action === "admin.user.update" && row.target === veraId && meta(row).changed?.includes("tokenLimit")).map((row) => [meta(row).tokenLimitBefore, meta(row).tokenLimit, meta(row).tokensUsed]);
+    eq("every change of a limit is in the audit log: from what, to what, and what was used by then", changes, [[100, 1_000, 120], [1_000, 150, 150], [150, 0, 150]]);
+    check("  with who changed it", rows.filter((row) => row.action === "admin.user.update" && row.target === veraId).every((row) => row.actor === owner?.id), null);
+    eq("  the limit an account was made with is there too", meta(rows.find((row) => row.action === "admin.user.create" && row.target === veraId) ?? {}).tokenLimit, 100);
+    const usedUp = (id) => rows.filter((row) => row.action === "account.tokens.used_up" && row.target === id).map((row) => [meta(row).tokensUsed, meta(row).tokenLimit]);
+    eq("  and so is each time an account used its last tokens", [usedUp(veraId), usedUp(yanId)], [[[120, 100]], [[60, 50], [180, 160]]]);
+
+    // The accounts of these checks go, so that the lists after them are what they were.
+    const gone = [];
+    for (const name of ["tia", "uli", "vera", "wim", "xena", "yan"]) {
+      const id = ((await admin.get("/api/admin/users")).data?.users ?? []).find((u) => u.username === name)?.id;
+      gone.push((await admin.del(`/api/admin/users/${id}`)).status);
+    }
+    eq("the accounts of these checks are deleted", gone, [200, 200, 200, 200, 200, 200]);
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }
