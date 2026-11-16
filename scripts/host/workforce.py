@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # The workforce of a running Xiero Nexus AI, from a file: the models it works
-# with, its agents, its teams and its workflows.
+# with, its skills, its agents, its teams and its workflows.
 #
 #   NEXUS_PASSWORD=... python3 workforce.py --url https://nexus.example.com --dry-run
 #
@@ -25,7 +25,16 @@
 #   --update             Also change what is there under the same name but
 #                        differs from the file.
 #   --only <parts>       Only these parts of the file: providers, models,
-#                        agents, teams, workflows (separated by commas).
+#                        skills, agents, teams, workflows (separated by commas).
+#   --only-usable        Afterwards, look at every model that is switched on
+#                        and that the file does not name, and switch off the
+#                        ones that cannot be used: a model that a provider
+#                        without a key bills for, and a chat model that the
+#                        provider refuses one word (no access, no credit, no
+#                        such model). A model that is only limited or busy at
+#                        the moment stays as it is. Nothing is deleted: a model
+#                        is switched on again on the Models page. Each model
+#                        that is asked is one request to its provider.
 #   --test               Afterwards, ask each chat model of the file for one
 #                        word, as the Test button on the Models page does. Each
 #                        test is a small request that the provider bills.
@@ -68,10 +77,11 @@ import socket
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 AGENT = "xiero-nexus-workforce/1"
-PARTS = ["providers", "models", "agents", "teams", "workflows"]
+PARTS = ["providers", "models", "skills", "agents", "teams", "workflows"]
 CAPABILITIES = [
     "text", "reasoning", "tool_calling", "structured_output", "vision", "audio",
     "image_generation", "video_generation", "speech_generation", "embeddings", "streaming",
@@ -87,6 +97,14 @@ ADAPTERS = ["openai-compatible", "anthropic", "gemini", "custom-http"]
 LISTED_AT_MOST = 60
 PRICES = ["inputPricePerMTok", "outputPricePerMTok", "pricePerImage", "pricePerSecond", "pricePerMChars"]
 MODEL_FIELDS = ["displayName", "contextWindow"] + PRICES
+# What the app keeps of a skill (src/lib/skills/limits.ts).
+SKILL_NAME_MAX = 80
+SKILL_DESCRIPTION_MAX = 1024
+SKILL_INSTRUCTIONS_MAX = 100000
+SKILL_FILE_MAX_BYTES = 256 * 1024
+SKILL_FILES_MAX = 60
+SKILL_FILES_TOTAL_MAX = 2 * 1024 * 1024
+SKILLS_PER_OWNER_MAX = 20
 MEDIA_KEYS = {
     "aspectRatio": str, "durationSeconds": int, "resolution": str, "size": str, "voice": str,
     "speed": (int, float), "imageFrom": int, "subtitles": bool, "keepClipAudio": bool, "fit": str,
@@ -180,6 +198,94 @@ def names_of(value, where, known=None, most=50):
     return out
 
 
+def split_front_matter(text, where):
+    """The front matter of a SKILL.md as written here: `key: value`, one line each."""
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}, text
+    rest = text[end + 4:]
+    if rest and not rest.startswith("\n"):
+        return {}, text
+    front = {}
+    for line in text[4:end].split("\n"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.match(r"^([A-Za-z0-9_.-]+):\s*(.*)$", line)
+        if not match:
+            raise Wrong('%s: this program reads front matter of one line for each key ("name: ...", "description: ..."), and this line is not one: %s' % (where, short(line, 80)))
+        value = match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1].replace('\\"', '"') if value[0] == '"' else value[1:-1].replace("''", "'")
+        front[match.group(1).lower()] = value
+    return front, rest[1:]
+
+
+def text_file(path, where):
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as err:
+        raise Wrong("%s: %s cannot be read: %s." % (where, path, err.strerror or err))
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Wrong("%s: %s is not text (UTF-8). A skill holds text: an agent reads it." % (where, path))
+    if "\x00" in text:
+        raise Wrong("%s: %s is not text. A skill holds text: an agent reads it." % (where, path))
+    return text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def read_skill(name, item, base):
+    """A skill of the file: a folder with a SKILL.md, one Markdown file, or the words themselves."""
+    where = 'Skill "%s"' % name
+    only_keys(item, ["file", "description", "instructions"], where)
+    text_of(name, where + ": its name", SKILL_NAME_MAX, 1)
+    files = []
+    if "file" in item:
+        if "instructions" in item:
+            raise Wrong('%s has "file" and "instructions": one of the two says what the skill is.' % where)
+        given = text_of(item["file"], where + ": file", 400, 1)
+        target = os.path.normpath(os.path.join(base, given))
+        if os.path.isabs(given) or not (target + os.sep).startswith(os.path.normpath(base) + os.sep):
+            raise Wrong("%s: file is a path next to the definition file, not one that leaves its folder." % where)
+        root = target if os.path.isdir(target) else None
+        text = text_file(os.path.join(target, "SKILL.md") if root else target, where)
+        front, body = split_front_matter(text, where)
+        if front.get("name") and " ".join(front["name"].split()).lower() != " ".join(name.split()).lower():
+            raise Wrong('%s: its SKILL.md calls it "%s". The two names are to be the same.' % (where, front["name"]))
+        description = item.get("description", front.get("description", ""))
+        if root:
+            total = 0
+            for folder, folders, names in os.walk(root):
+                folders[:] = sorted(f for f in folders if not f.startswith(".") and f not in ("__MACOSX", "node_modules"))
+                for file_name in sorted(names):
+                    full = os.path.join(folder, file_name)
+                    relative = os.path.relpath(full, root).replace(os.sep, "/")
+                    if file_name.startswith(".") or relative.lower() == "skill.md":
+                        continue
+                    size = os.path.getsize(full)
+                    if size > SKILL_FILE_MAX_BYTES:
+                        raise Wrong("%s: %s is larger than %d KB, which is what a file of a skill can be." % (where, relative, SKILL_FILE_MAX_BYTES // 1024))
+                    total += size
+                    files.append({"path": relative, "content": text_file(full, where)})
+            if len(files) > SKILL_FILES_MAX:
+                raise Wrong("%s has %d files; a skill keeps %d." % (where, len(files), SKILL_FILES_MAX))
+            if total > SKILL_FILES_TOTAL_MAX:
+                raise Wrong("%s: its files are more than %d MB together." % (where, SKILL_FILES_TOTAL_MAX // (1024 * 1024)))
+    else:
+        body = text_of(item.get("instructions", ""), where + ": instructions", SKILL_INSTRUCTIONS_MAX)
+        description = item.get("description", "")
+    description = " ".join(text_of(description, where + ": description", SKILL_DESCRIPTION_MAX).split())
+    body = body.strip()
+    if not body and not description:
+        raise Wrong("%s is empty: it has no instructions and no description." % where)
+    if len(body) > SKILL_INSTRUCTIONS_MAX:
+        raise Wrong("%s: its instructions are %d characters; a skill keeps %d. The long parts belong in files of the skill." % (where, len(body), SKILL_INSTRUCTIONS_MAX))
+    return {"name": " ".join(name.split()), "description": description, "instructions": body, "files": files}
+
+
 def read_definition(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -188,7 +294,7 @@ def read_definition(path):
         raise Wrong("%s cannot be read: %s." % (path, err.strerror or err))
     except ValueError as err:
         raise Wrong("%s is not JSON: %s." % (path, err))
-    only_keys(raw, ["about", "providers", "models", "agents", "teams", "workflows", "tryRun"], "The file")
+    only_keys(raw, ["about", "providers", "models", "skills", "agents", "teams", "workflows", "tryRun"], "The file")
     for key in ("agents", "teams", "workflows"):
         if not isinstance(raw.get(key, []), list):
             raise Wrong('"%s" is a list.' % key)
@@ -262,11 +368,36 @@ def read_definition(path):
             raise Wrong('%s names the model "%s", which the file switches off.' % (where, value))
         return value
 
+    skills = {}
+    raw_skills = raw.get("skills", {})
+    if not isinstance(raw_skills, dict):
+        raise Wrong('"skills" is an object: the name of each skill, and where its SKILL.md is.')
+    base = os.path.dirname(os.path.abspath(path))
+    for name, item in raw_skills.items():
+        key = " ".join(str(name).split()).lower()
+        if key in skills:
+            raise Wrong('Skill "%s" is in the file twice (names differ by more than their letters\' case).' % name)
+        skills[key] = read_skill(str(name), item, base)
+
+    def skills_of(item, where):
+        """The skills an agent or a team is to have. None: the file does not say, and what it has is left alone."""
+        if "skills" not in item:
+            return None
+        named = names_of(item["skills"], where + ": skills", most=SKILLS_PER_OWNER_MAX)
+        keys = []
+        for one in named:
+            key = " ".join(one.split()).lower()
+            if key not in skills:
+                raise Wrong('%s names the skill "%s", which is not one of the file: %s.' % (where, one, ", ".join(s["name"] for s in skills.values()) or "(the file has none)"))
+            if key not in keys:
+                keys.append(key)
+        return keys
+
     agents = []
     seen = set()
     for index, item in enumerate(raw.get("agents", [])):
         where = "Agent %d" % (index + 1)
-        only_keys(item, ["name", "role", "instructions", "primary", "fallback", "temperature", "tools", "maxSteps", "memory"], where)
+        only_keys(item, ["name", "role", "instructions", "primary", "fallback", "temperature", "tools", "maxSteps", "memory", "skills"], where)
         name = text_of(item.get("name"), where + ": name", 80, 1)
         where = 'Agent "%s"' % name
         if name.lower() in seen:
@@ -282,6 +413,7 @@ def read_definition(path):
             "tools": names_of(item.get("tools", []), where + ": tools", TOOLS),
             "maxSteps": number_of(item.get("maxSteps", 12), where + ": maxSteps", 1, 40, True),
             "memory": item.get("memory", False),
+            "skills": skills_of(item, where),
         })
         if not isinstance(agents[-1]["memory"], bool):
             raise Wrong("%s: memory is true or false." % where)
@@ -290,7 +422,7 @@ def read_definition(path):
     seen = set()
     for index, item in enumerate(raw.get("teams", [])):
         where = "Team %d" % (index + 1)
-        only_keys(item, ["name", "description", "agents"], where)
+        only_keys(item, ["name", "description", "agents", "skills"], where)
         name = text_of(item.get("name"), where + ": name", 80, 1)
         where = 'Team "%s"' % name
         if name.lower() in seen:
@@ -300,6 +432,7 @@ def read_definition(path):
             "name": name,
             "description": text_of(item.get("description", ""), where + ": description", 500),
             "agents": names_of(item.get("agents", []), where + ": agents"),
+            "skills": skills_of(item, where),
         })
 
     workflows = []
@@ -374,14 +507,26 @@ def read_definition(path):
             "maxTasks": number_of(item.get("maxTasks", 3), "tryRun: maxTasks", 1, 40, True),
             "everyAgent": item.get("everyAgent", False),
         }
-        if try_run["everyAgent"] and len(agents) > 40:
-            raise Wrong("tryRun: everyAgent gives each agent a task, and a project takes 40 tasks; the file has %d agents." % len(agents))
         if try_run["manager"] not in models or try_run["manager"] in off:
             raise Wrong('tryRun: manager names a model of this file that is not switched off; "%s" is none.' % try_run["manager"])
         if try_run["team"] and try_run["team"].lower() not in [t["name"].lower() for t in teams]:
             raise Wrong('tryRun: team names a team of this file; "%s" is none.' % try_run["team"])
+        # With a team, each agent of that team gets a task; without one, each agent of the file.
+        every = len(every_agent_names({"agents": agents, "teams": teams}, try_run["team"]))
+        if try_run["everyAgent"] and every > 40:
+            raise Wrong("tryRun: everyAgent gives each agent a task, and a project takes 40 tasks; there are %d agents. Name a team in tryRun to try that team." % every)
 
-    return {"providers": providers, "models": models, "agents": agents, "teams": teams, "workflows": workflows, "tryRun": try_run}
+    return {"providers": providers, "models": models, "skills": skills, "agents": agents, "teams": teams, "workflows": workflows, "tryRun": try_run}
+
+
+def every_agent_names(definition, team_name):
+    """The agents that "everyAgent" gives a task: those of the try-run's team, or all of the file."""
+    if team_name:
+        for team in definition["teams"]:
+            if team["name"].lower() == team_name.lower():
+                members = set(m.lower() for m in team["agents"])
+                return [a["name"] for a in definition["agents"] if a["name"].lower() in members]
+    return [a["name"] for a in definition["agents"]]
 
 
 def read_env_file(path):
@@ -545,6 +690,7 @@ class State:
     def __init__(self, app):
         self.app = app
         self.upstream = {}  # provider id -> what the provider lists, or an error
+        self.skill_texts = {}  # (skill id, when it was changed) -> its instructions and files
 
     def read(self):
         app = self.app
@@ -553,7 +699,24 @@ class State:
         self.agents = app.get("/api/agents", "agents")
         self.teams = app.get("/api/teams", "teams")
         self.workflows = app.get("/api/workflows", "workflows")
+        # Skills came with version 1.7: an app before that answers "not found".
+        status, data = app.call("GET", "/api/skills")
+        self.skills = data.get("skills") if status == 200 and isinstance(data, dict) and isinstance(data.get("skills"), list) else None
         return self
+
+    def skill_text(self, skill, with_files):
+        """The words of a skill that is in the app: its instructions, and its files when asked."""
+        key = (skill["id"], skill.get("updatedAt"), with_files)
+        if key not in self.skill_texts:
+            status, data = self.app.call("GET", "/api/skills/%s" % skill["id"])
+            detail = data.get("skill") if status == 200 and isinstance(data, dict) else None
+            files = {}
+            if with_files:
+                for item in (detail or {}).get("files") or []:
+                    status, got = self.app.call("GET", "/api/skills/%s/files?path=%s" % (skill["id"], urllib.parse.quote(item["path"], safe="")))
+                    files[item["path"]] = got.get("content") if status == 200 and isinstance(got, dict) else None
+            self.skill_texts[key] = {"instructions": (detail or {}).get("instructions"), "files": files}
+        return self.skill_texts[key]
 
     def read_server(self):
         status, tools = self.app.call("GET", "/api/agents/tools")
@@ -575,7 +738,11 @@ class State:
         if provider["id"] not in self.upstream:
             status, data = self.app.call("POST", "/api/providers/%s/models/discover" % provider["id"], {}, timeout=90)
             if status == 200 and isinstance(data, dict) and data.get("ok"):
-                self.upstream[provider["id"]] = {"models": data.get("models") or [], "suggested": data.get("suggested") or {}}
+                self.upstream[provider["id"]] = {
+                    "models": data.get("models") or [], "suggested": data.get("suggested") or {},
+                    # From version 1.7: whether the provider's list says what its models cost.
+                    "pricesListed": data.get("pricesListed"),
+                }
             else:
                 self.upstream[provider["id"]] = {"error": (reason_of(data)[2:] or "the app answered %s" % status)}
         return self.upstream[provider["id"]]
@@ -701,6 +868,7 @@ def show_inventory(state, me):
         model = by_id.get(row_id)
         return label_of(model) if model else "a model that is gone"
 
+    skill_names = dict((s["id"], s.get("name")) for s in state.skills or [])
     head("Agents (%d)" % len(state.agents))
     for agent in state.agents:
         say("  %s (%s)%s" % (agent.get("name"), agent.get("role"), "" if agent.get("status") == "active" else ", SWITCHED OFF"))
@@ -711,10 +879,25 @@ def show_inventory(state, me):
             ", ".join(agent.get("tools") or []) or "none", agent.get("maxSteps", "?"),
             "keeps notes" if agent.get("memoryEnabled") else "keeps no notes",
             plural(len(agent.get("instructions") or ""), "character")))
+        if agent.get("skillIds"):
+            more("skills: %s" % ", ".join(skill_names.get(i, "a skill that is gone") for i in agent["skillIds"]))
     agent_names = dict((a["id"], a.get("name")) for a in state.agents)
     head("Teams (%d)" % len(state.teams))
     for team in state.teams:
         say("  %s: %s" % (team.get("name"), ", ".join(agent_names.get(i, "an agent that is gone") for i in team.get("agentIds") or []) or "no agents"))
+        if team.get("skillIds"):
+            more("skills of the team: %s" % ", ".join(skill_names.get(i, "a skill that is gone") for i in team["skillIds"]))
+    if state.skills is None:
+        head("Skills")
+        say("  This app has no skills: they came with version 1.7.")
+    else:
+        head("Skills (%d)" % len(state.skills))
+        for skill in state.skills:
+            users = len(skill.get("agentIds") or []) + len(skill.get("teamIds") or [])
+            say("  %s%s: %s of instructions, %s; %s" % (
+                skill.get("name"), "" if skill.get("enabled", True) else ", SWITCHED OFF",
+                plural(skill.get("instructionChars") or 0, "character"), plural(len(skill.get("files") or []), "file"),
+                "given to %d" % users if users else "given to no one"))
     head("Workflows (%d)" % len(state.workflows))
     for workflow in state.workflows:
         steps = workflow.get("steps") or []
@@ -921,7 +1104,69 @@ def plan_models(state, definition, options, plan):
     return slots
 
 
-def plan_agents(state, definition, options, plan, slots):
+def plan_skills(state, definition, options, plan):
+    """
+    Returns the IDs of the file's skills by their names in lower case (None for
+    one that is still to be added), or None when the app has no skills at all.
+    """
+    wanted_all = definition["skills"]
+    if state.skills is None:
+        if wanted_all:
+            said = "The file has %s, and this app has no skills: they came with version 1.7. Upgrade the app first." % plural(len(wanted_all), "skill")
+            # Providers and models can still be made as the file says.
+            if any(part in options.parts for part in ("skills", "agents", "teams")):
+                plan.problems.append(said)
+            else:
+                plan.notes.append(said)
+        return None
+    ids = {}
+    for key, wanted in wanted_all.items():
+        where = 'Skill "%s"' % wanted["name"]
+        found = [s for s in state.skills if " ".join((s.get("name") or "").split()).lower() == key]
+        size = "%s of instructions%s" % (
+            plural(len(wanted["instructions"]), "character"),
+            ", %s" % plural(len(wanted["files"]), "file") if wanted["files"] else "")
+
+        def save(wanted=wanted):
+            api(state.app, "POST", "/api/skills", {
+                "name": wanted["name"], "description": wanted["description"], "instructions": wanted["instructions"],
+                "files": wanted["files"], "onConflict": "replace",
+            })
+
+        if not found:
+            ids[key] = None
+            plan.changes.append(Change("skills", "%s: add it (%s)." % (where, size), save))
+            continue
+        skill = found[0]
+        ids[key] = skill["id"]
+        differs = []
+        if (skill.get("description") or "") != wanted["description"]:
+            differs.append("description")
+        have_files = sorted((f.get("path"), f.get("sizeBytes")) for f in skill.get("files") or [])
+        want_files = sorted((f["path"], len(f["content"].encode("utf-8"))) for f in wanted["files"])
+        same_list = have_files == want_files
+        text = state.skill_text(skill, with_files=same_list and bool(want_files))
+        if text["instructions"] != wanted["instructions"]:
+            differs.append("instructions")
+        if not same_list or any(text["files"].get(f["path"]) != f["content"] for f in wanted["files"]):
+            differs.append("files")
+        if not skill.get("enabled", True):
+            plan.notes.append("%s is switched off on the Skills page: no agent is given it. That is left as it is." % where)
+        if not differs:
+            plan.same.append('skill "%s"' % wanted["name"])
+        elif options.update:
+            plan.changes.append(Change("skills", "%s: change it to what the file says (%s)." % (where, ", ".join(differs)), save))
+        else:
+            plan.notes.append("%s is in the app and differs from the file (%s). It is left as it is; --update changes it." % (where, ", ".join(differs)))
+    return ids
+
+
+def skill_ids_of(wanted, skill_ids):
+    """The IDs of the skills an agent or a team of the file is to have; None in it for one that is not there yet."""
+    return [skill_ids.get(key) for key in wanted["skills"]]
+
+
+def plan_agents(state, definition, options, plan, slots, skill_ids):
     """Returns the names of the agents that are or will be there."""
     names = set(a.get("name", "").strip().lower() for a in state.agents)
     left = {}
@@ -946,13 +1191,18 @@ def plan_agents(state, definition, options, plan, slots):
                 left.setdefault(tool, []).append(wanted["name"])
 
         def body(wanted=wanted, tools=tools):
-            return {
+            made = {
                 "name": wanted["name"], "role": wanted["role"], "instructions": wanted["instructions"],
                 "primaryModelRowId": slots[wanted["primary"]]["id"],
                 "fallbackModelRowId": slots[wanted["fallback"]]["id"] if wanted["fallback"] else None,
                 "routingMode": "manual", "temperature": wanted["temperature"], "tools": tools,
                 "maxSteps": wanted["maxSteps"], "memoryEnabled": wanted["memory"],
             }
+            # Skills are said only where the file says them: an agent whose
+            # skills the file does not name keeps what it was given by hand.
+            if wanted["skills"] is not None and skill_ids is not None:
+                made["skillIds"] = skill_ids_of(wanted, skill_ids)
+            return made
 
         found = one_named(state.agents, wanted["name"])
         models = "%s%s" % (slots[wanted["primary"]]["label"], ", then %s" % slots[wanted["fallback"]]["label"] if wanted["fallback"] else "")
@@ -961,8 +1211,9 @@ def plan_agents(state, definition, options, plan, slots):
                 api(state.app, "POST", "/api/agents", body())
 
             names.add(wanted["name"].lower())
-            plan.changes.append(Change("agents", '%s (%s): add it, on %s%s.' % (
-                where, wanted["role"], models, "; tools: " + ", ".join(tools) if tools else ""), create))
+            plan.changes.append(Change("agents", '%s (%s): add it, on %s%s%s.' % (
+                where, wanted["role"], models, "; tools: " + ", ".join(tools) if tools else "",
+                "; skills: " + ", ".join(definition["skills"][k]["name"] for k in wanted["skills"]) if wanted["skills"] else ""), create))
             continue
         if len(found) > 1:
             plan.notes.append("%s: the app has %d agents of this name. They are left as they are." % (where, len(found)))
@@ -976,6 +1227,8 @@ def plan_agents(state, definition, options, plan, slots):
             have = agent.get(key)
             if key == "tools":
                 same = sorted(have or []) == sorted(value)
+            elif key == "skillIds":
+                same = None not in value and sorted(have or []) == sorted(value)  # None: a skill that is still to be added
             elif key == "temperature":
                 same = have is not None and abs(float(have) - value) < 1e-9
             elif key == "primaryModelRowId":
@@ -994,16 +1247,21 @@ def plan_agents(state, definition, options, plan, slots):
             def update(agent=agent, body=body):
                 api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body())
 
-            plan.changes.append(Change("agents", "%s: change it to what the file says (%s)." % (where, ", ".join(differs)), update))
+            plan.changes.append(Change("agents", "%s: change it to what the file says (%s)." % (where, ", ".join(shown(differs))), update))
         else:
-            plan.notes.append("%s is in the app and differs from the file (%s). It is left as it is; --update changes it." % (where, ", ".join(differs)))
+            plan.notes.append("%s is in the app and differs from the file (%s). It is left as it is; --update changes it." % (where, ", ".join(shown(differs))))
     for tool, who in left.items():
         need = "a sandbox runner (SANDBOX_URL)" if tool == "run_command" else "a search service (SEARCH_PROVIDER)" if tool == "web_search" else "something this server lacks"
         plan.notes.append("%s needs %s, which this server does not have: left out for %s." % (tool, need, ", ".join(who)))
     return names
 
 
-def plan_teams(state, definition, options, plan, agent_names):
+def shown(differs):
+    """What differs, in the words of the file rather than of the app's API."""
+    return ["skills" if key == "skillIds" else key for key in differs]
+
+
+def plan_teams(state, definition, options, plan, agent_names, skill_ids):
     for wanted in definition["teams"]:
         where = 'Team "%s"' % wanted["name"]
         stopped = False
@@ -1025,7 +1283,10 @@ def plan_teams(state, definition, options, plan, agent_names):
                 if len(found) != 1:
                     raise Stop(1, 'the agent "%s" is not there.' % member)
                 ids.append(found[0]["id"])
-            return {"name": wanted["name"], "description": wanted["description"], "agentIds": ids}
+            made = {"name": wanted["name"], "description": wanted["description"], "agentIds": ids}
+            if wanted["skills"] is not None and skill_ids is not None:
+                made["skillIds"] = skill_ids_of(wanted, skill_ids)
+            return made
 
         found = one_named(state.teams, wanted["name"])
         if not found:
@@ -1045,6 +1306,10 @@ def plan_teams(state, definition, options, plan, agent_names):
             differs.append("agents")
         if (team.get("description") or "") != wanted["description"]:
             differs.append("description")
+        if wanted["skills"] is not None and skill_ids is not None:
+            want_skills = skill_ids_of(wanted, skill_ids)
+            if None in want_skills or sorted(team.get("skillIds") or []) != sorted(want_skills):
+                differs.append("skills")
         if not differs:
             plan.same.append('team "%s"' % wanted["name"])
         elif options.update:
@@ -1122,8 +1387,9 @@ def make_plan(state, definition, options):
     plan = Plan()
     plan_providers(state, definition, options, plan)
     slots = plan_models(state, definition, options, plan)
-    agent_names = plan_agents(state, definition, options, plan, slots)
-    plan_teams(state, definition, options, plan, agent_names)
+    skill_ids = plan_skills(state, definition, options, plan)
+    agent_names = plan_agents(state, definition, options, plan, slots, skill_ids)
+    plan_teams(state, definition, options, plan, agent_names, skill_ids)
     plan_workflows(state, definition, options, plan, agent_names)
     plan.slots = slots
     return plan
@@ -1166,6 +1432,124 @@ def test_chat(state, definition, slots, everything=False):
             row("FAILED", "%s: %s" % (label, short((data or {}).get("error") or reason_of(data)[2:] or "the app answered %s" % status, 900)))
     if not done:
         row("Nothing", "the app has no chat model." if everything else "the file names no chat model that is in the app.")
+    return failed
+
+
+# What a provider answers when a model cannot be used with what the app has:
+# no access, no credit, no such model. Not 408 and 429 (not now), not 5xx.
+REFUSALS = (400, 401, 402, 403, 404, 405, 410, 422)
+# A model is asked for one word and waited for this long; one that takes
+# longer is not judged.
+USABLE_WAIT_SECONDS = 100
+
+
+def refusal_of(text):
+    """The provider's refusal in an error of the app's model test: its HTTP status, or None."""
+    match = re.search(r"Provider responded (\d{3})", text or "")
+    code = int(match.group(1)) if match else None
+    return code if code in REFUSALS else None
+
+
+def only_usable(state, slots):
+    """
+    Switch off the models that cannot be used. Looks at every model that is
+    switched on, of a provider that is switched on, and that the file does not
+    name. Returns how many things failed.
+    """
+    head("Only what can be used: the models the file does not name")
+    named = set(found["id"] for found in slots.values() if found and found.get("id"))
+    switch_off = []  # (model, label, why)
+    undecided = []   # (label, why)
+    kept = 0
+    asked = 0
+    media = 0
+    unpriced = []
+    for provider in sorted(state.providers, key=lambda p: (p.get("name") or "").lower()):
+        if provider.get("status", "enabled") != "enabled":
+            continue
+        models = [m for m in state.models_of(provider) if m.get("enabled", True) and m["id"] not in named]
+        if not models:
+            continue
+        listed = state.listed(provider)
+        suggested = listed.get("suggested") or {}
+        keyless_provider = provider.get("authType") == "none"
+        # A provider that lists a great many models and says nothing of their
+        # prices: one word from each would be hundreds of requests.
+        if not listed.get("pricesListed") and len(models) > 120:
+            unpriced.append("%s (%d models)" % (provider.get("name"), len(models)))
+            continue
+        for model in sorted(models, key=lambda m: m.get("modelId", "")):
+            label = "%s of %s" % (label_of(model), provider.get("name"))
+            said = suggested.get(model.get("modelId")) or {}
+            if keyless_provider and said.get("billed") is True:
+                switch_off.append((model, label, "the provider bills for it, and has no key here"))
+                continue
+            capabilities = caps_of(model)
+            if capabilities and "text" not in capabilities:
+                # A model for pictures, video, speech, listening or embeddings: a
+                # word cannot try it, and a picture or a voice is not made to find out.
+                media += 1
+                continue
+            if asked:
+                time.sleep(1.2)  # a free provider takes one request a second
+            asked += 1
+            try:
+                status, data = state.app.call("POST", "/api/models/%s/test" % model["id"], {}, timeout=USABLE_WAIT_SECONDS)
+            except Stop as err:
+                if err.code != 4:
+                    raise
+                # The model took too long, or the app is gone: the app is asked, and says which.
+                state.app.call("GET", "/api/health", timeout=15)
+                undecided.append((label, "no answer within %d s" % USABLE_WAIT_SECONDS))
+                continue
+            if status == 200 and isinstance(data, dict) and data.get("ok"):
+                kept += 1
+                continue
+            error = (data or {}).get("error") if isinstance(data, dict) else None
+            error = error if isinstance(error, str) else reason_of(data)[2:] or "the app answered %s" % status
+            code = refusal_of(error)
+            if code:
+                switch_off.append((model, label, "refused (%d): %s" % (code, short(error.split(": ", 1)[-1], 160))))
+            else:
+                undecided.append((label, short(error, 200)))
+    failed = 0
+    done = 0
+    reasons = {}
+    for model, label, why in switch_off:
+        status, data = state.app.call("PATCH", "/api/models/%s" % model["id"], {"enabled": False})
+        if status == 200:
+            done += 1
+            reasons.setdefault(why if why.startswith("the provider bills") else "the provider refused one word", []).append((label, why))
+        else:
+            failed += 1
+            row("FAILED", "switching off %s: %s" % (label, reason_of(data)[2:] or "the app answered %s" % status))
+    row("Asked", "%s for one word." % plural(asked, "chat model"))
+    row("Stay on", "%s answered." % plural(kept, "model"))
+    for reason, items in sorted(reasons.items()):
+        row("Switched off", "%s: %s." % (plural(len(items), "model"), reason))
+        shown_items = items[:LISTED_AT_MOST]
+        if reason.startswith("the provider bills"):
+            more(", ".join(label for label, _ in shown_items) + (", and %d more" % (len(items) - len(shown_items)) if len(items) > len(shown_items) else ""), indent=15)
+        else:
+            for label, why in shown_items:
+                more("%s: %s" % (label, why), indent=15)
+            if len(items) > len(shown_items):
+                more("and %d more" % (len(items) - len(shown_items)), indent=15)
+    if not done and not failed:
+        row("Switched off", "nothing: no model was found that cannot be used.")
+    if undecided:
+        row("Not judged", "%s did not answer this time (limited, busy, or slow) and %s as %s. Run this again later." % (
+            plural(len(undecided), "model"), "stays" if len(undecided) == 1 else "stay", "it is" if len(undecided) == 1 else "they are"))
+        for label, why in undecided[:LISTED_AT_MOST]:
+            more("%s: %s" % (label, why), indent=15)
+    if media:
+        row("Not asked", "%s for pictures, video, speech, listening or embeddings: a word cannot try %s." % (
+            plural(media, "model"), "it" if media == 1 else "them"))
+    for name in unpriced:
+        row("Not asked", "%s: the provider's list does not say what they cost, and one word from each is too many requests." % name)
+    if done:
+        state.read()
+        more("A model that was switched off is switched on again on the Models page.", indent=2)
     return failed
 
 
@@ -1282,7 +1666,7 @@ def try_run(state, definition, slots, keep):
     head("A small project, planned by the manager model")
     failed = try_project(state, definition, spec, manager, keep, every_agent=False)
     if spec["everyAgent"]:
-        head("A small task for every agent of the file")
+        head('A small task for every agent of the team "%s"' % spec["team"] if spec["team"] else "A small task for every agent of the file")
         failed += try_project(state, definition, spec, manager, keep, every_agent=True)
     return failed
 
@@ -1294,7 +1678,7 @@ def try_project(state, definition, spec, manager, keep, every_agent):
     workflow = None
     if every_agent:
         # One step for each agent of the file, by its name: no model has to plan, and every agent is seen at work.
-        names = [a["name"] for a in definition["agents"] if len(one_named(state.agents, a["name"])) == 1]
+        names = [name for name in every_agent_names(definition, spec["team"]) if len(one_named(state.agents, name)) == 1]
         if not names:
             row("FAILED", "none of the agents of the file is in the app.")
             return 1
@@ -1431,6 +1815,7 @@ def options_from(argv):
     parser.add_argument("--only", default="")
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--test-all", action="store_true")
+    parser.add_argument("--only-usable", action="store_true")
     parser.add_argument("--try-run", action="store_true")
     parser.add_argument("--keep-try-run", action="store_true")
     parser.add_argument("--test-media", action="store_true")
@@ -1570,6 +1955,8 @@ def run(argv):
             if not_tried(options, "%s"):
                 say("Dry run: %s." % not_tried(options, "%s"))
             return 0
+        if options.only_usable:
+            failed += only_usable(state, plan.slots)
         if options.test or options.test_all:
             failed += test_chat(state, definition, plan.slots, options.test_all)
         if options.test_media:
@@ -1586,7 +1973,7 @@ def run(argv):
 
 def not_tried(options, text):
     """What a dry run leaves out of the checks that were asked for."""
-    tests = options.test or options.test_all or options.test_media
+    tests = options.test or options.test_all or options.test_media or options.only_usable
     if tests and options.try_run:
         return text % "no model was tried and no project was run"
     if options.try_run:

@@ -29,9 +29,12 @@
 #   --dry-run            Say what would be done, and do nothing.
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but differs.
-#   --only <parts>       providers, models, agents, teams, workflows (separated by commas).
+#   --only <parts>       providers, models, skills, agents, teams, workflows (separated by commas).
 #   --test               Afterwards, ask each chat model of the file for one word.
 #   --test-all           The same, for every chat model that is in the app.
+#   --only-usable        Afterwards, switch off the models that cannot be used:
+#                        billed ones of a provider without a key, and chat
+#                        models the provider refuses one word.
 #   --test-media         Afterwards, one picture and one spoken sentence from the
 #                        image and speech models of the file, joined, then deleted.
 #   --try-run            Afterwards, a small project on the models of the file,
@@ -66,9 +69,9 @@ while [ "$#" -gt 0 ]; do
     --volumes) need_value "$@"; VOLUMES="$2"; shift 2 ;;
     --wings-config) need_value "$@"; WINGS_CONFIG="$2"; shift 2 ;;
     --file | --user | --only) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
-    --dry-run | --yes | --update | --test | --test-all | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
     -h | --help)
-      sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;
