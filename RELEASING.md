@@ -294,7 +294,7 @@ server.
 
 ### From 1.7 to 1.8
 
-- Nothing has to be configured. At its first start 1.8 adds one column to
+- Nothing has to be configured. At its first start 1.8 adds its columns to
   the database.
 - From that start on the app checks its chat models by itself: a few seconds
   after the start it asks every model that was not checked in the last six
@@ -310,6 +310,24 @@ server.
   upgrade, and give the accounts that run much (a team's shared account, the
   account the host scripts sign in with) the limit they need. An owner is
   not limited. `DEFAULT_TOKEN_LIMIT` in `.env` sets what a new account gets.
+- **A user no longer sees providers and models, and chooses none.** After
+  the upgrade the app chooses for every user: the cheapest model of each kind
+  that is switched on. **Open the Models page and mark the models that are
+  for users** (the switch "for users" on each model); the page says which
+  model users work with now. A project a user made before the upgrade keeps
+  what it was set to in the database, and runs with the app's choice from now
+  on. Administrators and owners choose as before.
+- An API client that uses a user's key has to send `"model": "auto"`: a name
+  of a model is answered 404 `model_not_found` from this version on. A key of
+  an administrator works as before.
+- **Read the descriptions of your agents, teams and workflows once as a user
+  would.** They are shown to users as written. Where one says which model a
+  project needs, say what it makes instead: the app tells an administrator
+  what a project needs when the project is made. The sentence the Reel
+  template added to a description is left out for users by the app; what you
+  wrote yourself is yours to change. An installation that was set up from
+  `scripts/host/workforce.json` gets the new descriptions with the workforce
+  action and `--only teams,workflows --update`.
 - Going back to 1.7 needs nothing: 1.7 does not read the new columns.
 
 ### Roll back

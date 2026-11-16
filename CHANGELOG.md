@@ -5,6 +5,91 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.8.0-rc.3] - 2026-11-16
+
+The third candidate for 1.8: a user is shown their own work, and nothing of
+how the installation is set up. Providers and models are for administrators.
+
+### Changed
+
+- **A user sees no provider and no model**, on no page and in no answer of
+  the API: not their names, not the lists, not a price or a cost. Providers,
+  Models and Skills are not in a user's menu, and their pages and their API
+  (`GET /api/providers`, `/api/models`, `/api/skills`, `/api/agents/tools`)
+  are for administrators. Agents, teams and workflows are shown to a user by
+  name and by what they are for: not what an agent is told, which model,
+  tools and skills it has, nor what a workflow's steps tell their agents.
+- **A user chooses no model: the app does.** In Chat, in a project, in
+  Creative Studio, for a knowledge base that is searched by meaning, and
+  with an API key, a model a user names is not used. An administrator marks
+  the models that are **for users** on the Models page; while none of a kind
+  is marked, the app takes the cheapest of that kind that is switched on.
+  In Chat on the site, when the first choice fails, the next ones are asked
+  (up to three in all). The Models page says which model users work with
+  now, kind by kind.
+- **What went wrong is said to a user without the setup.** An error, a
+  failed task, a notification or a note of a running task that names a
+  provider or a model, or holds what a provider answered, reads "This could
+  not be done just now. Try again in a moment; if it stays that way, tell an
+  administrator." An administrator who opens the same project reads what the
+  provider said. Errors about the request itself are said as before: tokens
+  used up, a file too large, a name that is taken.
+- **The public API with a user's key** lists one model, `auto`
+  (`GET /api/v1/models`), and takes `"model": "auto"`; any other name is
+  answered 404 `model_not_found`, in the same words whether there is such a
+  model or not. Its answers say `auto` where they said the model. An
+  administrator's key names models as before, and can send `auto` too. A
+  user's key is limited to no model and to no cost a month.
+- **What the app writes about its own work names nothing to a user.** The
+  line an image, a video or a voice-over leaves in a task is written without
+  the model for a user's project ("Generated image. Asset …"), and read
+  without it by a user where an older line has it. A result that could not
+  be put together reads "(What the tasks made could not be put together into
+  one deliverable just now. …)" in place of what the provider said. A
+  user's project that cannot start says what is missing in plain words:
+  that the installation is not set up for it, or that its team has no agent
+  that is switched on.
+- **Creative Studio for a user** has no model to choose, no price, no extra
+  parameters and no word about providers: its advanced options are the exact
+  size, where the request takes one.
+- A user's Overview is about their own projects, files and tokens. Usage
+  shows a user tokens and requests, without providers, models and costs.
+- **The Reel template** describes a workflow by what it makes. What a project
+  needs to run it (which kinds of model, ffmpeg on the server) is said to
+  the administrator who builds the workflow, and no longer stands in the
+  description that everyone reads. A user reads a description of an older
+  version without that sentence.
+- `scripts/host/workforce.json`: the descriptions of four teams and five
+  workflows say what they make and which team goes with which workflow, and
+  no longer which models a project needs. The workforce action with
+  `--update` brings them to an installation that has the older ones.
+
+### Added
+
+- `forUsers` on a model (`POST /api/models`, `PATCH /api/models/{id}`), and
+  `users` in `GET /api/models`: what users work with, kind by kind.
+- 503 `not_set_up` when the installation has no model that can do what a
+  user asked for.
+
+### As it was
+
+- Only an owner changes a role or a token limit. An administrator sees the
+  accounts and their tokens, and is answered 403 when changing one. That is
+  how 1.7 and the second candidate already worked; this candidate adds checks
+  that hold it.
+
+### Not hidden
+
+- What a model wrote is the user's own work and is shown as it is, also when
+  a model names itself in it.
+- What an administrator wrote for people to read is shown to users as
+  written: the names and descriptions of agents, teams and workflows, and
+  the titles of a workflow's steps. Say there what something makes, not
+  which model does it.
+- A user who runs a project sees the titles of its tasks and what they
+  delivered. What a task was told is not on the pages, and for a project that
+  runs a workflow it is not in the API either.
+
 ## [1.8.0-rc.2] - 2026-11-16
 
 The second candidate for 1.8: every account has a number of tokens it may
