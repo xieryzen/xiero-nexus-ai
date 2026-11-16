@@ -7,6 +7,7 @@ import {
   type Capability,
   type Model,
 } from "@/db/schema";
+import { isFailing } from "./model-health-rules";
 
 export interface SerializedModel {
   id: string;
@@ -26,6 +27,10 @@ export interface SerializedModel {
   lastTestedAt: Date | null;
   lastTestStatus: "ok" | "error" | null;
   lastTestError: string | null;
+  /** Checks failed in a row; 0 when the last one passed. */
+  checkFailures: number;
+  /** Switched on, and left out of the model lists because its last check failed. */
+  hidden: boolean;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -81,6 +86,8 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     lastTestedAt: m.lastTestedAt,
     lastTestStatus: m.lastTestStatus,
     lastTestError: m.lastTestError,
+    checkFailures: m.checkFailures,
+    hidden: m.enabled && isFailing(m),
     notes: m.notes,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,

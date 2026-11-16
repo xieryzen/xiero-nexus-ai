@@ -5,7 +5,7 @@ import { memoryCounts } from "@/lib/agent/memory";
 import { toolStatus } from "@/lib/agent/tools";
 import { getCurrentUser } from "@/lib/auth";
 import { agentCollectionMap, sharedCollections } from "@/lib/knowledge/service";
-import { chatModels } from "@/lib/model-options";
+import { chatModels, setButNotOffered } from "@/lib/model-options";
 import { agentSkillMap, listSkills } from "@/lib/skills/service";
 import { serializeAgents, serializeTeam } from "@/lib/workforce";
 import { PageHeader } from "@/components/ui";
@@ -50,6 +50,7 @@ export default function AgentsPage() {
       <AgentsManager
         initialAgents={serializedAgents}
         models={modelOptions}
+        setModels={setButNotOffered(agentRows.flatMap((a) => [a.primaryModelRowId, a.fallbackModelRowId]), modelOptions)}
         toolSetup={{ sandbox: status.sandbox, search: status.search }}
         collections={sharedCollections()}
         skills={skills}

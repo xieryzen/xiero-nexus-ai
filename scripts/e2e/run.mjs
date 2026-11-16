@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   KEEP=1                                        keep the temporary folder
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
@@ -206,6 +206,11 @@ const appEnv = {
   // itself is tested in tests/retry.test.ts and scripts/host/test/workforce.sh.
   PROVIDER_RETRIES: "0",
   NEXUS_WORKER: "",
+  // The app would check its models by itself, at moments of its own choosing:
+  // the checks ask for a round when they want one. That the server does it by
+  // itself is looked at after the last start, below.
+  MODEL_HEALTH_INTERVAL_MINUTES: "0",
+  MODEL_HEALTH_RETRY_SECONDS: "1",
 };
 const startApp = () =>
   start("app", [join(root, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(ports.app), "-H", HOST], appEnv);
@@ -361,6 +366,56 @@ async function stopAndStartAgain() {
   afterStart.close();
   check("an installation without an owner: its first administrator is the owner after the start", owners === 1 && whoAmI?.user?.username === "admin" && whoAmI.user.role === "owner", { owners, user: whoAmI?.user });
   check("  nobody else is, and the audit log says so", roles.find((r) => r.role === "owner")?.n === 1 && assigned.length === 1 && /"username":"admin"/.test(assigned[0]?.metadata ?? ""), { roles, assigned });
+
+  // ── The server checks its models by itself ──
+  console.log("\n── Checking the models: a server that is set to do so asks them by itself, soon after its start");
+  const before2 = app;
+  const ended = new Promise((resolve) => before2.child.once("exit", resolve));
+  before2.child.kill("SIGTERM");
+  await Promise.race([ended, sleep(10_000)]);
+  if (!before2.exited) await stop(before2);
+  // Made so by hand, while nothing runs: every model was checked a moment ago
+  // and answered, except one that works and one that its provider refuses now.
+  await fetch(`${mockUrl}/__force?model=health-switch&status=403`).catch(() => undefined);
+  await fetch(`${mockUrl}/__reset`).catch(() => undefined);
+  const hand = new Database(appEnv.DATABASE_PATH, { timeout: 5000 });
+  hand.prepare("UPDATE models SET last_tested_at = ?, last_test_status = 'ok', last_test_error = NULL, check_failures = 0").run(Date.now());
+  const due = hand.prepare("UPDATE models SET last_tested_at = NULL, last_test_status = NULL WHERE model_id IN ('health-steady', 'health-switch')").run().changes;
+  hand.close();
+  running.splice(running.indexOf(before2), 1);
+  appEnv.MODEL_HEALTH_INTERVAL_MINUTES = "360";
+  app = startApp();
+  running.push(app);
+  if (!(await ready(app, `${appUrl}/login`))) {
+    check("the server starts with the automatic check switched on", false, app.output.slice(-600));
+    return 1;
+  }
+  const modelsNow = async () => {
+    const answer = await (await fetch(`${appUrl}/api/models`, { headers: { cookie } })).json().catch(() => null);
+    return new Map((answer?.models ?? []).map((m) => [m.modelId, m]));
+  };
+  let seen = await modelsNow();
+  const waitFrom = Date.now();
+  while (!(seen.get("health-steady")?.lastTestedAt && seen.get("health-switch")?.lastTestedAt) && Date.now() - waitFrom < 40_000) {
+    await sleep(500);
+    seen = await modelsNow();
+  }
+  check("two models were never checked", due === 2, due);
+  check("started with the check switched on, the server asks them without being told to", seen.get("health-steady")?.lastTestStatus === "ok" && seen.get("health-switch")?.lastTestStatus === "error", [seen.get("health-steady")?.lastTestStatus, seen.get("health-switch")?.lastTestStatus]);
+  check("  the one that failed is left out of the lists, the one that answered is not", seen.get("health-switch")?.hidden === true && seen.get("health-steady")?.hidden === false, [seen.get("health-switch")?.hidden, seen.get("health-steady")?.hidden]);
+  await sleep(2500);
+  // A check is known by what it asks.
+  const asked = (await (await fetch(`${mockUrl}/__log`)).json().catch(() => []))
+    .filter((l) => l.method === "POST" && l.body?.messages?.[0]?.content === "Reply with the single word: ok")
+    .map((l) => l.body?.model)
+    .sort();
+  check("  a model that was checked a moment ago is not asked again", asked.join(" ") === "health-steady health-switch", asked);
+  const healthNow = await (await fetch(`${appUrl}/api/models/health`, { headers: { cookie } })).json().catch(() => null);
+  check("  the Models page can say that the check is on, how often, and what the last round found", healthNow?.health?.automatic === true && healthNow.health.intervalMinutes === 360 && healthNow.health.last?.checked === 2 && healthNow.health.last?.failed === 1, healthNow?.health);
+  const auditDb = new Database(appEnv.DATABASE_PATH, { readonly: true, timeout: 5000 });
+  const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL").get().n;
+  auditDb.close();
+  check("  the audit log says that the system took the model away", hiddenBySystem === 1, hiddenBySystem);
 
   console.log(`\n${passed} passed, ${failed} failed (stopping and starting again)`);
   if (process.env.GITHUB_ACTIONS === "true") {

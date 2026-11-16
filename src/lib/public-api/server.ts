@@ -17,6 +17,7 @@ import { isMediaOnly } from "../capabilities";
 import { env } from "../env";
 import { AppError } from "../errors";
 import { readBodyCapped } from "../media/http";
+import { isFailing } from "../model-health-rules";
 import { withApiKey } from "../request-context";
 import type { ApiScope } from "../validation";
 import { RequestError, findModel, publicModelNames, type ListableModel } from "./openai-format";
@@ -123,6 +124,8 @@ export interface ApiModel extends ListableModel {
   displayName: string | null;
   capabilities: Capability[];
   contextWindow: number | null;
+  /** It failed its last check: it is not listed, and still answers to its name. */
+  failing: boolean;
 }
 
 /** The enabled models a key may use, on enabled providers whose adapter exists. */
@@ -140,6 +143,7 @@ export function apiModels(caller: ApiCaller): ApiModel[] {
       modelId: models.modelId,
       displayName: models.displayName,
       contextWindow: models.contextWindow,
+      lastTestStatus: models.lastTestStatus,
       providerName: providers.name,
       providerStatus: providers.status,
       adapter: providers.adapter,
@@ -157,6 +161,7 @@ export function apiModels(caller: ApiCaller): ApiModel[] {
       displayName: m.displayName,
       contextWindow: m.contextWindow,
       capabilities: caps.get(m.rowId) ?? [],
+      failing: isFailing(m),
     }));
 }
 

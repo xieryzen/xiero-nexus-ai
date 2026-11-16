@@ -5,6 +5,7 @@ import { projectRuns, projectTasks, projects, type ProjectRun } from "@/db/schem
 import { recoverJobs, startDueJobs } from "./jobs";
 import { RENDER_MAX_AGE_MS } from "./media/render";
 import { failStaleRenders, refreshPendingVideos } from "./media/service";
+import { ensureHealthRound } from "./model-health";
 import { deliverPendingWebhooks, notify } from "./notifications";
 import { executeRun } from "./orchestrator";
 import { publish } from "./run-bus";
@@ -20,6 +21,7 @@ import { stopOnSignal, stopping } from "./shutdown";
  *   - starts the runs of schedules that are due,
  *   - asks providers about videos that are still being generated,
  *   - joins clips and embeds knowledge documents,
+ *   - checks that the models still answer (model-health.ts),
  *   - delivers notifications to webhooks.
  *
  * It starts with the server (src/instrumentation.ts) and needs nothing
@@ -260,6 +262,7 @@ const STEPS: [string, () => void | Promise<unknown>][] = [
   ["videos", () => refreshPendingVideos()],
   ["jobs", () => void startDueJobs()],
   ["webhooks", () => deliverPendingWebhooks()],
+  ["models", () => ensureHealthRound()],
   ["housekeeping", housekeeping],
 ];
 

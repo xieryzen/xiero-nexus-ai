@@ -292,6 +292,19 @@ server.
   owner's account (it asks for an administrator by that word): use the
   scripts of the same version as the app.
 
+### From 1.7 to 1.8
+
+- Nothing has to be configured. At its first start 1.8 adds one column to
+  the database.
+- From that start on the app checks its chat models by itself: a few seconds
+  after the start it asks every model that was not checked in the last six
+  hours for one word, one model a second. **A model that fails is left out
+  of the model lists** until a check passes again; the Models page shows
+  which, and why. Models whose last test had failed before the upgrade are
+  left out from the first moment, and asked again in that first round.
+- `MODEL_HEALTH_INTERVAL_MINUTES` in `.env` sets how often (`0` = never).
+- Going back to 1.7 needs nothing: 1.7 does not read the new column.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of
