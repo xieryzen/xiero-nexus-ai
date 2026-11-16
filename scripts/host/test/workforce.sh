@@ -686,6 +686,7 @@ is "(the skills of the test are deleted again)" "${SKILLS}" "$(ask /api/skills '
 section "An account the app is to have"
 run -- --user boss --file "${FILE}" --inventory-only
 check "the accounts are in what the app has, by role" line 'Accounts +1 owner: boss'
+check "  and so is how the app checks its models" line 'Model check +the app asks every chat model for one word, not automatic \(MODEL_HEALTH_INTERVAL_MINUTES=0\); no round since the app started; (no model is|1 model is|[0-9]+ models are) left out of its lists now'
 ACCOUNT=(--only accounts --account rina --account-email Rina@Example.test --account-role owner)
 run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-rina" -- --user boss --file "${FILE}" --dry-run "${ACCOUNT[@]}"
 is "the plan ends well" "0" "${CODE}"
