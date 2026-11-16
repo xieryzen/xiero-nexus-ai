@@ -186,8 +186,16 @@ one real server; what was seen there, and what was not, is under Notes.
   the try-run's other project it took a file whose content it had been
   shown as the deliverable for "not shown", and the manager began that
   summary with its thoughts on files it could not open. What the reviewer
-  and the manager are told was changed for both (see Changed); **those two
-  changes were not seen on a server when this was released.**
+  and the manager are told was changed for both (see Changed); those two
+  changes were not seen on a server when this was released.
+- **After the release, on that server with 1.7.0:** the try-run again. The
+  reviewer quoted the file of a task whose deliverable was that file, and
+  judged it; the manager summed the tasks up without a word on opening
+  files. The verdicts were "concerns" for the planned project, with
+  findings in the README's own words, and "fail" for the project that asks
+  each agent for one sentence: a reviewer with the skills of a product team
+  does not pass a sentence as a specification. That check shows each agent
+  at work with its model and its tools, and its verdict says nothing more.
 - **An owner's account and two skills of the owner's own** reached that
   server sealed for the node, through the options of a workflow anyone can
   read, and the account signed in with its password there.
