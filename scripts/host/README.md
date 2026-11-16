@@ -366,6 +366,12 @@ It adds what is missing and leaves the rest:
   a `.skill` or a `.zip`, as on that page; it replaces a skill of the same
   name). Agents and teams that name it get it when the app has it, and are
   made without it until then: the program says who waits for it.
+  `--skill-url <address>` does the same for a file at an https address: the
+  program fetches it and uploads it, and follows the address of a file's
+  page at MediaFire to the file. With `--dry-run` the file is fetched and
+  the skills it holds are named. A site that wants to see a browser or a
+  sign-in first gives no file: download it yourself then, and upload it on
+  the Skills page.
 - A provider that takes no key (`"authType": "none"`) is added when the app
   does not have it, with the address of the file. One that takes a key is not
   added: the program has no keys, and says that the provider is to be added
@@ -772,14 +778,19 @@ node first, and only the node opens it:
 # 2. Seal with that line. What comes out is one word of letters and dots.
 printf '%s' 'the password' | bash scripts/host/sealed-output.sh seal-line '<the line>'
 bash scripts/host/sealed-output.sh seal-line '<the line>' < my-skill/SKILL.md
+printf '%s' 'https://example.com/my-skills.zip' | bash scripts/host/sealed-output.sh seal-line '<the line>'
 # 3. Give it in the options of the action "workforce":
 #    --only accounts --account dewi --account-email dewi@example.com --account-role owner --account-password-sealed <word>
 #    --only skills,teams --update --skill-sealed <word>
+#    --only skills,teams --update --skill-url-sealed <word>
 ```
 
 `workforce.sh` opens it on the node, hands the password to `workforce.py`
 in its environment and the skill as a file of its own that is deleted when
-the program ends. Neither is printed, by the runner or by the node. All
+the program ends. An address is sealed for the same reason: whoever has it
+has the file. The node fetches the file itself; of the address the output
+names the host and the file. Nothing of this is printed in the workflow's
+log. All
 options of a run together may be about 65,000 characters: a skill of some
 ten thousand words fits; a larger one, or one with many files, is uploaded
 on the Skills page.

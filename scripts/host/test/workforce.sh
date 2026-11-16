@@ -26,7 +26,10 @@ root="$(cd "${host}/../.." && pwd)"
 APP_PORT="${APP_PORT:-3110}"
 MOCK_PORT="${MOCK_PORT:-4020}"
 CDN_PORT="${CDN_PORT:-4021}"
+# A plain web server of this test, for skill files that are fetched from an address.
+WWW_PORT="${WWW_PORT:-4022}"
 APP="http://127.0.0.1:${APP_PORT}"
+WWW="http://127.0.0.1:${WWW_PORT}"
 MOCK="http://127.0.0.1:${MOCK_PORT}"
 PASS="correct-horse-battery-staple"
 UUID="0a11ce00-1111-4222-8333-444455556666"
@@ -557,7 +560,7 @@ PYTHON_END
 run -- --user boss --file "${FILE}" --yes --upload-skill "${WORK}/own/bundle.skill"
 is "an archive is uploaded too" "0" "${CODE}"
 check "  with its files" line 'added "house-checklist": [0-9]+ characters of instructions, 1 file\.'
-check "  and what is no text is left out, and named" line "left out of it: .*logo\.png"
+check "  and what is no text is left out, with how many and why, and named" line "left out of it: 1 file \(it is not text .*\): house-checklist/logo\.png"
 # A skill that a team was given by hand stays when the file gives it others.
 HOUSE_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'house-checklist'][0]")"
 TEAM_ID="$(ask /api/teams "[t['id'] for t in d['teams'] if t['name'] == '${OWN_TEAM}'][0]")"
@@ -581,6 +584,78 @@ is "a file that is neither text nor an archive: the app refuses it, and it ends 
 check "  with what the app said" says "neither text nor a ZIP archive"
 wrong "a skill of your own cannot also be written in the file" \
   'd["skills"]["both"] = {"uploaded": True, "instructions": "Words."}' 'what it says is in the app, not in this file'
+
+# Skill files at an address. One archive holds two skills, each a folder with a SKILL.md.
+mkdir -p "${WORK}/www"
+python3 - "${WORK}/www" << 'PYTHON_END'
+import io, sys, zipfile
+
+def words(name):
+    return "---\nname: %s\ndescription: Fetched from an address.\n---\n\n# %s\n\nFetched, not typed.\n" % (name, name)
+
+with zipfile.ZipFile(sys.argv[1] + "/all-skills.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("all/fetched-one/SKILL.md", words("fetched-one"))
+    archive.writestr("all/fetched-one/references/notes.md", "# Notes\n")
+    archive.writestr("all/more/fetched-two/SKILL.md", words("fetched-two"))
+with zipfile.ZipFile(sys.argv[1] + "/fetched-three.skill", "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("fetched-three/SKILL.md", words("fetched-three"))
+open(sys.argv[1] + "/sign-in.html", "w").write("<!DOCTYPE html>\n<html><body>Sign in to download.</body></html>\n")
+PYTHON_END
+(cd "${WORK}/www" && exec python3 -m http.server "${WWW_PORT}" --bind 127.0.0.1) > "${WORK}/www.log" 2>&1 &
+PIDS+=("$!")
+for _ in $(seq 1 40); do
+  [ "$(curl -s -o /dev/null -m 2 -w '%{http_code}' "${WWW}/sign-in.html" 2> /dev/null)" = "200" ] && break
+  sleep 0.25
+done
+before_fetch="$(ask /api/skills 'len(d["skills"])')"
+run -- --user boss --file "${FILE}" --dry-run --skill-url "${WWW}/all-skills.zip"
+is "a dry run fetches a skill file from an address" "0" "${CODE}"
+check "  and names the skills it holds, with their files" \
+  line '\+ Skill file "all-skills\.zip" \([0-9]+ bytes\), from 127\.0\.0\.1: upload it; a skill of the same name is replaced\. It holds 2 skills: "fetched-one" with 1 more file, "fetched-two"\.'
+is "  nothing is uploaded" "${before_fetch}" "$(ask /api/skills 'len(d["skills"])')"
+run -- --user boss --file "${FILE}" --yes --skill-url "${WWW}/all-skills.zip" --skill-url "${WWW}/fetched-three.skill"
+is "fetched for good, it ends well" "0" "${CODE}"
+check "the skills of the archive are added, with their files" line 'added "fetched-one": [0-9]+ characters of instructions, 1 file\.'
+check "  and so is the one of the second address" line 'done +Skill file "fetched-three\.skill" \([0-9]+ bytes\), from 127\.0\.0\.1: upload it'
+is "the app has the three" "fetched-one fetched-three fetched-two" "$(ask /api/skills '" ".join(sorted(s["name"] for s in d["skills"] if s["name"].startswith("fetched-")))')"
+is "  with the words that were fetched" "True" "$(ask "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'fetched-two'][0]")" '"Fetched, not typed." in d["skill"]["instructions"]')"
+run -- --user boss --file "${FILE}" --yes --skill-url "${WWW}/sign-in.html"
+is "an address that gives a web page in place of the file stands in the way" "1" "${CODE}"
+check "  and is said, without the whole address" says "PROBLEM: Skill from 127.0.0.1 (sign-in.html): the site gave a web page in place of the file"
+run -- --user boss --file "${FILE}" --yes --skill-url "${WWW}/no-such-file.skill"
+check "  and so does an address without a file" says "Skill from 127.0.0.1 (no-such-file.skill): the site answered 404: no such file."
+run -- --user boss --file "${FILE}" --dry-run --skill-url "http://example.com/a.skill"
+is "an address that is not https is a wrong option" "2" "${CODE}"
+run NEXUS_SKILL_URLS="${WWW}/fetched-three.skill" -- --user boss --file "${FILE}" --dry-run
+check "addresses are also taken from the environment" line '\+ Skill file "fetched-three\.skill"'
+# The page of a file at MediaFire names the file itself in one of two ways.
+is "MediaFire's page of a file is followed to the file" "https://download1.mediafire.com/a/k/x.zip?p=1&q=2 https://download22.mediafire.com/b/k/y.skill.zip None" "$(python3 - "${host}" << 'PYTHON_END'
+import base64, sys
+sys.path.insert(0, sys.argv[1])
+import workforce
+plain = '<a class="input popsok" aria-label="Download file" href="https://download1.mediafire.com/a/k/x.zip?p=1&amp;q=2" id="downloadButton">'
+scrambled = '<a class="input popsok" href="javascript:void(0)" data-scrambled-url="%s" id="downloadButton">' % base64.b64encode(b"https://download22.mediafire.com/b/k/y.skill.zip").decode()
+print(workforce.mediafire_direct(plain), workforce.mediafire_direct(scrambled), workforce.mediafire_direct("<html>Just a moment...</html>"))
+PYTHON_END
+)"
+is "a site passes a request on to another https address, and to no other" "onwards refused refused" "$(python3 - "${host}" << 'PYTHON_END'
+import sys, urllib.request
+sys.path.insert(0, sys.argv[1])
+import workforce
+asked = urllib.request.Request("https://files.example/a.skill")
+said = []
+for onwards in ("https://cdn.example/a.skill", "http://127.0.0.1:8080/secret", "http://cdn.example/a.skill"):
+    try:
+        workforce.OnlyOnwardsSafely(False).redirect_request(asked, None, 302, "Found", {}, onwards)
+        said.append("onwards")
+    except workforce.NotFetched:
+        said.append("refused")
+print(" ".join(said))
+PYTHON_END
+)"
+for fetched in fetched-one fetched-two fetched-three; do
+  api DELETE "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == '${fetched}'][0]")" > /dev/null
+done
 # Taken out again, so that what follows counts the skills of the file.
 api DELETE "/api/skills/${HOUSE_ID}" > /dev/null
 OWN_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == '${OWN_SKILL}'][0]")"
@@ -849,6 +924,11 @@ check "the skill is uploaded" says 'added "sealed-house-rules"'
 is "  with the words that came sealed" "True" "$(ask "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'sealed-house-rules'][0]")" '"Only the node read this on its way." in d["skill"]["instructions"]')"
 check_not "neither the password nor the words are in what it says" grep -qF -e "a-password-sealed-for-the-node" -e "Only the node read this" "${OUT}"
 is "what was opened is gone from the node again" "0" "$(find "${TMPDIR:-/tmp}" -maxdepth 3 -name 'SKILL.md' -newer "${WORK}/own/sealed.md" -exec grep -l 'Only the node read this' {} + 2> /dev/null | wc -l | tr -d ' ')"
+SEALED_ADDRESS="$(printf '%s' "${WWW}/fetched-three.skill" | bash "${host}/sealed-output.sh" seal-line "${NODE_PUBLIC}")"
+node_run NEXUS_PASSWORD="${PASS}" XIERO_INPUT_KEY="${NODE_KEY}/key.pem" -- --file "${FILE}" --yes --only skills --skill-url-sealed "${SEALED_ADDRESS}"
+is "the address of a skill file can come sealed too" "0" "${CODE}"
+check "  the file is fetched from it and uploaded" says 'added "fetched-three"'
+api DELETE "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'fetched-three'][0]")" > /dev/null
 OTHER_PUBLIC="$(bash "${host}/sealed-output.sh" keygen "${WORK}/other-key" | tail -n 1)"
 node_run NEXUS_PASSWORD="${PASS}" XIERO_INPUT_KEY="${NODE_KEY}/key.pem" -- --file "${FILE}" --yes --only accounts --account wati --account-email wati@example.test \
   --account-password-sealed "$(printf '%s' 'sealed-for-another-node' | bash "${host}/sealed-output.sh" seal-line "${OTHER_PUBLIC}")"

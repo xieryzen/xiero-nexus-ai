@@ -42,6 +42,13 @@
 #                        SKILL.md, or a .skill or .zip. May be given again.
 #   --skill-sealed <text>
 #                        The same, with the file itself sealed for this node.
+#   --skill-url <addr>   The same, for a file at an https address, which is
+#                        fetched from this node: a SKILL.md, a .skill or a
+#                        .zip. The address of a file's page at MediaFire is
+#                        followed to the file. May be given again.
+#   --skill-url-sealed <text>
+#                        The same, with the address sealed for this node: an
+#                        address is all it takes to have the file.
 #   --test               Afterwards, ask each chat model of the file for one word.
 #   --test-all           The same, for every chat model that is in the app.
 #   --only-usable        Afterwards, switch off the models that cannot be used:
@@ -75,6 +82,7 @@ WINGS_CONFIG="/etc/pterodactyl/config.yml"
 PASS_ON=()
 SEALED_PASSWORD=""
 SEALED_SKILLS=()
+SEALED_URLS=()
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -89,12 +97,13 @@ while [ "$#" -gt 0 ]; do
     --env-file) need_value "$@"; ENV_FILE="$2"; shift 2 ;;
     --volumes) need_value "$@"; VOLUMES="$2"; shift 2 ;;
     --wings-config) need_value "$@"; WINGS_CONFIG="$2"; shift 2 ;;
-    --file | --user | --only | --account | --account-email | --account-role | --upload-skill) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
+    --file | --user | --only | --account | --account-email | --account-role | --upload-skill | --skill-url) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
+    --skill-url-sealed) need_value "$@"; SEALED_URLS+=("$2"); shift 2 ;;
     --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
     --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
     -h | --help)
-      sed -n '2,65p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;
@@ -214,7 +223,7 @@ ARGS=(--url "${URL}")
 OPENED=""
 tidy() { [ -z "${OPENED}" ] || rm -rf "${OPENED}"; }
 trap tidy EXIT
-if [ -n "${SEALED_PASSWORD}" ] || [ "${#SEALED_SKILLS[@]}" -gt 0 ]; then
+if [ -n "${SEALED_PASSWORD}" ] || [ "${#SEALED_SKILLS[@]}" -gt 0 ] || [ "${#SEALED_URLS[@]}" -gt 0 ]; then
   key="${XIERO_INPUT_KEY:-}"
   [ -n "${key}" ] && [ -f "${key}" ] || die "something was sealed for this node, and the node has no key to open it with yet (XIERO_INPUT_KEY). Make one with the action \"input-key\", and seal for the key it prints."
   [ -f "${here}/sealed-output.sh" ] || die "sealed-output.sh is not next to this script."
@@ -235,6 +244,13 @@ if [ -n "${SEALED_PASSWORD}" ] || [ "${#SEALED_SKILLS[@]}" -gt 0 ]; then
       || die "sealed skill ${number} does not open with the key of this node: it was sealed for another key, or it is damaged."
     PASS_ON+=(--upload-skill "${OPENED}/${number}/SKILL.md")
   done
+  # Addresses go on in the environment, one a line: not on a command line, where the node's other users could read them.
+  for sealed in ${SEALED_URLS[@]+"${SEALED_URLS[@]}"}; do
+    address="$(bash "${here}/sealed-output.sh" open-line "${key}" "${sealed}")" \
+      || die "a sealed address does not open with the key of this node: it was sealed for another key, or it is damaged."
+    NEXUS_SKILL_URLS="${NEXUS_SKILL_URLS:-}${NEXUS_SKILL_URLS:+$'\n'}${address}"
+  done
+  [ -z "${NEXUS_SKILL_URLS:-}" ] || export NEXUS_SKILL_URLS
 fi
 
 "${PYTHON}" "${here}/workforce.py" "${ARGS[@]}" ${PASS_ON[@]+"${PASS_ON[@]}"}
