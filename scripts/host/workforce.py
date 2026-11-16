@@ -794,6 +794,9 @@ class State:
         self.tools = tools if status == 200 and isinstance(tools, dict) else None
         status, media = self.app.call("GET", "/api/media/capabilities")
         self.render = (media or {}).get("render") if status == 200 and isinstance(media, dict) else None
+        # The app checks its models by itself from version 1.8: an app before that answers "not found".
+        status, health = self.app.call("GET", "/api/models/health")
+        self.health = health.get("health") if status == 200 and isinstance(health, dict) and isinstance(health.get("health"), dict) else None
         return self
 
     def tool_works(self, name):
@@ -854,6 +857,31 @@ def price_text(model):
     return ", ".join(parts) if parts else "no price set"
 
 
+def health_text(health, models, now):
+    """How the app checks its models, what its last round found, and how many models it leaves out of its lists."""
+    minutes = health.get("intervalMinutes") or 0
+    if not health.get("automatic"):
+        how = "not automatic (MODEL_HEALTH_INTERVAL_MINUTES=0)"
+    elif minutes % 60 == 0:
+        how = "every %s" % plural(minutes // 60, "hour")
+    else:
+        how = "every %s" % plural(minutes, "minute")
+    parts = ["the app asks every chat model for one word, %s" % how]
+    last = health.get("last") or {}
+    if health.get("running"):
+        parts.append("a round is running now")
+    elif last.get("endedAt"):
+        ago = max(0, int((now * 1000 - last["endedAt"]) // 60000))
+        parts.append("its last round ended %s: %d asked, %d answered, %d failed" % (
+            "less than a minute ago" if ago == 0 else "%s ago" % plural(ago, "minute") if ago < 120 else "%s ago" % plural(ago // 60, "hour"),
+            last.get("checked") or 0, last.get("passed") or 0, last.get("failed") or 0))
+    else:
+        parts.append("no round since the app started")
+    out = sum(1 for model in models or [] if model.get("hidden"))
+    parts.append("%s left out of its lists now" % ("no model is" if out == 0 else "1 model is" if out == 1 else "%d models are" % out))
+    return "; ".join(parts)
+
+
 def tested_text(item):
     status = item.get("lastTestStatus")
     if status == "ok":
@@ -892,6 +920,9 @@ def show_inventory(state, me):
             state.render.get("ffmpegVersion") or "of an unknown version",
             "" if state.render.get("subtitles") else ", without subtitles") if state.render.get("available")
             else "clips cannot be joined into one video: no usable ffmpeg on the server")
+
+    if getattr(state, "health", None):
+        row("Model check", health_text(state.health, state.models, time.time()))
 
     head("Providers and models")
     if not state.providers:

@@ -648,6 +648,17 @@ print(" | ".join(workforce.tested_text(item) for item in (
     {"lastTestStatus": "ok", "hidden": False})))
 PYTHON_END
 )"
+is "  and how the app checks its models, with what the last round found" "the app asks every chat model for one word, every 6 hours; its last round ended 3 minutes ago: 31 asked, 13 answered, 18 failed; 2 models are left out of its lists now | the app asks every chat model for one word, not automatic (MODEL_HEALTH_INTERVAL_MINUTES=0); no round since the app started; no model is left out of its lists now | the app asks every chat model for one word, every 90 minutes; a round is running now; 1 model is left out of its lists now" "$(python3 - "${host}" << 'PYTHON_END'
+import sys
+sys.path.insert(0, sys.argv[1])
+import workforce
+now = 1800000000
+print(" | ".join((
+    workforce.health_text({"automatic": True, "intervalMinutes": 360, "running": False, "last": {"endedAt": (now - 200) * 1000, "checked": 31, "passed": 13, "failed": 18}}, [{"hidden": True}, {"hidden": True}, {"hidden": False}, {}], now),
+    workforce.health_text({"automatic": False, "intervalMinutes": 0, "running": False, "last": None}, [{"hidden": False}], now),
+    workforce.health_text({"automatic": True, "intervalMinutes": 90, "running": True, "last": None}, [{"hidden": True}], now))))
+PYTHON_END
+)"
 is "a site passes a request on to another https address, and to no other" "onwards refused refused" "$(python3 - "${host}" << 'PYTHON_END'
 import sys, urllib.request
 sys.path.insert(0, sys.argv[1])
@@ -675,6 +686,7 @@ is "(the skills of the test are deleted again)" "${SKILLS}" "$(ask /api/skills '
 section "An account the app is to have"
 run -- --user boss --file "${FILE}" --inventory-only
 check "the accounts are in what the app has, by role" line 'Accounts +1 owner: boss'
+check "  and so is how the app checks its models" line 'Model check +the app asks every chat model for one word, not automatic \(MODEL_HEALTH_INTERVAL_MINUTES=0\); no round since the app started; (no model is|1 model is|[0-9]+ models are) left out of its lists now'
 ACCOUNT=(--only accounts --account rina --account-email Rina@Example.test --account-role owner)
 run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-rina" -- --user boss --file "${FILE}" --dry-run "${ACCOUNT[@]}"
 is "the plan ends well" "0" "${CODE}"
