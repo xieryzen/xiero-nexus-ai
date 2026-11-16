@@ -5,6 +5,16 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+Changes to the host scripts since 1.8.0-rc.1. They are not part of a release
+bundle: the Deploy workflow runs the ones of the branch it is started on.
+
+### Added
+
+- The inventory of `workforce.py` says how the app checks its models, what
+  its last round found, and how many models it leaves out of its lists now.
+
 ## [1.8.0-rc.1] - 2026-11-16
 
 The first candidate for 1.8: the app checks by itself that its models answer,
