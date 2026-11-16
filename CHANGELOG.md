@@ -5,108 +5,16 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [1.7.0-rc.2] - 2026-11-16
+## [1.7.0] - 2026-11-16
 
-The second candidate of 1.7, after the first one ran on a real server. Two
-things came of that run, and one was asked for: a reviewer that is shown the
-files it reviews, a task's output file that holds the file, and owners, who
-manage the accounts.
-
-### Added
-
-- **Owners.** A third role above the administrator. An owner makes accounts
-  with their role and first password, changes a username, an email, a
-  password and a role, switches an account off and on, switches a lost
-  second factor off, signs an account out everywhere, and deletes it. The
-  first account of an installation is its owner. An installation from before
-  has none: when its database is opened by this version, its first
-  administrator becomes the owner, and the audit log says so
-  (`system.owner.assigned`).
-- **One's own username, email and password** are changed under Settings,
-  each time with the current password. A new password signs every other
-  session out.
-- `POST /api/admin/users`, `DELETE /api/admin/users/{id}`, and
-  `PATCH /api/admin/users/{id}` with `username`, `email`, `password`,
-  `resetTwoFactor` and `signOut` beside `role` and `status` (owners);
-  `PATCH /api/account/me` (one's own account). No password is in an answer
-  or in the audit log; what changed is, by name.
-- `workforce.py --account <name> --account-email <address> --account-role
-  owner|admin|user`: an account the app is to have. Its password comes in
-  `NEXUS_ACCOUNT_PASSWORD`. The program signs in as an owner for it and does
-  not change the account it signs in as.
-- **Skills of your own** in the workforce file: `"name": {"uploaded": true}`
-  names a skill that is uploaded to the app and is not in the file, or in a
-  repository others can read. Agents and teams that name it get it when the
-  app has it. `workforce.py --upload-skill <file>` uploads one as the Skills
-  page does.
-- **Sealed for the node.** A password or a skill that has to pass the
-  options of a workflow in a public repository is sealed with a key of the
-  node and opened only there: the action `input-key` of `over-ssh.sh` and of
-  the Deploy workflow makes the key and prints its public half,
-  `sealed-output.sh seal-line` seals, and `workforce.sh` takes
-  `--account-password-sealed` and `--skill-sealed`.
-- A sixteenth team in the committed file, "Xiero Nexus AI": the people of
-  the Software Team with the owner's skill for work on this project.
-
-### Changed
-
-- **The reviewer is shown the files.** It was given what each agent said at
-  the end of its task, cut at 2,000 characters, so an agent that wrote a
-  file with a tool and answered "I wrote the file" was failed for a file
-  the reviewer never saw. It is now given the files of the project's
-  workspace as well, with the room shared between tasks and files (8,000
-  characters each, 64,000 together), every cut said, and the files each
-  task wrote named. A file that a deliverable already holds is not shown
-  twice.
-- **A task's output file holds the file.** An agent that can write files is
-  told to save its output file itself and then to say in a few lines what
-  it did; the file keeps what the agent saved, where the closing words used
-  to replace it, and the task hands over the file followed by those words.
-  An agent that saved its file and then said nothing has done its task. An
-  agent without that tool is told that its answer is the file, and an
-  answer that holds the file in a code fence is saved without the fence and
-  the words around it (a document keeps its own code blocks).
-- A model that turned its tools down is no longer told that it has them.
-- The manager is given the files of the workspace by name and size when it
-  sums a project up, and told not to write out or make up what a file
-  contains.
-- **Administrators no longer change accounts.** They changed roles and
-  switched accounts off; an owner does that now, and administrators see the
-  accounts. The first administrator of an installation is its owner.
-- `workforce.py` keeps the skills an agent or a team was given by hand when
-  the file gives it others: the file adds skills and takes none away.
-- `workforce.py --try-run` says why a reviewer did not pass a project.
-- `workforce.py` signs in as an owner as well as an administrator. The one
-  of 1.6 asks for an administrator by that word and does not sign in to this
-  version with the owner's account.
-
-### Notes
-
-- **Seen on the real server with 1.7.0-rc.1**: the upgrade from 1.6.0, the
-  four new tables, the workforce of the file (20 skills, 15 agents and 13
-  teams added, the earlier ones changed), the fourth provider without a key,
-  one word from each of the eleven chat models of the file, and the try-run:
-  each agent of the plugin team did its task on its first model. In both
-  projects of the try-run the reviewer's verdict was "fail", for the reason
-  under Changed: a file it was not shown. That the reviewer now passes work
-  that deserves it is not known: it is what this candidate is for.
-- The rules for what is saved as an output file were tested against the
-  mock, whose agents answer as the tests script them. How real models hand
-  over files, and how often a fence is taken off wrongly, is not known.
-- Anyone who can reach the site can still register an account of their own,
-  as an ordinary user.
-- Going back to 1.6 means putting the backup of the data back: 1.6 does not
-  know the role of an owner.
-
-## [1.7.0-rc.1] - 2026-11-16
-
-Skills: a way of working, written down once and read by an agent with every
-task. A skill is uploaded as a `SKILL.md`, a `.skill` or a `.zip`, or written
-on its page, and given to agents and to teams. With it: a way to cut a model
-list that has grown past what can be used down to the models that answer,
-and a workforce file of fifteen teams with a workflow and skills each. The
-app's part was tested against the local mock; what is known from a real
-server is under Notes.
+Skills, and owners. A skill is a way of working, written down once and read
+by an agent with every task: uploaded as a `SKILL.md`, a `.skill` or a
+`.zip`, or written on its page, and given to agents and to teams. An owner
+is the account that manages the others. With them: a reviewer that is shown
+the files it reviews, a way to cut a model list that has grown past what can
+be used down to the models that answer, and a workforce file of sixteen
+teams with a workflow and skills each. Two candidates of this release ran on
+one real server; what was seen there, and what was not, is under Notes.
 
 ### Added
 
@@ -156,14 +64,16 @@ server is under Notes.
 - `workforce.py` reads **skills** from the file: a folder with a `SKILL.md`
   next to it, or the words themselves. It adds them, changes them with
   `--update` when a word differs, and gives each agent and team the skills
-  the file names for it. An agent for which the file names none keeps what
-  it was given by hand.
-- **Fifteen teams** in the committed `workforce.json`, each with a workflow:
+  the file names for it. The skills an agent or a team was given by hand
+  are kept: the file adds skills and takes none away.
+- **Sixteen teams** in the committed `workforce.json`, each with a workflow:
   software, short reels, product videos, brochures and catalogues, online
   stores, landing pages, Minecraft Java plugins, Bedrock add-ons, Minecraft
   server setups, custom Minecraft features, Pterodactyl Panel and Wings
-  installations, Discord bots, social media carousels, SEO articles, and
-  proposals. Fifteen more agents for them, twenty-six in all.
+  installations, Discord bots, social media carousels, SEO articles,
+  proposals, and work on Xiero Nexus AI itself (the people of the Software
+  Team with the owner's skill for it). Fifteen more agents for them,
+  twenty-six in all.
 - **Twenty skills** in `scripts/host/skills`, a folder each: design and copy
   that do not look machine-made, online stores, web build quality, SEO,
   product videos, short reels, brochures and catalogues, picture prompts,
@@ -179,9 +89,74 @@ server is under Notes.
   workflow of it to the end in a project of the team that names it, and
   tries `--only-usable` on a gateway that lists billed, refused, limited and
   free models.
+- **Owners.** A third role above the administrator. An owner makes accounts
+  with their role and first password, changes a username, an email, a
+  password and a role, switches an account off and on, switches a lost
+  second factor off, signs an account out everywhere, and deletes it. The
+  first account of an installation is its owner. An installation from before
+  has none: when its database is opened by this version, its first
+  administrator becomes the owner, and the audit log says so
+  (`system.owner.assigned`).
+- **One's own username, email and password** are changed under Settings,
+  each time with the current password. A new password signs every other
+  session out.
+- `POST /api/admin/users`, `DELETE /api/admin/users/{id}`, and
+  `PATCH /api/admin/users/{id}` with `username`, `email`, `password`,
+  `resetTwoFactor` and `signOut` beside `role` and `status` (owners);
+  `PATCH /api/account/me` (one's own account). No password is in an answer
+  or in the audit log; what changed is, by name.
+- `workforce.py --account <name> --account-email <address> --account-role
+  owner|admin|user`: an account the app is to have. Its password comes in
+  `NEXUS_ACCOUNT_PASSWORD`. The program signs in as an owner for it and does
+  not change the account it signs in as.
+- **Skills of your own** in the workforce file: `"name": {"uploaded": true}`
+  names a skill that is uploaded to the app and is not in the file, or in a
+  repository others can read. Agents and teams that name it get it when the
+  app has it. `workforce.py --upload-skill <file>` uploads one as the Skills
+  page does.
+- **Sealed for the node.** A password or a skill that has to pass the
+  options of a workflow in a public repository is sealed with a key of the
+  node and opened only there: the action `input-key` of `over-ssh.sh` and of
+  the Deploy workflow makes the key and prints its public half,
+  `sealed-output.sh seal-line` seals, and `workforce.sh` takes
+  `--account-password-sealed` and `--skill-sealed`.
+- `workforce.py --account` signs the account in once with the password that
+  was given, and out again: that an account is there says little when
+  nobody can use it.
+- `workforce.py --try-run` says why a reviewer did not pass a project.
 
 ### Changed
 
+- **The reviewer is shown the files.** It was given what each agent said at
+  the end of its task, cut at 2,000 characters, so an agent that wrote a
+  file with a tool and answered "I wrote the file" was failed for a file
+  the reviewer never saw. It is now given the files of the project's
+  workspace as well, with the room shared between tasks and files (8,000
+  characters each, 64,000 together), every cut said, and the files each
+  task wrote named. A file that a deliverable already holds is not shown
+  twice, and that deliverable is marked as being the file: told that a task
+  has a file and shown none under that name, a reviewer took the file for
+  missing.
+- **A task's output file holds the file.** An agent that can write files is
+  told to save its output file itself and then to say in a few lines what
+  it did; the file keeps what the agent saved, where the closing words used
+  to replace it, and the task hands over the file followed by those words.
+  An agent that saved its file and then said nothing has done its task. An
+  agent without that tool is told that its answer is the file, and an
+  answer that holds the file in a code fence is saved without the fence and
+  the words around it (a document keeps its own code blocks).
+- A model that turned its tools down is no longer told that it has them.
+- The manager is given the files of the workspace by name and size when it
+  sums a project up, so that it can say where a deliverable is, and is told
+  that it works from the task outputs alone and never makes up what a file
+  contains. Given the names without that, a model began its summary with
+  thoughts on how to open them.
+- **Administrators no longer change accounts.** They changed roles and
+  switched accounts off; an owner does that now, and administrators see the
+  accounts. The first administrator of an installation is its owner.
+- `workforce.py` signs in as an owner as well as an administrator. The one
+  of 1.6 asks for an administrator by that word and does not sign in to this
+  version with the owner's account.
 - `tryRun.everyAgent` gives a task to each agent of the try-run's team when
   it names one, and to each agent of the file otherwise: twenty-six agents
   are more requests than the free tiers allow in an hour.
@@ -190,6 +165,37 @@ server is under Notes.
 
 ### Notes
 
+- **On the real server.** The upgrade from 1.6.0 to the first candidate and
+  from there to the second, each by the upgrade action with its backup; the
+  four new tables; the first administrator as the owner after the start of
+  the second. The workforce of the file: 20 skills, 15 agents, 13 teams and
+  13 workflows added and the earlier ones changed, the fourth provider
+  without a key, one word from each of the eleven chat models of the file.
+- **Only what can be used**, on that server: 31 chat models were asked for
+  one word. 13 answered and stay on. 526 that a provider without a key
+  bills for were switched off by the provider's list, without a request,
+  and 9 that the provider refused: seven of Claude, whose key has no
+  credit, and two of Gemini that are no longer offered. 9 were limited at
+  that moment and stay as they are; 9 models for pictures, speech and
+  listening were not asked.
+- **The reviewer.** With the first candidate the reviewer's verdict was
+  "fail" in both projects of the try-run, for a file it was not shown: it
+  was given the sentence "I wrote README.md". With the second it judged the
+  file: "concerns", with two findings in the README's own words (a default
+  that two tables state differently, a configuration without its keys). In
+  the try-run's other project it took a file whose content it had been
+  shown as the deliverable for "not shown", and the manager began that
+  summary with its thoughts on files it could not open. What the reviewer
+  and the manager are told was changed for both (see Changed); **those two
+  changes were not seen on a server when this was released.**
+- **An owner's account and two skills of the owner's own** reached that
+  server sealed for the node, through the options of a workflow anyone can
+  read, and the account signed in with its password there.
+- What a task saves as its output file was tested against the mock, whose
+  agents answer as the tests script them. How real models hand over files,
+  and how often a fence is taken off wrongly, is not known.
+- Anyone who can reach the site can still register an account of their own,
+  as an ordinary user: there is no switch for that yet.
 - Seen on the real server with 1.6.0, after the release: the waiting at work
   with a provider. Kilo Gateway answered "sign up for free or come back
   later" for all its free models. A request to a model was asked again for
@@ -205,11 +211,6 @@ server is under Notes.
   `workforce.json` says so now. Its answer then is "sign up for free": an
   account there gives a key, which the provider takes on the Providers page
   (the `workforce` action leaves how a provider signs in as it is).
-- At the time of this release candidate **nothing of 1.7 has run on a real
-  server**: not the migration, not an upload, not `--only-usable` against a
-  real gateway. The model lists of Kilo Gateway, LLM7 and Pollinations were
-  read while this was written, and their forms are the ones the price
-  reading was written for. The candidate is there to see all of it at work.
 - **How well a model follows a skill was not measured.** The checks show
   that a skill reaches the agent, the planner and the reviewer, and that its
   files can be read; no project was judged with and without one.
@@ -227,15 +228,23 @@ server is under Notes.
 
 ### Upgrading
 
-- When 1.7 starts, the database gets four tables for skills. Nothing that
-  was there is changed, and 1.6 can open the database again: it leaves the
-  tables alone.
-- Nothing has to be configured.
+- When 1.7 starts, the database gets four tables for skills, and the first
+  administrator of the installation becomes its owner (the audit log says
+  which account). Nothing has to be configured.
+- Administrators no longer change roles or switch accounts off: an owner
+  does. They still see the accounts.
+- **Going back to 1.6 means putting the backup of the data back**, as
+  `pterodactyl-upgrade.sh --restore` does: 1.6 does not know the role of an
+  owner and would treat that account as an ordinary user.
+- Use the host scripts of the same version as the app: `workforce.py` of 1.6
+  asks for an administrator by that word and does not sign in to 1.7 with
+  the owner's account.
 - On a server that got the file of 1.6, the `workforce` action adds the
-  skills, fifteen agents, thirteen teams, thirteen workflows and one
+  skills, fifteen agents, fourteen teams, thirteen workflows and one
   provider. With `--update` it also gives the earlier agents and the reel
   team their skills and changes the reel's caption step. The models the file
-  no longer names stay as they are.
+  no longer names stay as they are; `--only-usable` switches off the ones
+  that cannot be used.
 
 ## [1.6.0] - 2026-11-15
 

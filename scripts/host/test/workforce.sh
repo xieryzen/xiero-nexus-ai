@@ -601,14 +601,19 @@ run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-rina" -- --user boss --file "$
 is "adding it ends well" "0" "${CODE}"
 check_not "  without the password in what it says" says "the-first-password-of-rina"
 is "the account is there: an owner, switched on, its email in small letters" "owner active rina@example.test" "$(ask /api/admin/users '[" ".join([u["role"], u["status"], u["email"]]) for u in d["users"] if u["username"] == "rina"][0]')"
+check "it is signed in once with that password, to see that it is the right one" says '"rina" signs in with it, as an owner.'
 is "  it signs in with the password it was given" "200" "$(signs_in rina the-first-password-of-rina)"
 is "  only that part was done: the workforce is as it was" "${before}" "$(counts)"
 run NEXUS_ACCOUNT_PASSWORD="another-password-for-rina" -- --user boss --file "${FILE}" --yes "${ACCOUNT[@]}"
 check "a second time it is as asked" says 'account "rina" (an owner)'
 check "  and its password is left as it is" says "its password is left as it is; --update sets the one that was given"
+is "  that the password that was given is not the account's ends with 1" "1" "${CODE}"
+check "  and is said" says '"rina" does not sign in with it'
 is "  the first password still signs in" "200" "$(signs_in rina the-first-password-of-rina)"
 run NEXUS_ACCOUNT_PASSWORD="another-password-for-rina" -- --user boss --file "${FILE}" --yes --update "${ACCOUNT[@]}"
 check "with --update the password that was given is set" line 'done +Account "rina": change it to what was asked \(password\); it is signed out everywhere'
+is "  once, and the run ends well" "0 1" "${CODE} $(grep -cE 'done +Account "rina"' "${OUT}")"
+check "  and signs the account in" says '"rina" signs in with it, as an owner.'
 is "  the old one signs in no more, the new one does" "401 200" "$(signs_in rina the-first-password-of-rina) $(signs_in rina another-password-for-rina)"
 run -- --user boss --file "${FILE}" --yes --only accounts --account rina --account-email rina@example.test --account-role admin
 check "another role than it has is reported" line 'Account "rina" is in the app and differs from what was asked \(role\)'

@@ -148,6 +148,9 @@ export interface ReviewLimits {
 
 export const REVIEW_LIMITS: ReviewLimits = { item: 8_000, total: 64_000, least: 1_200 };
 
+/** A file shorter than this is not looked for inside a deliverable: a few words are found anywhere. */
+const HELD_AT_LEAST = 20;
+
 /** How the reviewer is told that it was not shown all of a text. */
 export const CUT_MARK = "[cut here:";
 
@@ -158,15 +161,27 @@ export const CUT_MARK = "[cut here:";
  *
  * Room is shared: with many tasks and files each gets less, and what was cut
  * or left out is said, so that it is not taken for missing work. A file
- * whose content a deliverable already holds is not shown twice.
+ * whose content a deliverable already holds is not shown twice, and the
+ * deliverable says that it is that file: a reviewer that is told a task has
+ * a file, and is shown none, takes the file for missing.
  */
 export function reviewMaterial(tasks: ReviewTask[], files: ReviewFile[], limits: ReviewLimits = REVIEW_LIMITS): string {
-  const held = (file: ReviewFile) => {
+  const filesOf = (task: ReviewTask) => [...new Set([...(task.outputFile ? [task.outputFile] : []), ...(task.wrote ?? [])])];
+  // Which tasks say that a file is theirs. Two files can hold the same words:
+  // a deliverable is then the file of its own task, not the other one.
+  const claimedBy = new Map<string, number[]>();
+  for (const task of tasks) {
+    for (const path of filesOf(task)) claimedBy.set(path, [...(claimedBy.get(path) ?? []), task.seq]);
+  }
+  const heldBy = (file: ReviewFile, task: ReviewTask) => {
     const body = file.content.trim();
-    return body !== "" && tasks.some((task) => (task.artifact ?? "").includes(body));
+    if (body.length < HELD_AT_LEAST || !(task.artifact ?? "").includes(body)) return false;
+    const claimed = claimedBy.get(file.path);
+    return !claimed || claimed.includes(task.seq);
   };
+  const repeated = files.filter((file) => tasks.some((task) => heldBy(file, task))).map((file) => file.path);
   const others = files
-    .filter((file) => file.content.trim() !== "" && !held(file))
+    .filter((file) => file.content.trim() !== "" && !repeated.includes(file.path))
     .sort((a, b) => a.path.localeCompare(b.path));
   const items = tasks.length + others.length;
   const each = Math.max(limits.least, Math.min(limits.item, Math.floor(limits.total / Math.max(1, items))));
@@ -179,16 +194,20 @@ export function reviewMaterial(tasks: ReviewTask[], files: ReviewFile[], limits:
   };
 
   const parts = tasks.map((task) => {
-    const wrote = [...new Set([...(task.outputFile ? [task.outputFile] : []), ...(task.wrote ?? [])])];
+    const wrote = filesOf(task);
+    const holds = files.filter((file) => heldBy(file, task)).map((file) => file.path).sort();
     return (
       `## ${task.seq}. ${task.title}\n` +
       `Acceptance criteria: ${task.acceptanceCriteria || "(none)"}\n` +
       (wrote.length > 0 ? `Files of this task: ${wrote.join(", ")}\n` : "") +
-      `Deliverable:\n${show(task.artifact ?? "")}`
+      (holds.length > 0
+        ? `Deliverable (it holds ${holds.length === 1 ? "the file" : "the files"} ${holds.join(", ")}, as saved in the workspace):\n`
+        : "Deliverable:\n") +
+      show(task.artifact ?? "")
     );
   });
 
-  if (others.length > 0) {
+  if (others.length > 0 || repeated.length > 0) {
     const shown: string[] = [];
     const leftOut: string[] = [];
     for (const file of others) {
@@ -202,6 +221,7 @@ export function reviewMaterial(tasks: ReviewTask[], files: ReviewFile[], limits:
     parts.push(
       "### Files in the project workspace, as they are now" +
         (shown.length > 0 ? `\n\n${shown.join("\n\n")}` : "") +
+        (repeated.length > 0 ? `\n\nShown above, in the deliverable that holds it, and not again here: ${[...repeated].sort().join(", ")}` : "") +
         (leftOut.length > 0 ? `\n\nNot shown to you, for want of room: ${leftOut.join(", ")}` : ""),
     );
   }

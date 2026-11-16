@@ -34,7 +34,10 @@
 #                        or that email is left as it is; with --update its
 #                        role, name and email are made as asked, and its
 #                        password when one is given. Needs to sign in as an
-#                        owner: only an owner manages accounts.
+#                        owner: only an owner manages accounts. With a
+#                        password given, the account is signed in with it
+#                        once at the end, and out again, to see that it is
+#                        the right one.
 #   --upload-skill <f>   A skill of your own that is not in the file: a
 #                        SKILL.md, or a .skill or .zip of a folder with one.
 #                        It is uploaded as on the Skills page, and replaces a
@@ -1024,6 +1027,10 @@ def keyless(definition, name):
     return described if described and described["authType"] == "none" else None
 
 
+# The password of the account was set by this run: once, however often the plan is made anew.
+PASSWORD_SET = []
+
+
 def plan_accounts(state, options, plan, me):
     """The account that was asked for with --account: made, or with --update made as asked."""
     wanted = options.account
@@ -1061,10 +1068,10 @@ def plan_accounts(state, options, plan, me):
     differs = [key for key in ("username", "email", "role") if (found.get(key) or "") != wanted[key]]
     if found.get("status") != "active":
         plan.notes.append("%s is switched off in the app. That is left as it is." % where)
-    sets_password = bool(password) and options.update
+    sets_password = bool(password) and options.update and not PASSWORD_SET
     if not differs and not sets_password:
         plan.same.append('account "%s" (%s)' % (wanted["username"], role_word(found.get("role"))))
-        if password:
+        if password and not options.update:
             plan.notes.append("%s is in the app: its password is left as it is; --update sets the one that was given." % where)
         return
     if found.get("id") == me.get("id"):
@@ -1083,6 +1090,8 @@ def plan_accounts(state, options, plan, me):
         if sets_password:
             body["password"] = password
         api(state.app, "PATCH", "/api/admin/users/%s" % found["id"], body)
+        if sets_password:
+            PASSWORD_SET.append(found["id"])
 
     what = differs + (["password"] if sets_password else [])
     plan.changes.append(Change("accounts", "%s: change it to what was asked (%s)%s." % (
@@ -1091,6 +1100,38 @@ def plan_accounts(state, options, plan, me):
 
 def role_word(role):
     return {"owner": "an owner", "admin": "an administrator", "user": "a user"}.get(role, "a user")
+
+
+def check_account(url, wanted):
+    """
+    Signs the account in with the password that was given, once, and out
+    again: that it is there says little when nobody can use it. Returns how
+    many things failed.
+    """
+    password = os.environ.get("NEXUS_ACCOUNT_PASSWORD", "")
+    if not password:
+        return 0
+    head("The account: one sign-in with the password that was given")
+    probe = App(url)
+    name = wanted["username"]
+    status, data = probe.call("POST", "/api/auth/login", {"identifier": name, "password": password})
+    try:
+        if status == 200 and isinstance(data, dict) and data.get("twoFactorRequired"):
+            row("ok", '"%s" and the password are right; the account then asks for the code of its second step.' % name)
+            return 0
+        if status == 200 and isinstance(data, dict) and (data.get("user") or {}).get("username") == name:
+            row("ok", '"%s" signs in with it, as %s.' % (name, role_word((data.get("user") or {}).get("role"))))
+            return 0
+        if status == 401:
+            row("FAILED", '"%s" does not sign in with it: the account is switched off, or the app has another password for it (--update sets the one that was given).' % name)
+            return 1
+        if status == 429:
+            row("Not tried", "the app takes no more sign-ins for now (too many attempts). Try again in ten minutes.")
+            return 0
+        row("FAILED", "signing in did not work (%s%s)." % (status, reason_of(data)))
+        return 1
+    finally:
+        sign_out(probe)
 
 
 # Skill files that this run has uploaded already: asked for once, done once.
@@ -2183,6 +2224,8 @@ def run(argv):
             if not_tried(options, "%s"):
                 say("Dry run: %s." % not_tried(options, "%s"))
             return 0
+        if options.account and "accounts" in options.parts:
+            failed += check_account(options.url, options.account)
         if options.only_usable:
             failed += only_usable(state, plan.slots)
         if options.test or options.test_all:
