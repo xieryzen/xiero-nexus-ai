@@ -31,6 +31,8 @@ export interface SerializedModel {
   checkFailures: number;
   /** Switched on, and left out of the model lists because its last check failed. */
   hidden: boolean;
+  /** Marked for the work of users, who choose no model (model-choice.ts). */
+  forUsers: boolean;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -88,6 +90,7 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     lastTestError: m.lastTestError,
     checkFailures: m.checkFailures,
     hidden: m.enabled && isFailing(m),
+    forUsers: m.forUsers,
     notes: m.notes,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,

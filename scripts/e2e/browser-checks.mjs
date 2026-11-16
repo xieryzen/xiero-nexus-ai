@@ -638,6 +638,146 @@ try {
   check("  a change without the right password is refused, and said", await waitText("Password is incorrect"), null);
   await snap("settings-account");
 
+  // ─── What a user is shown ─────────────────────────────────────────────────
+  begin("Browser: what a user is shown");
+  const VIEWER = { name: "browser.viewer", password: "a-viewer-password-from-the-browser" };
+  /** Names of this installation's setup: none of them is for a user. */
+  const SETUP_NAMES = ["Mock OpenAI-style", "Mock OpenRouter", "Mock xAI", "Mock Image", "chat-mini", "img-ok", "vid-ok", "tts-1", "text-embedding-3-small"];
+  /**
+   * What a page says of the setup: the names it holds, and the words for it.
+   * Everything the page holds is read, shown or not, except what is written
+   * as code: the API's own names (`model`, `/api/v1/models`) are said to all.
+   */
+  const namedOnPage = async () => {
+    const shown = await page.evaluate(() => {
+      const body = document.body.cloneNode(true);
+      for (const el of body.querySelectorAll("code, pre, script, style")) el.remove();
+      const fields = [...body.querySelectorAll("[placeholder], [title], [aria-label]")].map((el) => `${el.getAttribute("placeholder") ?? ""} ${el.getAttribute("title") ?? ""} ${el.getAttribute("aria-label") ?? ""}`);
+      return `${body.textContent ?? ""} ${fields.join(" ")}`;
+    });
+    const words = (shown.match(/\b(?:providers?|models?|gateway|upstream|adapters?)\b/gi) ?? []).map((word) => word.toLowerCase());
+    return [...new Set([...SETUP_NAMES.filter((name) => shown.includes(name)), ...words])];
+  };
+  const signInAs = async (name, password) => {
+    await api("/api/auth/logout", { method: "POST" });
+    await open("/login");
+    await fill("#identifier", name);
+    await fill("#password", password);
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }), page.click('button[type="submit"]')]);
+  };
+  const viewerMade = await api("/api/admin/users", { method: "POST", body: JSON.stringify({ username: VIEWER.name, email: "viewer@example.com", password: VIEWER.password }) });
+  await open("/dashboard/models");
+  const usersCard = async (kind) => page.$eval(`#users-models li[data-users-kind="${kind}"]`, (li) => li.innerText.trim()).catch(() => "");
+  eq("the Models page says which model users work with", await usersCard("chat"), "Chat and projects: chat-mini · Mock OpenAI-style (marked)");
+  const forUsersSwitch = 'button[role="switch"][aria-label="For users: chat-notools"]';
+  await page.click(forUsersSwitch);
+  check("a model is marked for users with a switch, and the page says what follows", await waitText("Chat and projects: chat-mini · Mock OpenAI-style (marked), then 1 more"), await usersCard("chat"));
+  await snap("models-for-users");
+  await page.waitForFunction((selector) => !document.querySelector(selector)?.disabled, {}, forUsersSwitch);
+  await page.click(forUsersSwitch);
+  await page.waitForFunction(() => !document.querySelector('#users-models li[data-users-kind="chat"]')?.innerText.includes("then 1 more"), { timeout: 10_000 }).catch(() => undefined);
+  eq("  the mark is taken away again", await usersCard("chat"), "Chat and projects: chat-mini · Mock OpenAI-style (marked)");
+
+  await signInAs(VIEWER.name, VIEWER.password);
+  check("a user signs in", viewerMade.status === 201 && page.url().endsWith("/dashboard"), [viewerMade.status, page.url()]);
+  const menu = await page.$$eval("nav a[href^='/dashboard']", (links) => [...new Set(links.map((a) => a.getAttribute("href")))]);
+  check(
+    "the menu of a user has no Providers, Models, Skills, Users, Audit and Observability",
+    ["/dashboard/providers", "/dashboard/models", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
+      ["/dashboard/projects", "/dashboard/chat", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
+    menu,
+  );
+  check("the overview of a user is about their own work", (await page.$("#own-overview")) !== null && (await namedOnPage()).length === 0, await namedOnPage());
+  await snap("user-overview");
+  await open("/dashboard/models");
+  check("the Models page sends a user back to the overview", page.url().endsWith("/dashboard"), page.url());
+
+  await open("/dashboard/chat");
+  check("Chat has no model to choose", (await page.$("main select")) === null && (await page.$("textarea[placeholder^='Message']")) !== null, null);
+  await page.type("textarea[placeholder^='Message']", "Hello there");
+  await clickText(/^\s*Send\s*$/);
+  check("  and answers all the same", await waitText('OUTPUT of "?"'), (await text()).slice(0, 300));
+  eq("  the page names no model and no provider", await namedOnPage(), []);
+  await snap("user-chat");
+
+  await open("/dashboard/studio");
+  await page.waitForSelector("#st-prompt");
+  const studioWords = (await text()).toLowerCase();
+  const studioSaid = ["provider", "gateway", "model", "extra parameters", "estimated cost"].filter((word) => studioWords.includes(word));
+  check("Creative Studio has no model to choose, no price and no extra parameters", (await page.$("#st-model")) === null && (await page.$("#st-extra")) === null && studioSaid.length === 0, studioSaid);
+  await clickText(/advanced options/);
+  check("  its advanced options are the exact size, and no more", (await page.$("#st-size")) !== null && (await page.$("#st-extra")) === null, null);
+  await fill("#st-prompt", "A lighthouse made by a user");
+  await clickText(/^\s*Generate\s*$/);
+  check("  an image is made all the same", await page.waitForSelector('main img[src*="/api/media/"]', { timeout: 30_000 }).then(() => true, () => false), null);
+  eq("  the library names no model and no provider", await namedOnPage(), []);
+  await snap("user-studio");
+  await clickText("Voice", { tag: "[role=tab]" });
+  await page.waitForSelector("#st-speech");
+  const voiceWords = (await text()).toLowerCase();
+  check("  a voice-over has no model to choose either", (await page.$("#st-model")) === null && !["provider", "gateway", "model"].some((word) => voiceWords.includes(word)), voiceWords.slice(0, 300));
+  await clickText("Video", { tag: "[role=tab]" });
+  await page.waitForSelector("#st-duration");
+  const videoWords = (await text()).toLowerCase();
+  check("  nor has a video", (await page.$("#st-model")) === null && !["provider", "gateway", "model"].some((word) => videoWords.includes(word)), videoWords.slice(0, 300));
+
+  await open("/dashboard/projects");
+  if (!(await page.$("#p-title"))) await clickText(/New project/);
+  await page.waitForSelector("#p-title");
+  check("a new project has no model to choose", (await page.$("#p-mgr")) === null && (await page.$("#p-wf")) !== null, null);
+  const plainFlow = await page.$$eval("#p-wf option", (options) => options.find((o) => o.textContent.includes("Seen by users"))?.value);
+  await fill("#p-title", "A user's project");
+  await fill("#p-goal", "Two lines about lamps.");
+  if (plainFlow) await page.select("#p-wf", plainFlow);
+  eq("  its form names nothing of the setup, with a workflow chosen", await namedOnPage(), []);
+  await snap("user-project-form");
+  await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }), clickText(/Create project/)]);
+  check("  it is made", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && Boolean(plainFlow), [page.url(), plainFlow]);
+  await clickText(/^\s*Run\s*$/);
+  check("  it runs to its end", await waitText("Final deliverable", 60_000), (await text()).slice(0, 300));
+  eq("  the page of the project names no model and no provider", await namedOnPage(), []);
+  check("  nor what its steps told the agents", !(await has("SECRET-")), null);
+  await snap("user-project");
+
+  await open("/dashboard/agents");
+  check("Agents & Teams shows a user who the agents are, without a way to change them", (await has("Vis Writer")) && !(await has("SECRET-")) && !(await clickText("Edit")) && (await namedOnPage()).length === 0, await namedOnPage());
+  await snap("user-agents");
+  await open("/dashboard/workflows");
+  check("Workflows shows the steps by title", (await has("Seen by users")) && (await has("Write")) && !(await has("SECRET-")) && !(await has("New workflow")) && (await namedOnPage()).length === 0, await namedOnPage());
+  await open("/dashboard/knowledge");
+  await clickText(/New collection/);
+  await page.waitForSelector("#k-model");
+  eq("Knowledge asks a user whether to search by meaning as well, not with what", await page.$$eval("#k-model option", (options) => options.map((o) => [o.value, o.textContent])), [["", "Words only"], ["auto", "By meaning as well"]]);
+  await page.select("#k-model", "auto");
+  eq("  and its page names nothing of the setup", await namedOnPage(), []);
+  await snap("user-knowledge");
+  await open("/dashboard/usage");
+  check("Usage counts a user's tokens, without providers, models and costs", /[1-9][\d.,]* /.test(await text()) && !(await has("Cost")) && (await namedOnPage()).length === 0, await namedOnPage());
+  await snap("user-usage");
+  await open("/dashboard/settings");
+  await clickText(/New key/);
+  await page.waitForSelector("#ak-rate").catch(() => undefined);
+  check("an API key of a user is limited to no model and to no cost", (await page.$("#ak-rate")) !== null && (await page.$("#ak-cost")) === null && !(await has("Only some models")), null);
+  eq("  Settings names nothing of the setup outside the API's own words", await namedOnPage(), []);
+  await fill("#ak-name", "A user's key");
+  await clickText("Create key", { tag: 'button[type="submit"]' });
+  await page.waitForSelector('[data-testid="secret-value"]', { timeout: 10_000 }).catch(() => undefined);
+  const userKey = await page.$eval('[data-testid="secret-value"]', (e) => e.textContent.trim()).catch(() => "");
+  check("  the key is made, and its example sends auto as the model", /^xn_/.test(userKey) && (await page.$$eval("pre", (blocks) => blocks.map((b) => b.textContent).join("\n"))).includes('"model": "auto"'), userKey.slice(0, 6));
+  const userModels = await page.evaluate(async (key) => {
+    const res = await fetch("/api/v1/models", { headers: { authorization: `Bearer ${key}` }, credentials: "omit" });
+    return [res.status, ((await res.json()).data ?? []).map((m) => m.id)];
+  }, userKey);
+  eq("  with the key, the list of models holds auto and no more", userModels, [200, ["auto"]]);
+  eq("  the page still names nothing of the setup", await namedOnPage(), []);
+  await snap("user-settings");
+  check("no page of a user holds something wider than the screen", (await sideways()) <= 0, await sideways());
+
+  await signInAs("admin", "correct-horse-battery");
+  check("the owner signs in again", page.url().endsWith("/dashboard") && (await page.$('a[href="/dashboard/models"]')) !== null, page.url());
+  const viewerId = ((await api("/api/admin/users")).data?.users ?? []).find((u) => u.username === VIEWER.name)?.id;
+  eq("the account of these checks is deleted", (await api(`/api/admin/users/${viewerId}`, { method: "DELETE" })).status, 200);
+
   // ─── Model checks ─────────────────────────────────────────────────────────
   // Last, since Check all now asks every model of these checks, also the ones made to fail.
   begin("Browser: model checks");

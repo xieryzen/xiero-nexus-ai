@@ -1,0 +1,1 @@
+ALTER TABLE `models` ADD `for_users` integer DEFAULT false NOT NULL;

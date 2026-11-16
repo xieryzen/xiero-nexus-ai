@@ -13,5 +13,5 @@ export const dynamic = "force-dynamic";
 export const GET = handle(async (req, { params }) => {
   const user = requireUser();
   const project = loadOwnedProject(params.id!, user);
-  return new Response(runEventStream(project.id, req.signal), { headers: SSE_HEADERS });
+  return new Response(runEventStream(project.id, req.signal, user.role), { headers: SSE_HEADERS });
 });

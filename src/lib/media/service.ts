@@ -524,7 +524,8 @@ function announceVideo(asset: MediaAsset): void {
     kind: "media",
     level: asset.status === "ready" ? "success" : "error",
     title: asset.status === "ready" ? "Your video is ready" : "A video could not be generated",
-    body: asset.status === "ready" ? about : `${asset.error ?? "The provider failed."}\n${about}`,
+    problem: asset.status === "ready" ? null : (asset.error ?? "The provider failed."),
+    body: about,
     link: "/dashboard/studio",
   });
 }

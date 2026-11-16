@@ -1,8 +1,11 @@
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { generateImages } from "@/lib/media/service";
+import { modelFor } from "@/lib/model-choice";
+import { seesSetup } from "@/lib/roles";
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
 import { imageGenerateSchema } from "@/lib/validation";
 
@@ -22,13 +25,14 @@ export const POST = handle(async (req) => {
 
   const assets = await generateImages({
     userId: user.id,
-    modelRowId: body.modelRowId,
+    modelRowId: modelFor(user.role, body.modelRowId, "image"),
     prompt: body.prompt,
     n: body.n,
     aspectRatio: body.aspectRatio,
     resolution: body.resolution,
     size: body.size,
-    extra: body.extra,
+    // Options of one provider are for those who know which provider it is.
+    extra: seesSetup(user.role) ? body.extra : undefined,
   });
-  return json({ assets: assets.map((a) => serializeAsset(a)) }, { status: 201 });
+  return json({ assets: assets.map((a) => assetFor(user.role, serializeAsset(a))) }, { status: 201 });
 });

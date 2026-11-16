@@ -41,5 +41,5 @@ export const POST = v1("media", async (req, { caller }) => {
     resolution: body.resolution,
     imageAssetId: body.image_asset_id,
   });
-  return NextResponse.json(mediaJson(asset), { status: 201 });
+  return NextResponse.json(mediaJson(asset, caller.user.role), { status: 201 });
 });

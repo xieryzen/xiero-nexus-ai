@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { asc } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, teams } from "@/db/schema";
@@ -5,13 +6,15 @@ import { getCurrentUser } from "@/lib/auth";
 import { listSkills } from "@/lib/skills/service";
 import { PageHeader } from "@/components/ui";
 import { SkillsManager } from "@/components/skills/skills-manager";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, seesSetup } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Skills" };
 
 export default function SkillsPage() {
   const user = getCurrentUser();
+  // How the installation is set up is shown to administrators (roles.ts: seesSetup).
+  if (!seesSetup(user?.role)) redirect("/dashboard");
   return (
     <div className="space-y-6">
       <PageHeader

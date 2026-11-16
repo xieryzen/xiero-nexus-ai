@@ -21,7 +21,7 @@ export const GET = handle(async (_req, { params }) => {
   const collection = loadReadableCollection(params.id!, user);
   return json({
     collection: serializeCollection(collection, user),
-    documents: listDocuments(collection.id),
+    documents: listDocuments(collection.id, user.role),
   });
 });
 
@@ -30,7 +30,7 @@ export const PATCH = handle(async (req, { params }) => {
   const { ip, userAgent } = getClientMeta(req);
   const collection = loadManagedCollection(params.id!, user);
   const body = await parseBody(req, collectionUpdateSchema);
-  const updated = updateCollection(collection, body);
+  const updated = updateCollection(collection, body, user);
   audit({
     actorUserId: user.id,
     action: "knowledge.collection.update",

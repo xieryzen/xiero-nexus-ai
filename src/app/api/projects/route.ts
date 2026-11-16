@@ -5,14 +5,16 @@ import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { DEFAULT_MAX_MEDIA } from "@/lib/creative/prompt";
-import { AppError, Errors } from "@/lib/errors";
+import { AppError, Errors, PlainError } from "@/lib/errors";
 import { modelIsMediaOnly } from "@/lib/gateway";
 import { resolveMediaModel } from "@/lib/media/service";
 import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { getClientMeta } from "@/lib/request";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { projectCreateSchema } from "@/lib/validation";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, seesSetup } from "@/lib/roles";
+import { projectFor } from "@/lib/for-viewer";
+import { appChoice } from "@/lib/model-choice";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,7 @@ export const GET = handle(async () => {
     isAdminRole(user.role)
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
       : db.select().from(projects).where(eq(projects.createdBy, user.id)).orderBy(desc(projects.updatedAt)).all();
-  return json({ projects: rows.map((p) => serializeProject(p)) });
+  return json({ projects: rows.map((p) => projectFor(user.role, serializeProject(p))) });
 });
 
 export const POST = handle(async (req) => {
@@ -30,10 +32,36 @@ export const POST = handle(async (req) => {
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, projectCreateSchema);
 
-  const model = db.select({ id: models.id }).from(models).where(eq(models.id, body.managerModelRowId)).get();
-  if (!model) throw Errors.badRequest("Selected manager model does not exist");
-  if (modelIsMediaOnly(model.id)) {
-    throw Errors.badRequest("The manager model must be a chat model, not a media or embedding model.");
+  // An administrator chooses the project's models. A user chooses none: the
+  // app works with its own choice at every run, and a user only says which
+  // kinds of media the project may make (any value in the model's place).
+  const chooses = seesSetup(user.role);
+  const WHAT = { image: "images", video: "videos", audio: "voice-overs" } as const;
+  const wanted = {
+    image: Boolean(body.imageModelRowId),
+    video: Boolean(body.videoModelRowId),
+    audio: Boolean(body.speechModelRowId),
+  };
+  if (!chooses) {
+    body.managerModelRowId = null;
+    for (const kind of ["image", "video", "audio"] as const) {
+      const key = kind === "image" ? "imageModelRowId" : kind === "video" ? "videoModelRowId" : "speechModelRowId";
+      if (!wanted[kind]) {
+        body[key] = null;
+        continue;
+      }
+      body[key] = appChoice(kind);
+      if (!body[key]) {
+        throw new PlainError(400, "bad_request", `This installation cannot make ${WHAT[kind]} yet. An administrator has to set it up.`);
+      }
+    }
+  } else {
+    if (!body.managerModelRowId) throw Errors.badRequest("Choose a manager model");
+    const model = db.select({ id: models.id }).from(models).where(eq(models.id, body.managerModelRowId)).get();
+    if (!model) throw Errors.badRequest("Selected manager model does not exist");
+    if (modelIsMediaOnly(model.id)) {
+      throw Errors.badRequest("The manager model must be a chat model, not a media or embedding model.");
+    }
   }
   if (body.teamId) {
     const team = db.select({ id: teams.id }).from(teams).where(eq(teams.id, body.teamId)).get();
@@ -47,7 +75,7 @@ export const POST = handle(async (req) => {
     ["video", body.videoModelRowId],
     ["audio", body.speechModelRowId],
   ] as const) {
-    if (!id) continue;
+    if (!id || !chooses) continue;
     try {
       resolveMediaModel(id, kind);
     } catch (err) {
@@ -64,6 +92,21 @@ export const POST = handle(async (req) => {
     // A workflow's steps are fixed, so what it needs is known before it runs.
     const steps = serializeWorkflow(wf).steps;
     const need = countMediaTasks(steps.map((step) => ({ kind: step.kind ?? "text" })));
+    if (!chooses) {
+      // What the workflow makes, the project may make.
+      for (const kind of ["image", "video", "audio"] as const) {
+        if (need[kind] === 0) continue;
+        const key = kind === "image" ? "imageModelRowId" : kind === "video" ? "videoModelRowId" : "speechModelRowId";
+        body[key] = body[key] ?? appChoice(kind);
+        if (!body[key]) {
+          throw new PlainError(
+            400,
+            "bad_request",
+            `The workflow "${wf.name}" makes ${WHAT[kind]}, which this installation cannot do yet. An administrator has to set it up.`,
+          );
+        }
+      }
+    }
     if (need.image > 0 && !body.imageModelRowId) {
       throw Errors.badRequest(`The workflow "${wf.name}" has image steps. Choose an image model.`);
     }
@@ -91,7 +134,7 @@ export const POST = handle(async (req) => {
     .values({
       title: body.title,
       goal: body.goal,
-      managerModelRowId: body.managerModelRowId,
+      managerModelRowId: body.managerModelRowId ?? null,
       teamId: body.teamId ?? null,
       maxTokens: body.maxTokens ?? 200_000,
       maxTasks,
@@ -110,5 +153,5 @@ export const POST = handle(async (req) => {
     .get();
 
   audit({ actorUserId: user.id, action: "project.create", targetType: "project", targetId: project.id, metadata: { title: project.title }, ip, userAgent });
-  return json({ project: serializeProject(project, { withTasks: true }) }, { status: 201 });
+  return json({ project: projectFor(user.role, serializeProject(project, { withTasks: true })) }, { status: 201 });
 });

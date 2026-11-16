@@ -1,8 +1,9 @@
+import { whatUsersGet } from "@/lib/model-choice";
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -12,7 +13,7 @@ import { modelCreateSchema } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async (req) => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   const url = new URL(req.url);
   const providerId = url.searchParams.get("providerId");
   const rows = providerId
@@ -23,7 +24,8 @@ export const GET = handle(async (req) => {
         .orderBy(asc(models.modelId))
         .all()
     : db.select().from(models).orderBy(asc(models.modelId)).all();
-  return json({ models: serializeModels(rows) });
+  // `users`: what users, who choose no model, work with, kind by kind.
+  return json({ models: serializeModels(rows), users: whatUsersGet() });
 });
 
 export const POST = handle(async (req) => {
@@ -59,6 +61,7 @@ export const POST = handle(async (req) => {
         pricePerSecond: body.pricePerSecond,
         pricePerMChars: body.pricePerMChars,
         notes: body.notes,
+        forUsers: body.forUsers ?? false,
         source: "manual",
       })
       .returning()

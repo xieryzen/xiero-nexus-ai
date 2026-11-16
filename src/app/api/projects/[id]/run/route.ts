@@ -37,5 +37,5 @@ export const POST = handle(async (req, { params }) => {
   }
 
   startRun(project, { trigger: "manual", requestedBy: user.id, input });
-  return new Response(runEventStream(project.id, req.signal), { headers: SSE_HEADERS });
+  return new Response(runEventStream(project.id, req.signal, user.role), { headers: SSE_HEADERS });
 });

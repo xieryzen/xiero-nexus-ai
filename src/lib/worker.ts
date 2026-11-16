@@ -102,7 +102,7 @@ function endLostRun(run: ProjectRun, message: string): void {
       kind: "run",
       level: "error",
       title: `Run failed: ${project.title}`,
-      body: message,
+      problem: message,
       link: `/dashboard/projects/${project.id}`,
     });
   }
@@ -244,7 +244,7 @@ function housekeeping(): void {
       kind: "media",
       level: "error",
       title: "Joining the clips failed",
-      body: asset.error ?? undefined,
+      problem: asset.error,
       link: "/dashboard/studio",
     });
   }

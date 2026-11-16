@@ -1,5 +1,6 @@
 import { requirePageUser } from "@/lib/auth";
-import { listCollections } from "@/lib/knowledge/service";
+import { AUTO_MODEL, listCollections } from "@/lib/knowledge/service";
+import { kindsAvailable } from "@/lib/model-choice";
 import { embeddingModelOptions } from "@/lib/model-options";
 import { KnowledgeClient } from "@/components/knowledge/knowledge-client";
 import { isAdminRole } from "@/lib/roles";
@@ -18,7 +19,15 @@ export default function KnowledgePage({
   return (
     <KnowledgeClient
       initialCollections={collections}
-      embeddingModels={embeddingModelOptions()}
+      // Someone who is shown the setup chooses the embedding model. A user
+      // says only whether a collection is searched by meaning as well.
+      embeddingModels={
+        isAdminRole(user.role)
+          ? embeddingModelOptions()
+          : kindsAvailable().embeddings
+            ? [{ id: AUTO_MODEL, label: "By meaning as well" }]
+            : []
+      }
       initialSelectedId={collections.some((c) => c.id === wanted) ? wanted : (collections[0]?.id ?? null)}
       isAdmin={isAdminRole(user.role)}
     />

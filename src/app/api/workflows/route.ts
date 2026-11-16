@@ -6,14 +6,15 @@ import { requireAdmin, requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
 import { serializeWorkflow } from "@/lib/workforce";
+import { workflowFor } from "@/lib/for-viewer";
 import { workflowCreateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async () => {
-  requireUser();
+  const user = requireUser();
   const rows = db.select().from(workflows).orderBy(asc(workflows.name)).all();
-  return json({ workflows: rows.map(serializeWorkflow) });
+  return json({ workflows: rows.map((w) => workflowFor(user.role, serializeWorkflow(w))) });
 });
 
 export const POST = handle(async (req) => {

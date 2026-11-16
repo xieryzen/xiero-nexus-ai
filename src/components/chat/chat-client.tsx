@@ -38,10 +38,17 @@ interface Msg {
 export function ChatClient({
   models,
   collections,
+  chooses = true,
+  ready = true,
 }: {
+  /** The models to choose from. Empty for someone who chooses none. */
   models: ChatModelOption[];
   /** Knowledge collections the user can read. */
   collections: ChatCollectionOption[];
+  /** Whether the model is chosen here. For a user it is not: the app chooses. */
+  chooses?: boolean;
+  /** For someone who chooses no model: whether the installation can answer a chat. */
+  ready?: boolean;
 }) {
   const [modelId, setModelId] = useState(models[0]?.id ?? "");
   const [systemPrompt, setSystemPrompt] = useState("");
@@ -63,7 +70,7 @@ export function ChatClient({
 
   async function send() {
     const text = input.trim();
-    if (!text || streaming || !modelId) return;
+    if (!text || streaming || (chooses && !modelId)) return;
     setError(null);
     setUsage(null);
     const nextMessages: Msg[] = [...messages, { role: "user", content: text }];
@@ -81,7 +88,7 @@ export function ChatClient({
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
-          modelRowId: modelId,
+          modelRowId: chooses ? modelId : undefined,
           systemPrompt: systemPrompt.trim() || undefined,
           // Only what was said: the sources of earlier answers are not sent back.
           messages: nextMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -168,7 +175,15 @@ export function ChatClient({
     setUsage(null);
   }
 
-  if (models.length === 0) {
+  if (!chooses && !ready) {
+    return (
+      <EmptyState
+        title="Chat is not available yet"
+        description="An administrator has to set this installation up."
+      />
+    );
+  }
+  if (chooses && models.length === 0) {
     return (
       <EmptyState
         title="No models available"
@@ -181,15 +196,17 @@ export function ChatClient({
     <div className="flex h-[calc(100vh-10rem)] flex-col">
       {/* Controls */}
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="sm:w-80">
-          <Select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label} · {m.providerName}
-              </option>
-            ))}
-          </Select>
-        </div>
+        {chooses && (
+          <div className="sm:w-80">
+            <Select value={modelId} onChange={(e) => setModelId(e.target.value)} aria-label="Model">
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label} · {m.providerName}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={() => setShowSystem((s) => !s)}>
             System prompt

@@ -8,13 +8,14 @@ import { getClientMeta } from "@/lib/request";
 import { loadOwnedProject } from "@/lib/project-access";
 import { projectUpdateSchema } from "@/lib/validation";
 import { serializeProject } from "@/lib/workforce";
+import { projectFor } from "@/lib/for-viewer";
 
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async (_req, { params }) => {
   const user = requireUser();
   const p = loadOwnedProject(params.id!, user);
-  return json({ project: serializeProject(p, { withTasks: true }) });
+  return json({ project: projectFor(user.role, serializeProject(p, { withTasks: true })) });
 });
 
 /** Change a project's title, its goal, or whether it remembers earlier runs. */
@@ -43,7 +44,7 @@ export const PATCH = handle(async (req, { params }) => {
     ip,
     userAgent,
   });
-  return json({ project: serializeProject(updated, { withTasks: true }) });
+  return json({ project: projectFor(user.role, serializeProject(updated, { withTasks: true })) });
 });
 
 export const DELETE = handle(async (req, { params }) => {

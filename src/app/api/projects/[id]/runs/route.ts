@@ -9,5 +9,5 @@ export const dynamic = "force-dynamic";
 export const GET = handle(async (_req, { params }) => {
   const user = requireUser();
   const project = loadOwnedProject(params.id!, user);
-  return json({ runs: listRuns(project.id, 30).map(serializeRun) });
+  return json({ runs: listRuns(project.id, 30).map((run) => serializeRun(run, user.role)) });
 });

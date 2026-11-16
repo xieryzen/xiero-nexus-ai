@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "visibility"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1329,14 +1329,25 @@ export async function automation(ctx) {
     eq("empty: refused", (await upload(admin, "/api/skills/upload", Buffer.alloc(0), "empty.md")).status, 400);
 
     begin("Skills: reading them back");
-    const listed = await bob.get("/api/skills");
-    eq("every user sees which skills there are", [listed.status, listed.data?.skills?.map((s) => s.name)], [200, ["brochure-layout", "escape-artist", "House style", "Paper plugin", "Reply to a customer", "review-checklist", "seo-basics"]]);
+    const listed = await admin.get("/api/skills");
+    eq("an administrator sees which skills there are", [listed.status, listed.data?.skills?.map((s) => s.name)], [200, ["brochure-layout", "escape-artist", "House style", "Paper plugin", "Reply to a customer", "review-checklist", "seo-basics"]]);
     check("  the list has their sizes, not their text", listed.data?.skills?.every((s) => s.instructions === undefined && s.instructionChars > 0), listed.data?.skills?.[0]);
-    const one = await bob.get(`/api/skills/${brochureId}`);
+    const one = await admin.get(`/api/skills/${brochureId}`);
     check("one skill is read with its instructions", /Start from the grid/.test(one.data?.skill?.instructions ?? ""), one.data?.skill);
-    const grid = await bob.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("references/grid.md")}`);
+    const grid = await admin.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("references/grid.md")}`);
     eq("  and each of its files", [grid.status, grid.data?.content], [200, "# Grid\n\nTwelve columns, 8 mm gutters.\n"]);
-    eq("  a file it does not have: not found", (await bob.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("../../etc/passwd")}`)).status, 404);
+    eq("  a file it does not have: not found", (await admin.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("../../etc/passwd")}`)).status, 404);
+    // What a skill says is the installation's own (v1.8.0).
+    eq(
+      "a user is not shown the skills: not the list, not one, not its files, not its download",
+      [
+        (await bob.get("/api/skills")).status,
+        (await bob.get(`/api/skills/${brochureId}`)).status,
+        (await bob.get(`/api/skills/${brochureId}/files?path=${encodeURIComponent("references/grid.md")}`)).status,
+        (await bob.raw(`/api/skills/${brochureId}/download`)).status,
+      ],
+      [403, 403, 403, 403],
+    );
     const download = await admin.raw(`/api/skills/${brochureId}/download`);
     const archive = readZip(Buffer.from(await download.arrayBuffer()), { maxEntries: 50, maxEntryBytes: 1024 * 1024, maxTotalBytes: 4 * 1024 * 1024 });
     eq("a skill is downloaded as a .skill that holds the same folder", [download.status, download.headers.get("content-disposition"), archive.entries.map((e) => e.path)], [200, 'attachment; filename="brochure-layout.skill"', ["brochure-layout/SKILL.md", "brochure-layout/references/grid.md", "brochure-layout/templates/page.html"]]);
@@ -1745,12 +1756,12 @@ export async function automation(ctx) {
     }
     eq("  a run of a project", [start.status, startError?.code, startError?.message], [402, "token_limit_reached", yours("120", "100")]);
     eq("    which is left as it was: no run was made", (await vera.get(`/api/projects/${veraProject}/runs`)).data?.runs?.length, 0);
-    const apiChat = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "hi" }] } });
+    const apiChat = await v1json("/chat/completions", { key, method: "POST", body: { model: "auto", messages: [{ role: "user", content: "hi" }] } });
     eq("the public API with the account's key: 402, in the shape API clients read", [keyMade.status, apiChat.status, apiChat.error?.type, apiChat.error?.code, apiChat.error?.message], [201, 402, "insufficient_quota", "token_limit_reached", yours("120", "100")]);
     const apiOthers = [
-      await v1json("/embeddings", { key, method: "POST", body: { model: "text-embedding-3-small", input: "x" } }),
-      await v1json("/audio/speech", { key, method: "POST", body: { model: "tts-1", input: "Hello.", voice: "alloy" } }),
-      await v1json("/images/generations", { key, method: "POST", body: { model: "Mock OpenAI-style/img-ok", prompt: "x" } }),
+      await v1json("/embeddings", { key, method: "POST", body: { model: "auto", input: "x" } }),
+      await v1json("/audio/speech", { key, method: "POST", body: { model: "auto", input: "Hello.", voice: "alloy" } }),
+      await v1json("/images/generations", { key, method: "POST", body: { model: "auto", prompt: "x" } }),
       await v1json(`/projects/${veraProject}/runs`, { key, method: "POST" }),
     ];
     eq("  embeddings, speech, an image and a run as well", apiOthers.map((res) => [res.status, res.error?.code]), Array(4).fill([402, "token_limit_reached"]));
@@ -1890,7 +1901,389 @@ export async function automation(ctx) {
     eq("the accounts of these checks are deleted", gone, [200, 200, 200, 200, 200, 200]);
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens };
+  // ─── What a user is shown ──────────────────────────────────────────────────
+
+  async function visibility() {
+    const PASS = "visibility-first-password-1";
+    const NOT_NOW = "This could not be done just now. Try again in a moment; if it stays that way, tell an administrator.";
+    const NOT_PUT_TOGETHER = `(What the tasks made could not be put together into one deliverable just now. The output of each finished task is in the task. ${NOT_NOW})`;
+    /** Names of this installation's setup. None of them is for a user. */
+    const SETUP = ["Mock OpenAI-style", "Mock OpenRouter", "Mock xAI", "Mock Image", "chat-mini", "chat-notools", "img-ok", "vid-ok", "tts-1", "text-embedding-3-small", "127.0.0.1:4010"];
+    const named = (value) => {
+      const text = typeof value === "string" ? value : JSON.stringify(value ?? null);
+      return SETUP.filter((name) => text.includes(name));
+    };
+    const force = (modelId, status, times) => fetch(`${MOCK}/__force?model=${modelId}&status=${status}${times ? `&times=${times}` : ""}`);
+    const posted = async () => (await mockLog()).filter((l) => l.method === "POST");
+    const pageOf = async (who, path) => {
+      const res = await who.raw(path);
+      return { status: res.status, html: res.status === 200 ? await res.text() : "", location: res.headers.get("location") };
+    };
+    const make = (username, extra = {}) => admin.post("/api/admin/users", { username, email: `${username}@example.com`, password: PASS, ...extra });
+    const signIn = async (name) => {
+      const who = client();
+      await who.post("/api/auth/login", { identifier: name, password: PASS });
+      return who;
+    };
+    const mark = async (id, forUsers) => (await admin.patch(`/api/models/${id}`, { forUsers })).data;
+    const usersGet = (list, kind) => (list ?? []).find((u) => u.kind === kind);
+
+    begin("What a user is shown: the accounts of these checks");
+    const zoeMade = await make("zoe");
+    const zakMade = await make("zak", { role: "admin" });
+    const zoeId = zoeMade.data?.user?.id;
+    const zakId = zakMade.data?.user?.id;
+    eq("a user and an administrator are made", [zoeMade.data?.user?.role, zakMade.data?.user?.role], ["user", "admin"]);
+    const zoe = await signIn("zoe");
+    const zak = await signIn("zak");
+
+    begin("What a user is shown: the setup is for administrators");
+    const provider = ids.providers.openai;
+    const closed = [
+      "/api/providers",
+      `/api/providers/${provider}`,
+      "/api/models",
+      "/api/models/health",
+      "/api/skills",
+      "/api/agents/tools",
+      "/api/admin/users",
+    ];
+    const forUser = [];
+    const forAdmin = [];
+    for (const path of closed) {
+      forUser.push((await zoe.get(path)).status);
+      forAdmin.push((await zak.get(path)).status);
+    }
+    eq("providers, models, the model check, skills, tools and accounts: not read by a user", forUser, closed.map(() => 403));
+    eq("  an administrator reads them all", forAdmin, closed.map(() => 200));
+    eq(
+      "a user changes none of it either",
+      [
+        (await zoe.post("/api/providers", { name: "Mine", adapter: "openai-compatible", baseUrl: `${MOCK}/openai/v1`, authType: "none" })).status,
+        (await zoe.post("/api/models", { providerId: provider, modelId: "mine", capabilities: ["text"] })).status,
+        (await zoe.patch(`/api/models/${ids.models.chat}`, { forUsers: false })).status,
+        (await zoe.post(`/api/models/${ids.models.chat}/test`, {})).status,
+        (await zoe.post("/api/agents", { name: "Mine", role: "Mine" })).status,
+      ],
+      [403, 403, 403, 403, 403],
+    );
+
+    begin("What a user is shown: agents, teams and workflows by name");
+    const wf = await workflow("Seen by users", [
+      { title: "Write", objective: "SECRET-OBJECTIVE: write one line about {{input}}.", acceptanceCriteria: "SECRET-CRITERIA: one line.", role: "Writer" },
+      { title: "Check", objective: "SECRET-OBJECTIVE: check the line.", role: "Writer", dependsOn: [1] },
+    ]);
+    await agent("Vis Writer", "Writer", { instructions: "SECRET-INSTRUCTIONS: you write for the visibility checks.", temperature: 0.3 });
+    const userAgents = (await zoe.get("/api/agents")).data?.agents ?? [];
+    const adminAgents = (await zak.get("/api/agents")).data?.agents ?? [];
+    const mine = userAgents.find((a) => a.name === "Vis Writer");
+    const theirs = adminAgents.find((a) => a.name === "Vis Writer");
+    eq(
+      "a user sees who the agents are, not what they are told nor what they work with",
+      [userAgents.length === adminAgents.length && userAgents.length > 0, mine?.role, mine?.instructions, mine?.primaryModelRowId, mine?.primaryModelLabel, mine?.tools, mine?.skillIds, mine?.collectionIds],
+      [true, "Writer", "", null, null, [], [], []],
+    );
+    check("  an administrator sees all of it", /SECRET-INSTRUCTIONS/.test(theirs?.instructions ?? "") && theirs?.primaryModelRowId === ids.models.chat && Boolean(theirs?.primaryModelLabel), theirs);
+    const userFlows = (await zoe.get("/api/workflows")).data?.workflows ?? [];
+    const seen = userFlows.find((w) => w.id === wf);
+    eq(
+      "a user sees a workflow's steps by title, agent and order, not what each tells its agent",
+      [seen?.name, seen?.steps?.map((step) => [step.title, step.role, step.objective, step.acceptanceCriteria ?? null, step.dependsOn ?? null])],
+      ["Seen by users", [["Write", "Writer", "", null, []], ["Check", "Writer", "", null, [1]]]],
+    );
+    const adminFlow = ((await zak.get("/api/workflows")).data?.workflows ?? []).find((w) => w.id === wf);
+    check("  an administrator sees what they say", /SECRET-OBJECTIVE/.test(adminFlow?.steps?.[0]?.objective ?? "") && /SECRET-CRITERIA/.test(adminFlow?.steps?.[0]?.acceptanceCriteria ?? ""), adminFlow?.steps?.[0]);
+    // Before 1.8 the Reel template ended a workflow's description with what a project needs to run it.
+    const madeOf = "Script, storyboard, 2 vertical scenes of 6 s, a cover image and a caption.";
+    const asOnce = `${madeOf} The project needs a video model and an image model, and the server needs ffmpeg.`;
+    const older = await admin.post("/api/workflows", { name: "Reel of an older version", description: asOnce, steps: [{ title: "Write", objective: "Write one line.", role: "Writer" }] });
+    const describedTo = async (who) => ((await who.get("/api/workflows")).data?.workflows ?? []).find((w) => w.id === older.data?.workflow?.id)?.description;
+    eq("a description the Reel template wrote before 1.8 is read by a user without what a project needs", [older.status, await describedTo(zoe), await describedTo(zak)], [201, madeOf, asOnce]);
+    const templateNow = reelWorkflowTemplate({ scenes: 2, clipSeconds: 6, keyframes: true, voiceOver: true, join: true, subtitles: true });
+    check("  the template says what it makes, and no more", /a cover image and a caption\.$/.test(templateNow.description) && !/\b(model|provider|ffmpeg)/i.test(`${templateNow.name} ${templateNow.description} ${templateNow.steps.map((step) => `${step.title} ${step.role}`).join(" ")}`), templateNow.description);
+    eq("  (that workflow is deleted again)", (await admin.del(`/api/workflows/${older.data?.workflow?.id}`)).status, 200);
+    const userTeams = await zoe.get("/api/teams");
+    const lists = JSON.stringify([userAgents, userFlows, userTeams.data]);
+    check("  nothing in these lists names a provider or a model, or holds what an agent is told", userTeams.status === 200 && named(lists).length === 0 && !/SECRET-/.test(lists) && (userTeams.data?.teams ?? []).every((team) => team.skillIds.length === 0), named(lists));
+
+    begin("What a user is shown: a chat without a model to choose");
+    await mockReset();
+    const hello = await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+    eq("a user chats and names no model: the one marked for users answers", [hello.status, hello.events.some((e) => e.done), (await posted()).map((l) => l.body?.model)], [200, true, ["chat-mini"]]);
+    check("  the answer does not say which it was", named(hello.text).length === 0, named(hello.text));
+    await mockReset();
+    const other = await sse(zoe, "/api/chat", { method: "POST", body: { modelRowId: state.models["chat-notools"], messages: [{ role: "user", content: "hi" }] } });
+    eq("a model a user names is not asked: the app's choice is", [other.events.some((e) => e.done), (await posted()).map((l) => l.body?.model)], [true, ["chat-mini"]]);
+    const noSuch = await sse(zoe, "/api/chat", { method: "POST", body: { modelRowId: "no-such-model", messages: [{ role: "user", content: "hi" }] } });
+    eq("  nor does a name that is no model tell them so", [noSuch.status, noSuch.events.some((e) => e.done)], [200, true]);
+    await force("chat-mini", 500, 1);
+    const failed = await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+    const failure = failed.events.find((e) => e.error)?.error ?? failed.text;
+    eq("when the provider fails, a user is told that it did not work, and no more", [failure, named(failed.text)], [NOT_NOW, []]);
+    await force("chat-mini", 500, 1);
+    const failedAdmin = await sse(zak, "/api/chat", { method: "POST", body: { modelRowId: ids.models.chat, messages: [{ role: "user", content: "hi" }] } });
+    const adminFailure = failedAdmin.events.find((e) => e.error)?.error ?? failedAdmin.text;
+    check("  an administrator is told what the provider said", /Provider responded 500/.test(adminFailure) && /chat-mini/.test(adminFailure), adminFailure);
+    await force("chat-mini", 200);
+
+    begin("What a user is shown: which model the app works with");
+    const before = (await admin.get("/api/models")).data?.users;
+    eq(
+      "the Models list says what users work with, kind by kind",
+      [usersGet(before, "chat")?.first?.label, usersGet(before, "chat")?.marked, usersGet(before, "image")?.first?.label, usersGet(before, "video")?.first?.label],
+      ["chat-mini · Mock OpenAI-style", 1, "Mock Image · Mock OpenAI-style", "vid-ok · Mock OpenAI-style"],
+    );
+    // Speech has no marked model: the cheapest of those with a price is taken, before those without one.
+    eq("  a kind without a marked model: the cheapest that is switched on", [usersGet(before, "audio")?.first?.label, usersGet(before, "audio")?.marked, usersGet(before, "embeddings")?.first?.label], ["tts-1 · Mock OpenAI-style", 0, "text-embedding-3-small · Mock OpenAI-style"]);
+    const second = await mark(state.models["chat-notools"], true);
+    eq("an administrator marks a second chat model for users: the cheaper one stays the first choice", [second?.model?.forUsers, usersGet(second?.users, "chat")?.first?.label, usersGet(second?.users, "chat")?.marked, usersGet(second?.users, "chat")?.choices], [true, "chat-mini · Mock OpenAI-style", 2, 2]);
+    await force("chat-mini", 500, 1);
+    await mockReset();
+    const second2 = await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+    eq("  when the first choice fails, the next marked one answers, and the user sees one answer", [second2.events.some((e) => e.done), second2.events.some((e) => e.error), (await posted()).map((l) => l.body?.model)], [true, false, ["chat-mini", "chat-notools"]]);
+    await force("chat-mini", 200);
+    const only = await mark(ids.models.chat, false);
+    eq("the mark is taken from the first: users work with the one that is left", [usersGet(only?.users, "chat")?.first?.label, usersGet(only?.users, "chat")?.marked], ["chat-notools · Mock OpenAI-style", 1]);
+    await mockReset();
+    await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+    eq("  and it is the one asked", (await posted()).map((l) => l.body?.model), ["chat-notools"]);
+    await mark(ids.models.chat, true);
+    const back = await mark(state.models["chat-notools"], false);
+    eq("the marks are put back", [usersGet(back?.users, "chat")?.first?.label, usersGet(back?.users, "chat")?.marked], ["chat-mini · Mock OpenAI-style", 1]);
+
+    begin("What a user is shown: images, voice-overs and videos without a model to choose");
+    await mockReset();
+    const voice = await zoe.post("/api/media/speech", { text: "Hello from the visibility checks.", voice: "alloy" });
+    eq("a voice-over: made, and the answer names no model and no cost", [voice.status, voice.data?.asset?.status, voice.data?.asset?.modelRowId, voice.data?.asset?.modelLabel, voice.data?.asset?.estimatedCost, (await posted()).map((l) => l.body?.model)], [201, "ready", null, "", null, ["tts-1"]]);
+    const video = await zoe.post("/api/media/videos", { prompt: "Waves for Zoe", durationSeconds: 4 });
+    const videoDone = await settle(zoe, video.data?.asset?.id);
+    eq("a video: started and finished, without a model in the answers", [video.status, videoDone.asset?.status, videoDone.asset?.modelRowId, videoDone.asset?.modelLabel, videoDone.asset?.estimatedCost], [201, "ready", null, "", null]);
+    const library = await zoe.get("/api/media");
+    check("  the library names none either", library.status === 200 && library.data?.assets?.length >= 2 && named(library.data).length === 0 && library.data.assets.every((a) => a.modelLabel === "" && a.estimatedCost === null), named(library.data));
+    // An image model that refuses: marked for users for a moment, in place of the one that works.
+    await mark(ids.models.img_openai, false);
+    await mark(ids.models["img-fail"], true);
+    const refused = await zoe.post("/api/media/images", { prompt: "A lighthouse for Zoe" });
+    const refusedAdmin = await zak.post("/api/media/images", { modelRowId: ids.models["img-fail"], prompt: "A lighthouse for Zak" });
+    await mark(ids.models["img-fail"], false);
+    await mark(ids.models.img_openai, true);
+    eq("an image the provider refuses: a user is told that it did not work", [refused.status >= 400, refused.error], [true, NOT_NOW]);
+    check("  an administrator is told why", refusedAdmin.status >= 400 && /safety system/.test(refusedAdmin.error ?? ""), refusedAdmin.error);
+    eq("what the server has installed is not said to a user", [(await zoe.get("/api/media/capabilities")).data?.render?.ffmpegVersion, typeof (await zak.get("/api/media/capabilities")).data?.render?.ffmpegVersion], [null, HAS_FFMPEG ? "string" : "object"]);
+
+    begin("What a user is shown: a project that cannot start");
+    const nobody = await admin.post("/api/teams", { name: "Nobody yet", agentIds: [] });
+    const emptyTeam = nobody.data?.team?.id;
+    const startOf = async (who, title) => {
+      const made = await who.post("/api/projects", { title, goal: "Check the app.", teamId: emptyTeam, ...(who === zoe ? {} : { managerModelRowId: ids.models.chat }) });
+      await runProject(who, made.data?.project?.id);
+      const read = async (reader) => (await reader.get(`/api/projects/${made.data?.project?.id}`)).data?.project;
+      return { id: made.data?.project?.id, read };
+    };
+    await mockReset();
+    const stuck = await startOf(zoe, "Zoe's team of nobody");
+    const stuckAdmin = await startOf(zak, "Zak's team of nobody");
+    const NOBODY = "The team of this project has no agent that is switched on. An administrator has to add one; a new project can work with another team.";
+    eq("a team without agents: a user is told what is missing, in words of their own", [(await stuck.read(zoe))?.status, (await stuck.read(zoe))?.error], ["failed", NOBODY]);
+    eq("  an administrator reads the same of that project", (await stuck.read(zak))?.error, NOBODY);
+    check("  of a project of their own, an administrator is told what an agent needs", (await stuckAdmin.read(zak))?.status === "failed" && /No usable agents \(each agent needs a model/.test((await stuckAdmin.read(zak))?.error ?? ""), (await stuckAdmin.read(zak))?.error);
+    eq("  nothing was asked of a provider", (await posted()).length, 0);
+    for (const id of [stuck.id, stuckAdmin.id]) await admin.del(`/api/projects/${id}`);
+    eq("  (the team is deleted again)", (await admin.del(`/api/teams/${emptyTeam}`)).status, 200);
+
+    begin("What a user is shown: a project that names no model");
+    const noModel = await zoe.post("/api/projects", { title: "Zoe's first", goal: "Check the app.", workflowId: wf });
+    const zoeProject = noModel.data?.project?.id;
+    eq("a user makes a project without a model", [noModel.status, noModel.data?.project?.managerModelRowId], [201, null]);
+    const withModel = await zoe.post("/api/projects", { title: "Zoe's second", goal: "Check the app.", workflowId: wf, managerModelRowId: "no-such-model", imageModelRowId: "no-such-model" });
+    eq("  one that names models is taken without them", [withModel.status, withModel.data?.project?.managerModelRowId, withModel.data?.project?.imageModelRowId], [201, null, null]);
+    await mockReset();
+    const run = await runProject(zoe, zoeProject, { input: "lamps" });
+    const runText = JSON.stringify(run.events);
+    eq("it runs: both tasks succeed, with the model that is marked for users", [finished(run.events).map((e) => e.status), [...new Set((await posted()).map((l) => l.body?.model))]], [["succeeded", "succeeded"], ["chat-mini"]]);
+    check("  what the run reports names no model and no provider", named(runText).length === 0, named(runText));
+    const shownProject = (await zoe.get(`/api/projects/${zoeProject}`)).data?.project;
+    eq("  the project is shown without what its steps told the agents", shownProject?.tasks?.map((task) => [task.title, task.objective, task.acceptanceCriteria]), [["Write", "", null], ["Check", "", null]]);
+    const forOwner = (await admin.get(`/api/projects/${zoeProject}`)).data?.project;
+    check("  an administrator who opens it sees them", /SECRET-OBJECTIVE/.test(forOwner?.tasks?.[0]?.objective ?? ""), forOwner?.tasks?.[0]);
+    const attempts = (await zoe.get(`/api/projects/${zoeProject}/attempts`)).data?.attempts ?? [];
+    check("  its attempts are listed without the model and the provider", attempts.length >= 2 && attempts.every((a) => a.model === null && a.provider === null) && named(attempts).length === 0, attempts[0]);
+    const adminAttempts = (await admin.get(`/api/projects/${zoeProject}/attempts`)).data?.attempts ?? [];
+    check("  an administrator sees which model each attempt asked", adminAttempts.length >= 2 && adminAttempts.every((a) => a.model === "chat-mini" && a.provider === "Mock OpenAI-style"), adminAttempts[0]);
+
+    await force("chat-mini", 500);
+    const broken = await runProject(zoe, zoeProject, { input: "lamps" });
+    await force("chat-mini", 200);
+    const brokenText = JSON.stringify(broken.events);
+    const brokenTask = finished(broken.events).find((e) => e.status === "failed");
+    eq("a run in which the provider fails: the task says that it did not work, and no more", [brokenTask?.error, named(brokenText)], [NOT_NOW, []]);
+    const afterBroken = (await zoe.get(`/api/projects/${zoeProject}`)).data?.project;
+    check("  the project, read again, says the same", afterBroken?.tasks?.some((task) => task.error === NOT_NOW) && named(afterBroken).length === 0 && !/Provider responded/.test(JSON.stringify(afterBroken)), afterBroken?.tasks?.map((task) => task.error));
+    const brokenForAdmin = (await admin.get(`/api/projects/${zoeProject}`)).data?.project;
+    check("  an administrator reads what the provider said", brokenForAdmin?.tasks?.some((task) => /Provider responded 500/.test(task.error ?? "")), brokenForAdmin?.tasks?.map((task) => task.error));
+    const bell = (await zoe.get("/api/notifications")).data?.notifications ?? [];
+    check("  the notifications of a user name nothing of the setup", bell.length >= 2 && named(bell).length === 0 && !/Provider responded/.test(JSON.stringify(bell)), bell.map((n) => [n.title, n.body]));
+    const history = (await zoe.get(`/api/projects/${zoeProject}/runs`)).data;
+    check("  nor does the history of its runs", history?.runs?.length === 2 && named(history).length === 0 && !/Provider responded/.test(JSON.stringify(history)), named(history));
+
+    // The two tasks are answered, and the request that puts their work together is not.
+    await fetch(`${MOCK}/__force?model=chat-mini&status=500&times=1&after=2`);
+    const half = await runProject(zoe, zoeProject, { input: "lamps" });
+    await force("chat-mini", 200);
+    const halfResult = half.events.find((e) => e.type === "final")?.deliverable;
+    eq("a result that could not be put together: a user reads that, and where the work of the tasks is", [finished(half.events).map((e) => e.status), halfResult], [["succeeded", "succeeded"], NOT_PUT_TOGETHER]);
+    const halfRunId = (await zoe.get(`/api/projects/${zoeProject}/runs`)).data?.runs?.[0]?.id;
+    eq(
+      "  the project and the run, read again, say the same",
+      [(await zoe.get(`/api/projects/${zoeProject}`)).data?.project?.finalDeliverable, (await zoe.get(`/api/projects/${zoeProject}/runs/${halfRunId}`)).data?.run?.deliverable],
+      [NOT_PUT_TOGETHER, NOT_PUT_TOGETHER],
+    );
+    const halfForAdmin = (await admin.get(`/api/projects/${zoeProject}/runs/${halfRunId}`)).data?.run?.deliverable;
+    check("  an administrator reads what the provider said", /^\(Synthesis step failed: Provider responded 500/.test(halfForAdmin ?? ""), halfForAdmin);
+
+    begin("What a user is shown: a project that makes an image");
+    const posterWf = await workflow("Poster for users", [{ title: "Poster", objective: "SECRET-OBJECTIVE: a poster of a lamp.", role: "Writer", kind: "image" }]);
+    const posterMade = await zoe.post("/api/projects", { title: "Zoe's poster", goal: "A poster of a lamp.", workflowId: posterWf });
+    await mockReset();
+    const posterRun = await runProject(zoe, posterMade.data?.project?.id);
+    const posterTask = taskOf(posterRun.events, 1);
+    eq("a user's project with an image step runs without a model being named for it", [posterMade.status, posterTask?.status, (await posted()).map((l) => l.body?.model)], [201, "succeeded", ["chat-mini", "img-ok", "chat-mini", "chat-mini"]]);
+    check("  what the task left in writing does not say which model made the image", /^Generated image(?: \([^()]*\))?\. Asset [0-9a-f-]{36}\.\n/.test(posterTask?.artifact ?? ""), posterTask?.artifact);
+    check("  the image is with the task, without its model and its cost", posterTask?.assets?.length === 1 && posterTask.assets[0].modelLabel === "" && posterTask.assets[0].estimatedCost === null && posterTask.assets[0].status === "ready", posterTask?.assets);
+    check("  nothing the run reported names a provider or a model", named(posterRun.events).length === 0, named(posterRun.events));
+    const posterShown = (await zoe.get(`/api/projects/${posterMade.data?.project?.id}`)).data?.project;
+    check("  nor does the project, read again", named(posterShown).length === 0 && /^Generated image/.test(posterShown?.tasks?.[0]?.artifact ?? ""), named(posterShown));
+    const adminPoster = await project(admin, { title: "The owner's poster", workflowId: posterWf, imageModelRowId: ids.models.img_openai });
+    const adminPosterRun = await runProject(admin, adminPoster);
+    check("an administrator's project says which model made its image", /^Generated image with Mock Image/.test(taskOf(adminPosterRun.events, 1)?.artifact ?? ""), taskOf(adminPosterRun.events, 1)?.artifact);
+    // What was written before this version named the model: a user reads it without.
+    const olderDb = database();
+    const olderId = posterTask?.assets?.[0]?.id;
+    olderDb.prepare("UPDATE project_tasks SET artifact = ? WHERE project_id = ? AND seq = 1").run(`Generated image with Mock Image (3:4). Asset ${olderId}.\nThe prompt.`, posterMade.data?.project?.id);
+    olderDb.close();
+    eq(
+      "a line that was written with the model's name is read without it by a user, and with it by an administrator",
+      [(await zoe.get(`/api/projects/${posterMade.data?.project?.id}`)).data?.project?.tasks?.[0]?.artifact, (await admin.get(`/api/projects/${posterMade.data?.project?.id}`)).data?.project?.tasks?.[0]?.artifact],
+      [`Generated image. Asset ${olderId}.\nThe prompt.`, `Generated image with Mock Image (3:4). Asset ${olderId}.\nThe prompt.`],
+    );
+
+    begin("What a user is shown: the knowledge base without a model to choose");
+    const col = await zoe.post("/api/knowledge", { name: "Zoe's notes", embeddingModelRowId: "auto" });
+    const colId = col.data?.collection?.id;
+    eq("a user asks for a search by meaning with a yes: the answer names no model", [col.status, col.data?.collection?.embeddingModelRowId, col.data?.collection?.embeddingModelLabel ?? null], [201, "auto", null]);
+    await zoe.post(`/api/knowledge/${colId}/documents`, { title: "Lamps", text: "Every lamp has a wick. The wick is trimmed every four hours." });
+    const embedded = await until(async () => (await zoe.get(`/api/knowledge/${colId}`)).data, (data) => data?.documents?.every((d) => d.embeddingStatus !== "pending"));
+    eq("  its documents are embedded all the same", embedded?.documents?.map((d) => d.embeddingStatus), ["ready"]);
+    check("  and the collection, read again, names none", named(embedded).length === 0, named(embedded));
+    const stored = database();
+    const storedModel = stored.prepare("SELECT m.model_id AS model FROM knowledge_collections c JOIN models m ON m.id = c.embedding_model_row_id WHERE c.id = ?").get(colId);
+    stored.close();
+    eq("  what was chosen is kept with the collection", storedModel?.model, "text-embedding-3-small");
+    const plain = await zoe.post("/api/knowledge", { name: "Zoe's words" });
+    eq("without the yes, a collection is searched by its words", [plain.status, plain.data?.collection?.embeddingModelRowId], [201, null]);
+
+    begin("What a user is shown: what was used, not where and at what price");
+    const usage = (await zoe.get("/api/usage")).data;
+    check(
+      "a user's usage counts tokens and requests, without providers, models and costs",
+      usage?.scope === "self" && usage.summary.totals.tokens > 0 && usage.summary.totals.cost === 0 && usage.summary.month.cost === 0 && usage.summary.recent.length > 0 &&
+        usage.summary.recent.every((r) => r.providerName === null && r.modelId === null && r.estimatedCost === null) && named(usage).length === 0,
+      usage?.summary?.recent?.[0],
+    );
+    const adminUsage = (await zak.get("/api/usage")).data;
+    check("  an administrator sees them", adminUsage?.scope === "all" && adminUsage.summary.recent.some((r) => r.providerName === "Mock OpenAI-style" && r.modelId), adminUsage?.summary?.recent?.[0]);
+
+    begin("What a user is shown: the public API with a user's key");
+    const keyMade = await zoe.post("/api/account/api-keys", { name: "Zoe's key", scopes: ["chat", "embeddings", "media", "projects"], modelRowIds: [ids.models.chat], monthlyCostLimit: 5 });
+    const key = keyMade.data?.secret;
+    eq("a user's key is limited to no model and to no cost: the account names neither", [keyMade.status, keyMade.data?.key?.modelRowIds, keyMade.data?.key?.monthlyCostLimit], [201, null, null]);
+    const listed = await v1json("/models", { key });
+    eq("its list of models holds one name: auto", [listed.status, listed.data?.data?.map((m) => [m.id, m.owned_by])], [200, [["auto", "this installation"]]]);
+    check("  with what it can do", ["text", "image_generation", "video_generation", "speech_generation", "embeddings"].every((c) => listed.data?.data?.[0]?.capabilities?.includes(c)), listed.data?.data?.[0]?.capabilities);
+    await mockReset();
+    const viaApi = await v1json("/chat/completions", { key, method: "POST", body: { model: "auto", messages: [{ role: "user", content: "hi" }] } });
+    eq("a chat that names auto is answered, and the answer says auto", [viaApi.status, viaApi.data?.model, Boolean(viaApi.data?.choices?.[0]?.message?.content), (await posted()).map((l) => l.body?.model)], [200, "auto", true, ["chat-mini"]]);
+    const real = await v1json("/chat/completions", { key, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "hi" }] } });
+    const unreal = await v1json("/chat/completions", { key, method: "POST", body: { model: "no-such-model", messages: [{ role: "user", content: "hi" }] } });
+    eq("a name of a model is refused, and says to send auto", [real.status, real.error?.code, real.error?.message], [404, "model_not_found", 'This key names no model. Send "auto" as the model: what the request is done with is chosen for it.']);
+    eq("  in the same words whether there is such a model or not", [unreal.status, unreal.error?.message], [real.status, real.error?.message]);
+    const apiImage = await v1json("/images/generations", { key, method: "POST", body: { model: "auto", prompt: "a lamp" } });
+    const apiSpeech = await v1(`/audio/speech`, { key, method: "POST", body: { model: "auto", input: "Hello.", voice: "alloy" } });
+    const apiEmbed = await v1json("/embeddings", { key, method: "POST", body: { model: "auto", input: "a lamp" } });
+    await apiSpeech.arrayBuffer();
+    eq("an image, a voice-over and an embedding with auto", [apiImage.status, apiSpeech.status, apiEmbed.status, apiEmbed.data?.model], [200, 200, 200, "auto"]);
+    const apiVideo = await v1json("/videos", { key, method: "POST", body: { model: "auto", prompt: "Waves", seconds: 4 } });
+    eq("a video with auto: the answer says auto", [apiVideo.status, apiVideo.data?.model], [201, "auto"]);
+    check("  none of these answers names a model or a provider", named([viaApi.data, apiImage.data, apiEmbed.data?.model, apiVideo.data]).length === 0, named([viaApi.data, apiImage.data, apiVideo.data]));
+    await force("chat-mini", 500, 1);
+    const apiFailed = await v1json("/chat/completions", { key, method: "POST", body: { model: "auto", messages: [{ role: "user", content: "hi" }] } });
+    await force("chat-mini", 200);
+    eq("when the provider fails, the key is told that it did not work", [apiFailed.status, apiFailed.error?.message], [502, NOT_NOW]);
+    const apiRun = await v1json(`/projects/${zoeProject}/runs`, { key, method: "POST" });
+    const apiRunDone = await until(async () => (await v1json(`/runs/${apiRun.data?.id}`, { key })).data, (r) => !["queued", "running"].includes(r?.status), { tries: 40 });
+    check("a run started with the key is reported without a model", apiRun.status < 300 && apiRunDone?.status === "succeeded" && named(apiRunDone).length === 0, [apiRun.status, apiRunDone?.status, named(apiRunDone)]);
+    const adminKey = (await zak.post("/api/account/api-keys", { name: "Zak's key", scopes: ["chat"] })).data?.secret;
+    const adminList = await v1json("/models", { key: adminKey });
+    check("an administrator's key lists the models by name", adminList.data?.data?.some((m) => m.id === "chat-mini" && m.owned_by === "Mock OpenAI-style") && !adminList.data.data.some((m) => m.id === "auto"), adminList.data?.data?.slice(0, 3));
+    const adminAuto = await v1json("/chat/completions", { key: adminKey, method: "POST", body: { model: "auto", messages: [{ role: "user", content: "hi" }] } });
+    const adminNamed = await v1json("/chat/completions", { key: adminKey, method: "POST", body: { model: "chat-mini", messages: [{ role: "user", content: "hi" }] } });
+    eq("  it names one, or leaves the choice to the app with auto", [adminNamed.status, adminNamed.data?.model, adminAuto.status], [200, "chat-mini", 200]);
+
+    begin("What a user is shown: the pages");
+    const sent = [];
+    for (const path of ["/dashboard/providers", "/dashboard/models", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"]) {
+      const res = await pageOf(zoe, path);
+      sent.push([res.status, /\/dashboard$/.test(res.location ?? "")]);
+    }
+    eq("Providers, Models, Skills, Users, Audit and Observability send a user back to the overview", sent, Array(6).fill([307, true]));
+    const pages = ["/dashboard", "/dashboard/projects", `/dashboard/projects/${zoeProject}`, "/dashboard/agents", "/dashboard/workflows", "/dashboard/chat", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"];
+    const leaks = [];
+    const statuses = [];
+    let all = "";
+    for (const path of pages) {
+      const res = await pageOf(zoe, path);
+      statuses.push(res.status);
+      all += res.html;
+      const found = [...named(res.html), ...(/SECRET-/.test(res.html) ? ["what an agent or a step is told"] : [])];
+      if (found.length > 0) leaks.push([path, found]);
+    }
+    eq("a user's pages open", statuses, pages.map(() => 200));
+    eq("  none of them names a provider or a model, or holds what an agent or a step is told", leaks, []);
+    check("  the menu has no Providers, Models and Skills", !all.includes('href="/dashboard/providers"') && !all.includes('href="/dashboard/models"') && !all.includes('href="/dashboard/skills"') && all.includes('href="/dashboard/studio"'), null);
+    check("  the pages hold what is the user's own: the project, the agents, the workflow", all.includes("Zoe&#x27;s first") && all.includes("Vis Writer") && all.includes("Seen by users"), null);
+    const adminChat = await pageOf(zak, "/dashboard/chat");
+    const adminModels = await pageOf(zak, "/dashboard/models");
+    check("an administrator's pages name them, and have the menu", adminChat.html.includes("chat-mini") && adminChat.html.includes('href="/dashboard/providers"') && adminModels.status === 200 && adminModels.html.includes('id="users-models"') && adminModels.html.includes("for users"), [adminChat.status, adminModels.status]);
+
+    begin("What a user is shown: who changes roles and token limits");
+    eq(
+      "an administrator sees the accounts, and changes no role, no token limit, no account",
+      [
+        (await zak.get("/api/admin/users")).status,
+        (await zak.patch(`/api/admin/users/${zoeId}`, { role: "admin" })).status,
+        (await zak.patch(`/api/admin/users/${zoeId}`, { tokenLimit: 20_000_000 })).status,
+        (await zak.patch(`/api/admin/users/${zakId}`, { role: "owner" })).status,
+        (await zak.patch(`/api/admin/users/${zakId}`, { tokenLimit: 20_000_000 })).status,
+        (await zak.post("/api/admin/users", { username: "zed", email: "zed@example.com", password: PASS })).status,
+        (await zak.del(`/api/admin/users/${zoeId}`)).status,
+      ],
+      [200, 403, 403, 403, 403, 403, 403],
+    );
+    const unchanged = ((await admin.get("/api/admin/users")).data?.users ?? []).filter((u) => ["zoe", "zak"].includes(u.username)).map((u) => [u.username, u.role, u.tokenLimit]).sort();
+    eq("  both accounts are what they were", unchanged, [["zak", "admin", 10_000_000], ["zoe", "user", 10_000_000]]);
+    const byOwner = await admin.patch(`/api/admin/users/${zoeId}`, { role: "admin", tokenLimit: 20_000_000 });
+    eq("the owner changes a role and a token limit", [byOwner.status, byOwner.data?.user?.role, byOwner.data?.user?.tokenLimit], [200, "admin", 20_000_000]);
+    eq("  and the account, now an administrator, is shown the setup at once", [(await zoe.get("/api/models")).status, (await zoe.get("/api/providers")).status], [200, 200]);
+    const backToUser = await admin.patch(`/api/admin/users/${zoeId}`, { role: "user" });
+    eq("  and no longer when it is a user again", [backToUser.data?.user?.role, (await zoe.get("/api/models")).status], ["user", 403]);
+
+    // The accounts of these checks go, so that the lists after them are what they were.
+    const gone = [];
+    for (const id of [zoeId, zakId]) gone.push((await admin.del(`/api/admin/users/${id}`)).status);
+    eq("the accounts of these checks are deleted", gone, [200, 200]);
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

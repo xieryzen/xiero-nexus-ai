@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 /** A project's runs, newest first. */
 export const GET = v1("projects", (_req, { params, caller }) => {
   const project = loadOwnedProject(params.id!, caller.user);
-  return NextResponse.json({ object: "list", data: listRuns(project.id, 50).map((r) => runJson(r)) });
+  return NextResponse.json({ object: "list", data: listRuns(project.id, 50).map((r) => runJson(r, caller.user.role)) });
 });
 
 /**
@@ -44,7 +44,7 @@ export const POST = v1("projects", async (req, { params, caller }) => {
     input,
   });
   return NextResponse.json(
-    { ...runJson(result.run), message: result.message ?? null },
+    { ...runJson(result.run, caller.user.role), message: result.message ?? null },
     { status: result.outcome === "queued" ? 202 : 200 },
   );
 });

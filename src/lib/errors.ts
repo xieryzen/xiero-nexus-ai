@@ -10,6 +10,23 @@ export class AppError extends Error {
   }
 }
 
+/**
+ * An error whose message is written for everyone. It is told as it is, also
+ * to someone who is not shown the setup, whatever words it uses (shown.ts).
+ */
+export class PlainError extends AppError {
+  /** Told by this mark, not by the class: it holds across separately built parts of the server. */
+  readonly plain = true;
+  constructor(status: number, code: string, message: string) {
+    super(status, code, message);
+    this.name = "PlainError";
+  }
+}
+
+export function isPlainError(err: unknown): boolean {
+  return err instanceof AppError && (err as { plain?: unknown }).plain === true;
+}
+
 export const Errors = {
   unauthorized: (m = "Authentication required") =>
     new AppError(401, "unauthorized", m),

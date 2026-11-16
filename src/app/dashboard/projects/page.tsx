@@ -3,11 +3,13 @@ import { db } from "@/db";
 import { projects, teams, workflows } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
 import { ffmpegStatus } from "@/lib/media/ffmpeg";
+import { projectFor } from "@/lib/for-viewer";
+import { kindsAvailable } from "@/lib/model-choice";
 import { chatModels, mediaModelOptions, usableModels } from "@/lib/model-options";
 import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { CommandCenter } from "@/components/projects/command-center";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, seesSetup } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Manager" };
@@ -20,14 +22,22 @@ export default async function ProjectsPage() {
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
       : db.select().from(projects).where(eq(projects.createdBy, user.id)).orderBy(desc(projects.updatedAt)).all();
 
-  const allModels = usableModels();
-  const managerModels = chatModels(allModels).map((m) => ({
-    id: m.id,
-    label: `${m.name} · ${m.providerName}`,
-  }));
-  const imageModels = mediaModelOptions("image", allModels).map((m) => ({ id: m.id, label: m.label }));
-  const videoModels = mediaModelOptions("video", allModels).map((m) => ({ id: m.id, label: m.label }));
-  const speechModels = mediaModelOptions("audio", allModels).map((m) => ({ id: m.id, label: m.label }));
+  // Someone who is shown the setup chooses the project's models. A user is
+  // not handed the lists: the app chooses, and the form is told only what the
+  // installation can do, as one entry ("yes") per kind.
+  const chooses = seesSetup(user.role);
+  const can = chooses ? null : kindsAvailable();
+  const yes = (available: boolean) => (available ? [{ id: "auto", label: "Yes" }] : []);
+  const allModels = chooses ? usableModels() : [];
+  const managerModels = can
+    ? yes(can.chat)
+    : chatModels(allModels).map((m) => ({
+        id: m.id,
+        label: `${m.name} · ${m.providerName}`,
+      }));
+  const imageModels = can ? yes(can.image) : mediaModelOptions("image", allModels).map((m) => ({ id: m.id, label: m.label }));
+  const videoModels = can ? yes(can.video) : mediaModelOptions("video", allModels).map((m) => ({ id: m.id, label: m.label }));
+  const speechModels = can ? yes(can.audio) : mediaModelOptions("audio", allModels).map((m) => ({ id: m.id, label: m.label }));
   const ffmpeg = await ffmpegStatus();
 
   const teamRows = db.select({ id: teams.id, name: teams.name }).from(teams).orderBy(asc(teams.name)).all();
@@ -50,7 +60,8 @@ export default async function ProjectsPage() {
 
   return (
     <CommandCenter
-      initialProjects={projectRows.map((p) => serializeProject(p))}
+      initialProjects={projectRows.map((p) => projectFor(user.role, serializeProject(p)))}
+      chooses={chooses}
       managerModels={managerModels}
       imageModels={imageModels}
       videoModels={videoModels}

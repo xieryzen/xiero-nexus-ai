@@ -1,3 +1,4 @@
+import { textFor } from "./shown";
 import "server-only";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
@@ -135,9 +136,10 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
         result.outcome === "failed"
           ? `Run could not start: ${project.title}`
           : `Run is waiting for approval: ${project.title}`,
+      problem: result.outcome === "failed" ? result.message : null,
       body:
         result.outcome === "failed"
-          ? result.message
+          ? null
           : "This project asks for an approval before each run. Approve it, then run it.",
       link: link(project.id),
     });
@@ -195,13 +197,14 @@ export interface RunDTO {
   finishedAt: number | null;
 }
 
-export function serializeRun(run: ProjectRun): RunDTO {
+/** A run as someone with this role is shown it: what went wrong names no provider to a user. */
+export function serializeRun(run: ProjectRun, role: string | null | undefined): RunDTO {
   return {
     id: run.id,
     status: run.status,
     trigger: run.trigger,
     input: run.input,
-    error: run.error,
+    error: textFor(role, run.error),
     tokensUsed: run.tokensUsed,
     hasDeliverable: Boolean(run.deliverable),
     createdAt: run.createdAt.getTime(),

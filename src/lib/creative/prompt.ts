@@ -107,13 +107,15 @@ export function cleanMediaPrompt(raw: string, max: number = MAX_MEDIA_PROMPT_CHA
 export function mediaArtifact(input: {
   kind: GeneratedKind;
   assetId: string;
+  /** The model that made it. Empty when the text is not to say which. */
   modelLabel: string;
   prompt: string;
   options?: MediaOptions;
 }): string {
+  const by = input.modelLabel ? ` with ${input.modelLabel}` : "";
   if (input.kind === "audio") {
     return (
-      `Generated voice-over with ${input.modelLabel}` +
+      `Generated voice-over${by}` +
       (input.options?.voice ? ` (voice ${input.options.voice})` : "") +
       `. Asset ${input.assetId}.\n` +
       "The audio itself is not audible to other agents; this is the text that is spoken:\n" +
@@ -130,7 +132,7 @@ export function mediaArtifact(input: {
     input.kind === "video" && input.options?.imageAssetId ? "starting from an image" : null,
   ].filter(Boolean);
   return (
-    `Generated ${input.kind} with ${input.modelLabel}` +
+    `Generated ${input.kind}${by}` +
     (details.length ? ` (${details.join(", ")})` : "") +
     `. Asset ${input.assetId}.\n` +
     `The ${input.kind} itself is not visible to other agents; this is the prompt it was generated from:\n` +

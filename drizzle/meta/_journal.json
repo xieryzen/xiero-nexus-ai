@@ -78,6 +78,13 @@
       "when": 1794833145836,
       "tag": "0010_token_balance",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794866433890,
+      "tag": "0011_models_for_users",
+      "breakpoints": true
     }
   ]
 }

@@ -376,14 +376,17 @@ function chatAnswer(body) {
 /**
  * Models that the checks switch: /__force?model=<id>&status=<code> makes the
  * chat requests to that model fail with that status, &times=<n> only the next
- * n of them; status=200 lets it answer again.
+ * n of them, &after=<m> only once m more have been answered; status=200 lets
+ * it answer again.
  */
 const forced = new Map();
 
 function chat(req, res, body) {
   const model = String(body?.model ?? "");
   const force = forced.get(model);
-  if (force) {
+  if (force && force.skip > 0) {
+    force.skip -= 1;
+  } else if (force) {
     force.left -= 1;
     if (force.left <= 0) forced.delete(model);
     return send(res, force.status, { error: { message: `The checks made ${model} answer ${force.status}.` } });
@@ -946,8 +949,9 @@ const api = http.createServer(async (req, res) => {
     const model = url.searchParams.get("model") ?? "";
     const status = Number(url.searchParams.get("status") ?? 200);
     const times = Number(url.searchParams.get("times") ?? 0);
+    const after = Number(url.searchParams.get("after") ?? 0);
     if (status === 200) forced.delete(model);
-    else forced.set(model, { status, left: times > 0 ? times : Infinity });
+    else forced.set(model, { status, left: times > 0 ? times : Infinity, skip: after > 0 ? after : 0 });
     return send(res, 200, { ok: true });
   }
 

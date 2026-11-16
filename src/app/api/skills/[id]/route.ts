@@ -1,5 +1,5 @@
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
 import { deleteSkill, describeSkill, loadSkill, updateSkill } from "@/lib/skills/service";
@@ -8,7 +8,7 @@ import { skillUpdateSchema } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async (_req, { params }) => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   return json({ skill: describeSkill(loadSkill(params.id!)) });
 });
 

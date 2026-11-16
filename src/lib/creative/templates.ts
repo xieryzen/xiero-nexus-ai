@@ -197,18 +197,16 @@ export function reelWorkflowTemplate(opts: ReelOptions = {}): WorkflowTemplate {
     voiceOver ? "voice-over" : "",
     join ? (subtitles ? "joined, subtitles" : "joined") : "",
   ].filter(Boolean);
-  const needs = ["a video model", "an image model", ...(voiceOver ? ["a speech model"] : [])];
   return {
     name: `Reel (${scenes} ${sceneWord}${extras.length ? `, ${extras.join(", ")}` : ""})`,
+    // What the workflow makes: everyone who may choose it reads this. What a
+    // project needs to run it is said where a workflow is built (needsInWords).
     description:
       `Script, storyboard, ${scenes} vertical ${sceneWord} of ${seconds} s` +
       (keyframes ? ", each started from its own keyframe image" : "") +
       (voiceOver ? ", a voice-over for each" : "") +
       (join ? `, joined into one video${subtitles ? " with subtitles" : ""}` : "") +
-      ", a cover image and a caption. The project needs " +
-      (needs.length === 2 ? needs.join(" and ") : `${needs.slice(0, -1).join(", ")} and ${needs[needs.length - 1]}`) +
-      (join ? ", and the server needs ffmpeg" : "") +
-      ".",
+      ", a cover image and a caption.",
     steps,
   };
 }
@@ -234,4 +232,22 @@ export function templateNeeds(steps: { kind?: TaskKind }[]): {
     audio: audio > 0,
     render: count("render") > 0,
   };
+}
+
+/**
+ * What a project and the server must have for steps like these, as a sentence
+ * for whoever sets a project up: "The project needs a video model and an
+ * image model, and the server needs ffmpeg." Empty when they need nothing.
+ */
+export function needsInWords(needs: Pick<ReturnType<typeof templateNeeds>, "image" | "video" | "audio" | "render">): string {
+  const models = [
+    needs.video ? "a video model" : "",
+    needs.image ? "an image model" : "",
+    needs.audio ? "a speech model" : "",
+  ].filter(Boolean);
+  const list = models.length <= 2 ? models.join(" and ") : `${models.slice(0, -1).join(", ")} and ${models[models.length - 1]}`;
+  const parts = [models.length > 0 ? `the project needs ${list}` : "", needs.render ? "the server needs ffmpeg" : ""].filter(Boolean);
+  if (parts.length === 0) return "";
+  const sentence = parts.join(", and ");
+  return `${sentence[0]!.toUpperCase()}${sentence.slice(1)}.`;
 }

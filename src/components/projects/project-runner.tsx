@@ -86,6 +86,7 @@ export function ProjectRunner({
   speechModelLabel,
   initialSchedules,
   initialRuns,
+  chooses = true,
 }: {
   project: ProjectDTO;
   agentNames: Record<string, string>;
@@ -93,11 +94,14 @@ export function ProjectRunner({
   canApprove: boolean;
   /** Everything this project's runs generated, oldest first. */
   initialAssets: MediaAssetDTO[];
+  /** The model each kind is made with, by name. For someone who is not shown the setup: any text when the project makes that kind. */
   imageModelLabel: string | null;
   videoModelLabel: string | null;
   speechModelLabel: string | null;
   initialSchedules: ScheduleDTO[];
   initialRuns: RunDTO[];
+  /** Whether the viewer is shown the setup: the models by name, and what a provider does. */
+  chooses?: boolean;
 }) {
   const [status, setStatus] = useState(project.status);
   const [tasks, setTasks] = useState<TaskLive[]>(
@@ -458,14 +462,18 @@ export function ProjectRunner({
           · budget {formatNumber(budgetUsed)} / {formatNumber(budgetLimit)} tokens · max {project.maxParallel}× parallel
         </span>
         {hasMediaModels && (
-          <span className="text-xs text-ink-3">
-            · {[
-              imageModelLabel ? `images: ${imageModelLabel}` : "",
-              videoModelLabel ? `videos: ${videoModelLabel}` : "",
-              speechModelLabel ? `voice: ${speechModelLabel}` : "",
-            ]
-              .filter(Boolean)
-              .join(" · ")}{" "}
+          <span className="text-xs text-ink-3" id="project-media">
+            · {chooses
+              ? [
+                  imageModelLabel ? `images: ${imageModelLabel}` : "",
+                  videoModelLabel ? `videos: ${videoModelLabel}` : "",
+                  speechModelLabel ? `voice: ${speechModelLabel}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
+              : `makes ${[imageModelLabel ? "images" : "", videoModelLabel ? "videos" : "", speechModelLabel ? "voice-overs" : ""]
+                  .filter(Boolean)
+                  .join(", ")}`}{" "}
             · up to {project.maxMedia} per run
           </span>
         )}
@@ -496,7 +504,13 @@ export function ProjectRunner({
         </div>
       )}
 
-      {!canRun && <Alert tone="warn">No usable agents/models yet — add a model and at least one agent with a model.</Alert>}
+      {!canRun && (
+        <Alert tone="warn">
+          {chooses
+            ? "No usable agents/models yet — add a model and at least one agent with a model."
+            : "This project cannot run yet. An administrator has to set the installation up."}
+        </Alert>
+      )}
       {error && <div className="my-3"><Alert tone="danger">{error}</Alert></div>}
 
       <Card title="Goal" className="mb-6">
@@ -601,9 +615,12 @@ export function ProjectRunner({
                         <div key={asset.id} className="max-w-xl">
                           <MediaView asset={asset} heightClass="h-80" />
                           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-3">
-                            <span>{asset.modelLabel}</span>
+                            {asset.modelLabel && <span>{asset.modelLabel}</span>}
                             {asset.status === "pending" && (
-                              <span>· {asset.source === "render" ? "being joined on this server" : "still in progress at the provider"}</span>
+                              <span>
+                                {asset.modelLabel ? "· " : ""}
+                                {asset.source === "render" ? "being joined on this server" : chooses ? "still in progress at the provider" : "still in progress"}
+                              </span>
                             )}
                             {asset.status === "ready" && asset.error && <span className="text-warn">· {asset.error}</span>}
                             {asset.url && (

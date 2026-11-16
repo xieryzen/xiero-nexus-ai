@@ -43,5 +43,5 @@ export const POST = handle(async (req, { params }) => {
   }
   const doc = await addFileDocument(collection, user.id, { name, bytes });
   kickWorker();
-  return json({ document: serializeDocument(doc) }, { status: 201 });
+  return json({ document: serializeDocument(doc, user.role) }, { status: 201 });
 });

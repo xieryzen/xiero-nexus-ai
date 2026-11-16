@@ -9,6 +9,7 @@ import {
   projectTasks,
   type ProjectRun,
 } from "@/db/schema";
+import { eventFor } from "./for-viewer";
 import { serializeAsset, type MediaAssetDTO } from "./media/dto";
 import type { RunEvent } from "./orchestrator/events";
 import { runtime, type RunChannel } from "./runtime";
@@ -142,7 +143,12 @@ export function snapshotEvents(projectId: string): RunEvent[] {
  * A project's run as a stream of server-sent events: the state so far, then
  * what happens, until the run ends. Closing the stream does not stop the run.
  */
-export function runEventStream(projectId: string, signal?: AbortSignal): ReadableStream<Uint8Array> {
+export function runEventStream(
+  projectId: string,
+  signal: AbortSignal | undefined,
+  /** The role of who follows: decides what of the setup the events say (for-viewer.ts). */
+  role: string | null | undefined,
+): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let stop: () => void = () => undefined;
 
@@ -159,7 +165,7 @@ export function runEventStream(projectId: string, signal?: AbortSignal): Readabl
           stop();
         }
       };
-      const send = (event: RunEvent) => write(`data: ${JSON.stringify(event)}\n\n`);
+      const send = (event: RunEvent) => write(`data: ${JSON.stringify(eventFor(role, event))}\n\n`);
       stop = () => {
         if (closed) return;
         closed = true;

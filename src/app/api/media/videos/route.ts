@@ -1,6 +1,9 @@
+import { modelFor } from "@/lib/model-choice";
+import { seesSetup } from "@/lib/roles";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import {
   MAX_PENDING_VIDEOS_PER_USER,
@@ -44,14 +47,15 @@ export const POST = handle(async (req) => {
 
   const asset = await startVideo({
     userId: user.id,
-    modelRowId: body.modelRowId,
+    modelRowId: modelFor(user.role, body.modelRowId, "video"),
     prompt: body.prompt,
     durationSeconds: body.durationSeconds,
     aspectRatio: body.aspectRatio,
     resolution: body.resolution,
     size: body.size,
     imageAssetId: body.imageAssetId,
-    extra: body.extra,
+    // Options of one provider are for those who know which provider it is.
+    extra: seesSetup(user.role) ? body.extra : undefined,
   });
-  return json({ asset: serializeAsset(asset) }, { status: 201 });
+  return json({ asset: assetFor(user.role, serializeAsset(asset)) }, { status: 201 });
 });

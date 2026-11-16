@@ -1,6 +1,8 @@
+import { modelFor } from "@/lib/model-choice";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { generateSpeech } from "@/lib/media/service";
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
@@ -21,12 +23,12 @@ export const POST = handle(async (req) => {
   const body = await parseBody(req, speechGenerateSchema);
   const asset = await generateSpeech({
     userId: user.id,
-    modelRowId: body.modelRowId,
+    modelRowId: modelFor(user.role, body.modelRowId, "audio"),
     text: body.text,
     voice: body.voice,
     format: body.format,
     speed: body.speed,
     instructions: body.instructions,
   });
-  return json({ asset: serializeAsset(asset) }, { status: 201 });
+  return json({ asset: assetFor(user.role, serializeAsset(asset)) }, { status: 201 });
 });

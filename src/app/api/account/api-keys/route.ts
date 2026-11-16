@@ -1,3 +1,5 @@
+import { apiKeyFor } from "@/lib/for-viewer";
+import { seesSetup } from "@/lib/roles";
 import { inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { models } from "@/db/schema";
@@ -14,7 +16,7 @@ export const dynamic = "force-dynamic";
 /** The user's API keys. The keys themselves are not stored and cannot be shown. */
 export const GET = handle(async () => {
   const user = requireUser();
-  return json({ keys: listApiKeys(user.id).map(serializeApiKey) });
+  return json({ keys: listApiKeys(user.id).map((key) => apiKeyFor(user.role, serializeApiKey(key))) });
 });
 
 /** Make a key. The answer carries the key itself, this once. */
@@ -22,6 +24,12 @@ export const POST = handle(async (req) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, apiKeyCreateSchema);
+  // A key of an account that chooses no model is limited to none, and has no
+  // limit in money: its account is shown neither the models nor what they cost.
+  if (!seesSetup(user.role)) {
+    body.modelRowIds = null;
+    body.monthlyCostLimit = null;
+  }
   if (body.modelRowIds?.length) {
     const found = db
       .select({ id: models.id })
@@ -42,5 +50,5 @@ export const POST = handle(async (req) => {
     ip,
     userAgent,
   });
-  return json({ key: serializeApiKey(key), secret }, { status: 201 });
+  return json({ key: apiKeyFor(user.role, serializeApiKey(key)), secret }, { status: 201 });
 });

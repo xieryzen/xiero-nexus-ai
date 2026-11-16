@@ -5,6 +5,7 @@ import { db } from "@/db";
 import {
   notificationWebhooks,
   notifications,
+  users,
   type Notification,
   type NotificationWebhook,
 } from "@/db/schema";
@@ -13,6 +14,7 @@ import { env } from "./env";
 import { AppError, sanitizeUpstreamError } from "./errors";
 import { safeFetch } from "./http-client";
 import { decryptSecret, encryptSecret } from "./secrets";
+import { textFor } from "./shown";
 import { assertSafeProviderUrl } from "./ssrf";
 
 /**
@@ -29,6 +31,13 @@ export interface NotifyInput {
   level?: NotificationLevel;
   title: string;
   body?: string | null;
+  /**
+   * What went wrong, in the system's words. It is put in front of the body.
+   * Someone who is not shown the setup is told it without what names a
+   * provider or a model (shown.ts); the title and the body are not looked
+   * through, since they hold what the user wrote: a title, a prompt.
+   */
+  problem?: string | null;
   /** A path inside the dashboard, such as /dashboard/projects/<id>. */
   link?: string | null;
 }
@@ -63,13 +72,18 @@ export function notify(userId: string | null | undefined, input: NotifyInput): v
   if (!userId) return;
   try {
     const hook = webhookFor(userId);
+    // What names a provider or a model is said to those who are shown the
+    // setup; anyone else is told that it did not work (shown.ts).
+    const role = db.select({ role: users.role }).from(users).where(eq(users.id, userId)).get()?.role;
+    const title = input.title;
+    const body = [input.problem ? textFor(role, input.problem) : null, input.body].filter(Boolean).join("\n") || null;
     db.insert(notifications)
       .values({
         userId,
         kind: input.kind,
         level: input.level ?? "info",
-        title: cut(input.title, MAX_TITLE),
-        body: input.body ? cut(input.body, MAX_BODY) : null,
+        title: cut(title, MAX_TITLE),
+        body: body ? cut(body, MAX_BODY) : null,
         link: input.link ?? null,
         webhookStatus: hook?.enabled ? "pending" : "none",
       })

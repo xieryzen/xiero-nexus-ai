@@ -13,7 +13,7 @@ import {
   parseMediaOptions,
   renderArtifact,
 } from "../src/lib/creative/prompt";
-import { REEL_MAX_SCENES, reelWorkflowTemplate, templateNeeds } from "../src/lib/creative/templates";
+import { REEL_MAX_SCENES, needsInWords, reelWorkflowTemplate, templateNeeds } from "../src/lib/creative/templates";
 import { capabilitiesForType, guessModelType, suggestModel, typeOfCapabilities } from "../src/lib/discovery";
 import { sanitizeUpstreamError } from "../src/lib/errors";
 import { countMediaTasks, downgradeUnavailableMedia, parsePlan, plannedMediaSchema, renderInputs } from "../src/lib/orchestrator/plan";
@@ -185,7 +185,9 @@ test("without options the Reel template is what it was", () => {
   assert.equal(plain.name, "Reel (2 scenes)");
   assert.deepEqual(plain.steps.map((s) => s.kind ?? "text"), ["text", "text", "video", "video", "image", "text"]);
   assert.deepEqual(plain.steps[2]!.media, { aspectRatio: "9:16", durationSeconds: 6 });
-  assert.match(plain.description, /The project needs a video model and an image model\.$/);
+  // The description says what the workflow makes: everyone who may choose it reads it.
+  assert.equal(plain.description, "Script, storyboard, 2 vertical scenes of 6 s, a cover image and a caption.");
+  assert.equal(needsInWords(templateNeeds(plain.steps)), "The project needs a video model and an image model.");
 });
 
 test("keyframes, voice-over and the final cut each add their steps, in an order a plan accepts", () => {
@@ -210,7 +212,14 @@ test("keyframes, voice-over and the final cut each add their steps, in an order 
   assert.deepEqual(full.steps[3]!.media, { aspectRatio: "9:16", durationSeconds: 5, imageFrom: 3 });
   assert.deepEqual(full.steps[4]!.media, { durationSeconds: 5, voice: "alloy" });
   assert.deepEqual(full.steps[8]!.media, { aspectRatio: "9:16", subtitles: true });
-  assert.match(full.description, /needs a video model, an image model and a speech model, and the server needs ffmpeg\.$/);
+  assert.equal(
+    full.description,
+    "Script, storyboard, 2 vertical scenes of 5 s, each started from its own keyframe image, a voice-over for each, joined into one video with subtitles, a cover image and a caption.",
+  );
+  assert.equal(
+    needsInWords(templateNeeds(full.steps)),
+    "The project needs a video model, an image model and a speech model, and the server needs ffmpeg.",
+  );
   // Every step depends only on steps before it, so the plan keeps all of it.
   const plan = parsePlan(JSON.stringify({ tasks: full.steps.map((s, i) => ({ seq: i + 1, title: s.title, objective: s.objective, agent: s.role, dependsOn: s.dependsOn ?? [], kind: s.kind, media: s.media })) }), 40);
   assert.ok(plan.ok, plan.error);
@@ -227,6 +236,11 @@ test("subtitles need a voice-over and a joined video; what a template asks of a 
 
   assert.deepEqual(templateNeeds(reelWorkflowTemplate({ scenes: 3, keyframes: true, voiceOver: true, join: true }).steps), { tasks: 14, media: 10, image: true, video: true, audio: true, render: true });
   assert.deepEqual(templateNeeds(reelWorkflowTemplate({ scenes: 3 }).steps), { tasks: 7, media: 4, image: true, video: true, audio: false, render: false });
+  // In words, for whoever sets a project up: only what the steps ask for.
+  assert.equal(needsInWords({ image: true, video: false, audio: false, render: false }), "The project needs an image model.");
+  assert.equal(needsInWords({ image: true, video: false, audio: true, render: false }), "The project needs an image model and a speech model.");
+  assert.equal(needsInWords({ image: false, video: false, audio: false, render: true }), "The server needs ffmpeg.");
+  assert.equal(needsInWords({ image: false, video: false, audio: false, render: false }), "");
   // The largest template still fits the limits a project can be given.
   const largest = templateNeeds(reelWorkflowTemplate({ scenes: REEL_MAX_SCENES, keyframes: true, voiceOver: true, join: true }).steps);
   assert.ok(largest.tasks <= 40 && largest.media <= 40, JSON.stringify(largest));

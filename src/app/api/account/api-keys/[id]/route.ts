@@ -3,6 +3,7 @@ import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
+import { apiKeyFor } from "@/lib/for-viewer";
 import { getClientMeta } from "@/lib/request";
 
 export const dynamic = "force-dynamic";
@@ -22,5 +23,5 @@ export const DELETE = handle(async (req, { params }) => {
     ip,
     userAgent,
   });
-  return json({ key: serializeApiKey(key) });
+  return json({ key: apiKeyFor(user.role, serializeApiKey(key)) });
 });

@@ -16,7 +16,10 @@ interface NavItem {
   href: string;
   label: string;
   icon: IconName;
+  /** For those who are shown how the installation is set up (roles.ts). */
   adminOnly?: boolean;
+  /** For everyone else: the same page under the name it has for them. */
+  userOnly?: boolean;
 }
 
 const groups: { heading: string; items: NavItem[] }[] = [
@@ -27,7 +30,7 @@ const groups: { heading: string; items: NavItem[] }[] = [
       { href: "/dashboard/projects", label: "AI Manager", icon: "manager" },
       { href: "/dashboard/agents", label: "Agents", icon: "agents" },
       { href: "/dashboard/workflows", label: "Workflows", icon: "workflow" },
-      { href: "/dashboard/skills", label: "Skills", icon: "skill" },
+      { href: "/dashboard/skills", label: "Skills", icon: "skill", adminOnly: true },
       { href: "/dashboard/chat", label: "Chat", icon: "chat" },
       { href: "/dashboard/studio", label: "Creative Studio", icon: "studio" },
       { href: "/dashboard/knowledge", label: "Knowledge", icon: "knowledge" },
@@ -36,9 +39,9 @@ const groups: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Infrastructure",
     items: [
-      { href: "/dashboard/providers", label: "Providers", icon: "providers" },
-      { href: "/dashboard/models", label: "Models", icon: "models" },
-      { href: "/dashboard/usage", label: "Usage & Costs", icon: "usage" },
+      { href: "/dashboard/providers", label: "Providers", icon: "providers", adminOnly: true },
+      { href: "/dashboard/models", label: "Models", icon: "models", adminOnly: true },
+      { href: "/dashboard/usage", label: "Usage & Costs", icon: "usage", adminOnly: true },
     ],
   },
   {
@@ -51,7 +54,10 @@ const groups: { heading: string; items: NavItem[] }[] = [
   },
   {
     heading: "Account",
-    items: [{ href: "/dashboard/settings", label: "Settings", icon: "settings" }],
+    items: [
+      { href: "/dashboard/usage", label: "Usage", icon: "usage", userOnly: true },
+      { href: "/dashboard/settings", label: "Settings", icon: "settings" },
+    ],
   },
 ];
 
@@ -110,7 +116,8 @@ export function AppShell({
   const nav = (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-5">
       {groups.map((group) => {
-        const items = group.items.filter((i) => !i.adminOnly || isAdminRole(user.role));
+        const sees = isAdminRole(user.role);
+        const items = group.items.filter((i) => (sees ? !i.userOnly : !i.adminOnly));
         if (items.length === 0) return null;
         return (
           <div key={group.heading}>

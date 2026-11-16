@@ -1,5 +1,5 @@
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
 import { describeSkill, listSkills, saveSkill } from "@/lib/skills/service";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** The skills: every signed-in user sees which there are; their text is read one by one. */
 export const GET = handle(async () => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   return json({ skills: listSkills({ withInstructions: false }) });
 });
 

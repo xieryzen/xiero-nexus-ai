@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentials, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { parseCustomHttpConfig } from "@/lib/adapters/custom-http-protocol";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
@@ -20,7 +20,7 @@ function load(id: string) {
 }
 
 export const GET = handle(async (_req, { params }) => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   return json({ provider: serializeProvider(load(params.id!)) });
 });
 

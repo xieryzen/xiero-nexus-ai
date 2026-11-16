@@ -1,7 +1,9 @@
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { loadOwnedAsset, refreshVideo } from "@/lib/media/service";
+import { textFor } from "@/lib/shown";
 
 export const dynamic = "force-dynamic";
 // A finished video is downloaded during this request.
@@ -18,5 +20,5 @@ export const POST = handle(async (_req, { params }) => {
   const user = requireUser();
   const owned = loadOwnedAsset(params.id!, user);
   const { asset, checkError } = await refreshVideo(owned.id);
-  return json({ asset: serializeAsset(asset), checkError: checkError ?? null });
+  return json({ asset: assetFor(user.role, serializeAsset(asset)), checkError: textFor(user.role, checkError) });
 });

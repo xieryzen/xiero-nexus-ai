@@ -1,3 +1,4 @@
+import { agentFor } from "@/lib/for-viewer";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { agents, models } from "@/db/schema";
@@ -36,7 +37,7 @@ export const GET = handle(async () => {
       skills: agentSkillMap(),
       // An administrator sees how many notes there are; everyone else, their own.
       memories: memoryCounts(isAdminRole(user.role) ? undefined : user.id),
-    }),
+    }).map((agent) => agentFor(user.role, agent)),
   });
 });
 

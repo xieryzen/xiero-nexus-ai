@@ -49,7 +49,9 @@ export type RunEvent =
       toolCalls?: number;
     }
   // A running task's progress note. Also keeps the stream alive during a long wait.
-  | { type: "progress"; seq: number; message: string }
+  // `full` says the same with the model that does it, for those who are shown
+  // the setup; the stream hands out one of the two (for-viewer.ts).
+  | { type: "progress"; seq: number; message: string; full?: string }
   // A tool call an agent made in a running task.
   | { type: "tool"; seq: number; call: ToolCallNote }
   | { type: "final"; deliverable: string }
