@@ -5,7 +5,9 @@ import { requirePageUser } from "@/lib/auth";
 import { serializeAsset } from "@/lib/media/dto";
 import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { listAssets } from "@/lib/media/service";
-import { mediaModelOptions, usableModels } from "@/lib/model-options";
+import { assetFor } from "@/lib/for-viewer";
+import { appChoice } from "@/lib/model-choice";
+import { mediaModelOptions, usableModels, type MediaModelOption } from "@/lib/model-options";
 import { StudioClient } from "@/components/studio/studio-client";
 import { isAdminRole } from "@/lib/roles";
 
@@ -39,13 +41,24 @@ export default async function StudioPage({
 
   const all = usableModels();
   const ffmpeg = await ffmpegStatus();
+  // Someone who is shown the setup chooses among the models. A user is handed
+  // one entry per kind the installation can do, without a name and a price:
+  // only the options that kind of request takes. The app chooses the model.
+  const sees = isAdminRole(user.role);
+  const options = (kind: "image" | "video" | "audio"): MediaModelOption[] => {
+    const list = mediaModelOptions(kind, all);
+    if (sees) return list;
+    const choice = appChoice(kind);
+    const chosen = list.find((m) => m.id === choice) ?? (choice ? list[0] : undefined);
+    return chosen ? [{ id: "auto", label: "", mediaApi: chosen.mediaApi, price: null }] : [];
+  };
   return (
     <StudioClient
-      imageModels={mediaModelOptions("image", all)}
-      videoModels={mediaModelOptions("video", all)}
-      speechModels={mediaModelOptions("audio", all)}
+      imageModels={options("image")}
+      videoModels={options("video")}
+      speechModels={options("audio")}
       render={{ available: ffmpeg.available && ffmpeg.h264, subtitles: ffmpeg.available && ffmpeg.subtitles }}
-      initialAssets={rows.slice(0, PAGE_SIZE).map((r) => serializeAsset(r.asset))}
+      initialAssets={rows.slice(0, PAGE_SIZE).map((r) => assetFor(user.role, serializeAsset(r.asset)))}
       initialNextOffset={rows.length > PAGE_SIZE ? PAGE_SIZE : null}
       isAdmin={isAdminRole(user.role)}
       project={project}

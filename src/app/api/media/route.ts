@@ -1,6 +1,7 @@
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { listAssets } from "@/lib/media/service";
 import { loadOwnedProject } from "@/lib/project-access";
@@ -44,7 +45,7 @@ export const GET = handle(async (req) => {
   });
   const page = rows.slice(0, PAGE_SIZE);
   return json({
-    assets: page.map((r) => serializeAsset(r.asset, all ? r.owner : undefined)),
+    assets: page.map((r) => assetFor(user.role, serializeAsset(r.asset, all ? r.owner : undefined))),
     nextOffset: rows.length > PAGE_SIZE ? offset + PAGE_SIZE : null,
   });
 });

@@ -1,3 +1,4 @@
+import { apiKeyFor } from "@/lib/for-viewer";
 import Link from "next/link";
 import { listApiKeys, serializeApiKey } from "@/lib/apikeys";
 import { requirePageUser } from "@/lib/auth";
@@ -9,7 +10,7 @@ import { Badge, Card, PageHeader, StatusDot } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { AccountClient } from "@/components/account/account-client";
 import { IntegrationsClient } from "@/components/account/integrations-client";
-import { isAdminRole, isOwnerRole, roleLabel } from "@/lib/roles";
+import { isAdminRole, isOwnerRole, roleLabel, seesSetup } from "@/lib/roles";
 import { formatTokens, tokenSummary } from "@/lib/token-rules";
 
 export const dynamic = "force-dynamic";
@@ -94,8 +95,10 @@ export default function SettingsPage() {
 
       <IntegrationsClient
         webhook={serializeWebhook(webhookFor(user.id))}
-        apiKeys={listApiKeys(user.id).map(serializeApiKey)}
-        models={usableModels().map((m) => ({ id: m.id, label: `${m.name} · ${m.providerName}` }))}
+        apiKeys={listApiKeys(user.id).map((key) => apiKeyFor(user.role, serializeApiKey(key)))}
+        // Someone who is shown the setup limits a key to models by name; a user's key names none.
+        models={seesSetup(user.role) ? usableModels().map((m) => ({ id: m.id, label: `${m.name} · ${m.providerName}` })) : []}
+        chooses={seesSetup(user.role)}
         baseUrl={env.appUrl.replace(/\/+$/, "")}
       />
     </div>

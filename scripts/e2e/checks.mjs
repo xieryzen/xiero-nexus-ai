@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
@@ -146,6 +146,10 @@ async function runProject(user, projectId, { onEvent, input } = {}) {
 const admin = client();
 const bob = client();
 const carol = client();
+// Two administrators with libraries of their own. The checks that name a model
+// are theirs: a user names none, the app chooses for them (v1.8.0).
+const mia = client();
+const noa = client();
 const anon = client();
 
 const ids = { providers: {}, models: {}, agents: {} };
@@ -159,6 +163,11 @@ async function setup() {
   eq("second account is an ordinary user", b.data?.user?.role, "user");
   const c = await carol.post("/api/auth/register", { username: "carol", email: "carol@example.com", password: "correct-horse-battery" });
   eq("third account registers", c.status, 201);
+  for (const [who, name] of [[mia, "mia"], [noa, "noa"]]) {
+    const made = await admin.post("/api/admin/users", { username: name, email: `${name}@example.com`, password: "correct-horse-battery", role: "admin" });
+    const signedIn = await who.post("/api/auth/login", { identifier: name, password: "correct-horse-battery" });
+    eq(`the owner makes the administrator ${name}, who signs in`, [made.status, made.data?.user?.role, signedIn.status], [201, "admin", 200]);
+  }
   // For uptime monitors and upgrade scripts: answers without a sign-in, and says nothing else.
   const health = await anon.raw("/api/health");
   eq("the health check answers without a sign-in", [health.status, await health.json(), health.headers.get("cache-control")], [200, { status: "ok" }, "no-store"]);
@@ -221,6 +230,14 @@ async function setup() {
   await model("img_anthropic", "anthropic", "claude-image", ["image_generation"]);
   await model("both", "openai", "img-ok-and-chat", ["text", "image_generation"]);
   check("all test models are created", Object.values(ids.models).every(Boolean), ids.models);
+
+  // What users work with: they name no model, the app chooses among the
+  // marked ones. Without marks it would take the cheapest, and here that
+  // could be a model that is made to fail.
+  for (const key of ["chat", "img_openai", "vid_openai"]) {
+    const marked = await admin.patch(`/api/models/${ids.models[key]}`, { forUsers: true });
+    eq(`the model ${key} is marked for users`, [marked.status, marked.data?.model?.forUsers], [200, true]);
+  }
 }
 
 // ─── Images ──────────────────────────────────────────────────────────────────
@@ -307,18 +324,32 @@ async function images() {
     ["a model on an adapter without image support", { modelRowId: ids.models.img_anthropic, prompt: "x" }, 400],
   ];
   for (const [name, body, status] of cases) {
-    const r = await carol.post("/api/media/images", body);
+    const r = await noa.post("/api/media/images", body);
     check(`${name} is refused (${status})`, r.status === status, `${r.status} ${r.error}`);
   }
   eq("signed out: 401", (await anon.post("/api/media/images", { modelRowId: ids.models.img_openai, prompt: "x" })).status, 401);
+
   const disabled = await admin.patch(`/api/models/${ids.models.img_xai}`, { enabled: false });
   eq("a model can be disabled", disabled.data?.model?.enabled, false);
-  eq("  and then cannot generate", (await carol.post("/api/media/images", { modelRowId: ids.models.img_xai, prompt: "x" })).status, 400);
+  eq("  and then cannot generate", (await noa.post("/api/media/images", { modelRowId: ids.models.img_xai, prompt: "x" })).status, 400);
   await admin.patch(`/api/models/${ids.models.img_xai}`, { enabled: true });
+
+  begin("Images: a user names no model");
+  await mockReset();
+  const bobsOwn = await bob.post("/api/media/images", { prompt: "A lighthouse for Bob" });
+  const ownAsset = bobsOwn.data?.assets?.[0] ?? {};
+  eq("a user asks for an image without a model, and gets it", [bobsOwn.status, ownAsset.status, ownAsset.kind], [201, "ready", "image"]);
+  eq("  it was made with the model that is marked for users", (await mockLog()).find((r) => r.method === "POST")?.body?.model, "img-ok");
+  eq("  the answer does not say with which, nor what it cost", [ownAsset.modelRowId, ownAsset.modelLabel, ownAsset.estimatedCost], [null, "", null]);
+  await mockReset();
+  const bobNamed = await bob.post("/api/media/images", { modelRowId: ids.models["img-fail"], prompt: "A lighthouse for Bob", extra: { quality: "high" } });
+  const sentForNamed = (await mockLog()).find((r) => r.method === "POST")?.body;
+  eq("a model a user names is not used, nor are extra parameters: the app's choice is", [bobNamed.status, sentForNamed?.model, sentForNamed?.quality], [201, "img-ok", undefined]);
+  eq("  a name that is no model at all changes nothing", (await bob.post("/api/media/images", { modelRowId: "nope", prompt: "x" })).status, 201);
 
   begin("Images: provider failures and unsafe answers");
   const filesBefore = (await mediaFiles()).length;
-  const listBefore = (await bob.get("/api/media")).data?.assets?.length;
+  const listBefore = (await mia.get("/api/media")).data?.assets?.length;
   const failing = [
     ["img-fail", "the provider's refusal is passed on", /safety system/],
     ["img-empty", "an answer without an image is an error", /without an image/],
@@ -332,16 +363,16 @@ async function images() {
   ];
   for (const [modelKey, name, pattern] of failing) {
     await mockReset();
-    const r = await bob.post("/api/media/images", { modelRowId: ids.models[modelKey], prompt: "A lighthouse" });
+    const r = await mia.post("/api/media/images", { modelRowId: ids.models[modelKey], prompt: "A lighthouse" });
     check(`${name}`, r.status >= 400 && pattern.test(r.error ?? ""), `${r.status} ${r.error}`);
   }
   await mockReset();
-  const leak = await bob.post("/api/media/images", { modelRowId: ids.models["img-leak"], prompt: "A lighthouse" });
+  const leak = await mia.post("/api/media/images", { modelRowId: ids.models["img-leak"], prompt: "A lighthouse" });
   check("an error that repeats the key is redacted", leak.status >= 400 && !JSON.stringify(leak.data).includes(KEY) && !JSON.stringify(leak.data).includes("sk-mock"), leak.error);
   const metadataHit = (await mockLog()).some((r) => r.path.includes("meta-data"));
   check("the mock never saw a request for the metadata path", !metadataHit);
   eq("failed requests leave no file behind", (await mediaFiles()).length, filesBefore);
-  eq("  and no library entry", (await bob.get("/api/media")).data?.assets?.length, listBefore);
+  eq("  and no library entry", (await mia.get("/api/media")).data?.assets?.length, listBefore);
 }
 
 // ─── Videos ──────────────────────────────────────────────────────────────────
@@ -431,49 +462,49 @@ async function videos() {
   check("the provider's 404 is reported, nothing is left pending", res.status >= 400 && /404|No route/.test(res.error ?? ""), `${res.status} ${res.error}`);
 
   begin("Videos: failures");
-  res = await bob.post("/api/media/videos", { modelRowId: ids.models["vid-reject"], prompt: "Waves" });
+  res = await mia.post("/api/media/videos", { modelRowId: ids.models["vid-reject"], prompt: "Waves" });
   check("a request the provider rejects is an error", res.status >= 400 && /moderation/.test(res.error ?? ""), `${res.status} ${res.error}`);
-  eq("  and leaves nothing in the library", (await bob.get("/api/media?kind=video")).data?.assets?.length, 0);
+  eq("  and leaves nothing in the library", (await mia.get("/api/media?kind=video")).data?.assets?.length, 0);
 
   for (const [key, label, pattern] of [
     ["vid-fail", "OpenAI style", /moderation system/],
     ["vid-fail-or", "OpenRouter style", /provider error/],
     ["vid-fail-xai", "xAI style", /Content policy/],
   ]) {
-    res = await bob.post("/api/media/videos", { modelRowId: ids.models[key], prompt: "Waves" });
-    done = await settle(bob, res.data?.asset?.id);
+    res = await mia.post("/api/media/videos", { modelRowId: ids.models[key], prompt: "Waves" });
+    done = await settle(mia, res.data?.asset?.id);
     check(`a job that fails at the provider (${label}) becomes failed, with the reason`, done.asset?.status === "failed" && pattern.test(done.asset?.error ?? ""), done.asset);
     eq("  it has no file", done.asset?.url, null);
   }
 
-  res = await bob.post("/api/media/videos", { modelRowId: ids.models["vid-gone"], prompt: "Waves" });
-  done = await settle(bob, res.data?.asset?.id, { tries: 1 });
+  res = await mia.post("/api/media/videos", { modelRowId: ids.models["vid-gone"], prompt: "Waves" });
+  done = await settle(mia, res.data?.asset?.id, { tries: 1 });
   check("a job the provider no longer has fails at once", done.asset?.status === "failed" && /no longer has this video/.test(done.asset?.error ?? ""), done.asset);
 
-  res = await bob.post("/api/media/videos", { modelRowId: ids.models["vid-flaky"], prompt: "Waves" });
-  const flaky = await bob.post(`/api/media/${res.data?.asset?.id}/refresh`);
+  res = await mia.post("/api/media/videos", { modelRowId: ids.models["vid-flaky"], prompt: "Waves" });
+  const flaky = await mia.post(`/api/media/${res.data?.asset?.id}/refresh`);
   check("a provider hiccup keeps the video pending and says why", flaky.data?.asset?.status === "pending" && /503/.test(flaky.data?.checkError ?? ""), flaky.data);
   await sleep(3200);
-  done = await settle(bob, res.data?.asset?.id);
+  done = await settle(mia, res.data?.asset?.id);
   eq("  and it still finishes afterwards", done.asset?.status, "ready");
 
   const filesBefore = (await mediaFiles()).length;
   for (const [key, label] of [["vid-html", "content endpoint"], ["vid-html-xai", "link"]]) {
-    res = await bob.post("/api/media/videos", { modelRowId: ids.models[key], prompt: "Waves" });
-    done = await settle(bob, res.data?.asset?.id);
+    res = await mia.post("/api/media/videos", { modelRowId: ids.models[key], prompt: "Waves" });
+    done = await settle(mia, res.data?.asset?.id);
     check(`a finished "video" that is an HTML page (${label}) is refused for good`, done.asset?.status === "failed" && /not an MP4, MOV or WebM video/.test(done.asset?.error ?? ""), done.asset);
   }
   eq("  nothing was stored", (await mediaFiles()).length, filesBefore);
 
-  res = await bob.post("/api/media/videos", { modelRowId: ids.models["vid-instant"], prompt: "Waves", durationSeconds: 4 });
+  res = await mia.post("/api/media/videos", { modelRowId: ids.models["vid-instant"], prompt: "Waves", durationSeconds: 4 });
   eq("a job that is finished when it is created is ready at once", [res.status, res.data?.asset?.status, res.data?.asset?.sizeBytes], [201, "ready", 300000]);
 
   begin("Videos: abandoning one");
-  res = await bob.post("/api/media/videos", { modelRowId: ids.models["vid-slow"], prompt: "Waves" });
+  res = await mia.post("/api/media/videos", { modelRowId: ids.models["vid-slow"], prompt: "Waves" });
   const slow = res.data?.asset;
   eq("pending", slow?.status, "pending");
-  eq("deleted while pending", (await bob.del(`/api/media/${slow.id}`)).status, 200);
-  eq("refreshing it afterwards: 404", (await bob.post(`/api/media/${slow.id}/refresh`)).status, 404);
+  eq("deleted while pending", (await mia.del(`/api/media/${slow.id}`)).status, 200);
+  eq("refreshing it afterwards: 404", (await mia.post(`/api/media/${slow.id}/refresh`)).status, 404);
 
   begin("Videos: validation");
   for (const [name, body] of [
@@ -482,7 +513,7 @@ async function videos() {
     ["an image model", { modelRowId: ids.models.img_openai, prompt: "x" }],
     ["no prompt", { modelRowId: ids.models.vid_openai }],
   ]) {
-    eq(`${name} is refused`, (await carol.post("/api/media/videos", body)).status, 400);
+    eq(`${name} is refused`, (await noa.post("/api/media/videos", body)).status, 400);
   }
 }
 
@@ -563,21 +594,21 @@ async function library() {
 
 async function limits() {
   begin("Limits per user");
-  // Carol has made 4 video requests (validation) in the last minute or so.
+  // Noa has made 4 video requests (validation) in the last minute or so.
   await sleep(1000);
   const results = [];
   for (let i = 0; i < 12; i++) {
-    results.push(await carol.post("/api/media/videos", { modelRowId: ids.models["vid-slow"], prompt: `Waves ${i}` }));
+    results.push(await noa.post("/api/media/videos", { modelRowId: ids.models["vid-slow"], prompt: `Waves ${i}` }));
   }
   const statuses = results.map((r) => r.status);
   const firstLimited = statuses.indexOf(429);
   check("video requests are rate limited per user (10 a minute)", firstLimited !== -1 && firstLimited <= 10 && statuses.slice(firstLimited).every((s) => s === 429), statuses);
   check("  with a message that says what to do", /Wait a minute/.test(results[firstLimited]?.error ?? ""), results[firstLimited]?.error);
   eq("another user is not affected", (await admin.get("/api/media")).status, 200);
-  const pending = (await carol.get("/api/media?kind=video")).data.assets.filter((a) => a.status === "pending");
-  console.log(`       carol has ${pending.length} videos pending`);
-  for (const asset of pending) await carol.del(`/api/media/${asset.id}`);
-  eq("pending videos can all be deleted", (await carol.get("/api/media?kind=video")).data.assets.filter((a) => a.status === "pending").length, 0);
+  const pending = (await noa.get("/api/media?kind=video")).data.assets.filter((a) => a.status === "pending");
+  console.log(`       noa has ${pending.length} videos pending`);
+  for (const asset of pending) await noa.del(`/api/media/${asset.id}`);
+  eq("pending videos can all be deleted", (await noa.get("/api/media?kind=video")).data.assets.filter((a) => a.status === "pending").length, 0);
 }
 
 // ─── Projects ────────────────────────────────────────────────────────────────

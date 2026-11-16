@@ -555,7 +555,11 @@ export function AgentsManager({
   return (
     <Card
       title="Agents"
-      description="Configurable specialists. Each has a role, instructions, model(s), and the tools it may use."
+      description={
+        isAdmin
+          ? "Configurable specialists. Each has a role, instructions, model(s), and the tools it may use."
+          : "The specialists that work on the tasks of your projects."
+      }
       actions={isAdmin && !form ? <Button onClick={() => setForm({ mode: "new" })}><Icon name="plus" /> Add agent</Button> : undefined}
     >
       {form && (
@@ -619,7 +623,8 @@ export function AgentsManager({
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-xs text-ink-3">
+                  {/* What an agent works with is shown to those who are shown the setup. */}
+                  {isAdmin && <p className="mt-1 text-xs text-ink-3">
                     {a.routingMode === "auto" ? (
                       <span className="text-signal">auto-routed{a.requiredCapability ? ` · needs ${a.requiredCapability}` : ""}</span>
                     ) : a.primaryModelLabel ? (
@@ -632,7 +637,7 @@ export function AgentsManager({
                     {(a.tools.length > 0 || a.memoryEnabled || a.collectionIds.length > 0) && (
                       <span> · up to {a.maxSteps} steps per task</span>
                     )}
-                  </p>
+                  </p>}
                 </div>
                 <div className="flex gap-2">
                   {(a.memoryEnabled || a.memoryCount > 0) && (

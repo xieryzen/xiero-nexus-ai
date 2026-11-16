@@ -8,7 +8,8 @@
  *   admin  providers, models, agents, teams, workflows, skills, the audit
  *          log, everyone's projects and usage. Sees the accounts and their
  *          tokens, and changes none.
- *   user   their own projects, chats, media and keys.
+ *   user   their own projects, chats, media and keys. Not shown how the
+ *          installation is set up (seesSetup).
  */
 
 export const ROLES = ["owner", "admin", "user"] as const;
@@ -25,6 +26,16 @@ export function isAdminRole(role: string | null | undefined): boolean {
 
 export function isOwnerRole(role: string | null | undefined): boolean {
   return role === "owner";
+}
+
+/**
+ * Who is shown how the installation is set up: its providers and models and
+ * what they cost, what agents, workflows and skills are told, and what a
+ * provider answered. Administrators are. A user is shown their own work and
+ * what it used, and chooses no model: the app does (model-choice.ts).
+ */
+export function seesSetup(role: string | null | undefined): boolean {
+  return isAdminRole(role);
 }
 
 /** What a role is called on a page. */

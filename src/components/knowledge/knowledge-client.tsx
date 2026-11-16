@@ -38,11 +38,15 @@ const EMBEDDING_LABEL: Record<DocumentDTO["embeddingStatus"], string> = {
 function CollectionForm({
   initial,
   embeddingModels,
+  chooses,
   onSaved,
   onCancel,
 }: {
   initial?: CollectionDTO;
+  /** The embedding models to choose from. For someone who chooses none: one entry ("yes") when the installation has one. */
   embeddingModels: ModelOption[];
+  /** Whether the model is chosen here. For a user it is not: the app chooses. */
+  chooses: boolean;
   onSaved: (c: CollectionDTO) => void;
   onCancel: () => void;
 }) {
@@ -55,7 +59,13 @@ function CollectionForm({
   // A model that is no longer offered stays selectable, so saving does not drop it silently.
   const options =
     initial?.embeddingModelRowId && !embeddingModels.some((m) => m.id === initial.embeddingModelRowId)
-      ? [{ id: initial.embeddingModelRowId, label: `${initial.embeddingModelLabel ?? "the current model"} (not available)` }, ...embeddingModels]
+      ? [
+          {
+            id: initial.embeddingModelRowId,
+            label: chooses ? `${initial.embeddingModelLabel ?? "the current model"} (not available)` : "By meaning as well (cannot be done now)",
+          },
+          ...embeddingModels,
+        ]
       : embeddingModels;
 
   async function submit(e: React.FormEvent) {
@@ -107,15 +117,21 @@ function CollectionForm({
           label="Search by meaning"
           htmlFor="k-model"
           hint={
-            embeddingModels.length === 0
-              ? "No embedding model is set up (Models page, type “Embedding model”). The collection is searched by its words, which works without one."
-              : modelId
-                ? "Documents are also embedded with this model, so a question finds passages that say the same in other words. Embedding is billed by the provider."
-                : "Without a model the collection is searched by its words."
+            !chooses
+              ? embeddingModels.length === 0
+                ? "The collection is searched by its words."
+                : modelId
+                  ? "A question also finds passages that say the same in other words. Reading the documents for that uses some of your tokens."
+                  : "The collection is searched by its words."
+              : embeddingModels.length === 0
+                ? "No embedding model is set up (Models page, type “Embedding model”). The collection is searched by its words, which works without one."
+                : modelId
+                  ? "Documents are also embedded with this model, so a question finds passages that say the same in other words. Embedding is billed by the provider."
+                  : "Without a model the collection is searched by its words."
           }
         >
           <Select id="k-model" value={modelId} onChange={(e) => setModelId(e.target.value)}>
-            <option value="">Words only (no model)</option>
+            <option value="">{chooses ? "Words only (no model)" : "Words only"}</option>
             {options.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}
@@ -127,8 +143,12 @@ function CollectionForm({
       {initial && modelId !== (initial.embeddingModelRowId ?? "") && initial.documentCount > 0 && (
         <Alert tone="info">
           {modelId
-            ? "Changing the model embeds every document of this collection again."
-            : "Without a model the stored embeddings of this collection are dropped."}
+            ? chooses
+              ? "Changing the model embeds every document of this collection again."
+              : "Every document of this collection is read again for its meaning."
+            : chooses
+              ? "Without a model the stored embeddings of this collection are dropped."
+              : "What was kept for searching by meaning is dropped."}
         </Alert>
       )}
       <div className="flex justify-end gap-2">
@@ -336,6 +356,7 @@ export function KnowledgeClient({
           <Card title="New collection">
             <CollectionForm
               embeddingModels={embeddingModels}
+              chooses={isAdmin}
               onSaved={(c) => {
                 setCollections((list) => [...list, c].sort((a, b) => a.name.localeCompare(b.name)));
                 select(c.id);
@@ -387,6 +408,7 @@ export function KnowledgeClient({
                     key={selected.id}
                     initial={selected}
                     embeddingModels={embeddingModels}
+                    chooses={isAdmin}
                     onSaved={(c) => {
                       setCollections((list) => list.map((x) => (x.id === c.id ? c : x)));
                       setForm(null);
@@ -403,8 +425,8 @@ export function KnowledgeClient({
                       {selected.description ? `${selected.description} · ` : ""}
                       {selected.visibility === "shared" ? "Shared with everyone on this server" : "Private"}
                       {" · "}
-                      {selected.embeddingModelLabel
-                        ? `searched by words and by meaning (${selected.embeddingModelLabel})`
+                      {selected.embeddingModelRowId
+                        ? `searched by words and by meaning${selected.embeddingModelLabel ? ` (${selected.embeddingModelLabel})` : ""}`
                         : "searched by its words"}
                     </>
                   }

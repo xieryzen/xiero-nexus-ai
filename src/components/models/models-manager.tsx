@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { SerializedModel } from "@/lib/models";
 import type { HealthStatus } from "@/lib/model-health";
+import type { UsersModel } from "@/lib/model-choice";
+import { CHOICE_LABEL } from "@/lib/model-choice-rules";
 import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatNumber } from "@/lib/format";
@@ -35,13 +37,17 @@ export function ModelsManager({
   providers,
   isAdmin,
   initialHealth,
+  initialUsers,
 }: {
   initialModels: SerializedModel[];
   providers: ProviderLite[];
   isAdmin: boolean;
   initialHealth: HealthStatus;
+  /** What users, who choose no model, work with: kind by kind. */
+  initialUsers: UsersModel[];
 }) {
   const [models, setModels] = useState(initialModels);
+  const [users, setUsers] = useState(initialUsers);
   const [health, setHealth] = useState(initialHealth);
   const [checking, setChecking] = useState(false);
   const [checkNote, setCheckNote] = useState<string | null>(null);
@@ -82,11 +88,29 @@ export function ModelsManager({
   async function toggleEnabled(m: SerializedModel) {
     setBusy((b) => ({ ...b, [m.id]: "toggle" }));
     try {
-      const res = await apiFetch<{ model: SerializedModel }>(`/api/models/${m.id}`, {
+      const res = await apiFetch<{ model: SerializedModel; users?: UsersModel[] }>(`/api/models/${m.id}`, {
         method: "PATCH",
         body: JSON.stringify({ enabled: !m.enabled }),
       });
       patch(res.model);
+      if (res.users) setUsers(res.users);
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy((b) => ({ ...b, [m.id]: undefined }));
+    }
+  }
+
+  /** Mark a model for the work of users, or take the mark away. */
+  async function toggleForUsers(m: SerializedModel) {
+    setBusy((b) => ({ ...b, [m.id]: "users" }));
+    try {
+      const res = await apiFetch<{ model: SerializedModel; users?: UsersModel[] }>(`/api/models/${m.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ forUsers: !m.forUsers }),
+      });
+      patch(res.model);
+      if (res.users) setUsers(res.users);
     } catch {
       /* ignore */
     } finally {
@@ -148,8 +172,10 @@ export function ModelsManager({
         now = (await apiFetch<{ health: HealthStatus }>("/api/models/health")).health;
       }
       setHealth(now);
-      const fresh = await apiFetch<{ models: SerializedModel[] }>("/api/models");
+      const fresh = await apiFetch<{ models: SerializedModel[]; users?: UsersModel[] }>("/api/models");
       setModels(fresh.models);
+      // A check can change which model users work with.
+      if (fresh.users) setUsers(fresh.users);
       setTestNote({});
     } catch (err) {
       setCheckNote(err instanceof ApiError ? err.message : "The check could not be started.");
@@ -201,6 +227,37 @@ export function ModelsManager({
             {" "}Image, video, speech and embedding models are not checked: a check would generate one each time.
           </p>
           {checkNote && <p className="mt-1 text-xs text-danger">{checkNote}</p>}
+        </div>
+      )}
+
+      {isAdmin && models.length > 0 && (
+        <div className="mb-5 rounded-md border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" id="users-models">
+          <p>
+            A user chooses no model and is not shown these: the app chooses where they would have. It works with a
+            model that is marked <span className="font-medium text-ink">for users</span>; while no model of a kind
+            is marked, with the cheapest of that kind that is switched on.
+          </p>
+          <ul className="mt-2 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+            {users.map((u) => (
+              <li key={u.kind} data-users-kind={u.kind}>
+                <span className="text-ink-3">{CHOICE_LABEL[u.kind]}:</span>{" "}
+                {u.first ? (
+                  <>
+                    <span className="mono text-ink">{u.first.label}</span>
+                    <span className="text-ink-3">
+                      {u.marked > 0 ? " (marked)" : " (none marked: the cheapest)"}
+                      {u.choices > 1 ? `, then ${u.choices - 1} more` : ""}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-warn">{u.marked > 0 ? "the marked ones cannot be asked now" : "no model can do this: users cannot"}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-ink-3">
+            Agents work with the models they are set to, for everyone. An administrator still chooses among all models.
+          </p>
         </div>
       )}
 
@@ -265,6 +322,11 @@ export function ModelsManager({
                                 <Badge tone="warn">left out of the lists</Badge>
                               </span>
                             )}
+                            {m.forUsers && (
+                              <span title="The app works with this model where a user would have chosen one.">
+                                <Badge tone="signal">for users</Badge>
+                              </span>
+                            )}
                           </div>
                           {m.capabilities.length > 0 && (
                             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -312,6 +374,15 @@ export function ModelsManager({
                                 onChange={() => toggleEnabled(m)}
                                 disabled={busy[m.id] === "toggle"}
                                 label="Enabled"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2 pr-1" title="Marked: the app works with this model where a user would have chosen one.">
+                              <span className="text-xs text-ink-3">for users</span>
+                              <Toggle
+                                checked={m.forUsers}
+                                onChange={() => toggleForUsers(m)}
+                                disabled={busy[m.id] === "users"}
+                                label={`For users: ${m.displayName || m.modelId}`}
                               />
                             </div>
                             {isMediaOnly(m.capabilities.map((c) => c.capability)) ? (

@@ -9,6 +9,7 @@ import {
   REEL_DEFAULT_SCENES,
   REEL_MAX_CLIP_SECONDS,
   REEL_MAX_SCENES,
+  needsInWords,
   reelWorkflowTemplate,
   templateNeeds,
 } from "@/lib/creative/templates";
@@ -621,10 +622,10 @@ function Builder({
 function ReelNeeds({ options }: { options: Parameters<typeof reelWorkflowTemplate>[0] }) {
   const needs = templateNeeds(reelWorkflowTemplate(options).steps);
   return (
-    <p className="text-xs text-ink-3">
-      {needs.tasks} steps, {needs.media} generated {needs.media === 1 ? "file" : "files"} per run. A project that
-      runs it needs a task limit of at least {needs.tasks} and a media limit of at least {needs.media}; the project
-      form sets both when the workflow is chosen.
+    <p className="text-xs text-ink-3" data-testid="reel-needs">
+      {needs.tasks} steps, {needs.media} generated {needs.media === 1 ? "file" : "files"} per run.{" "}
+      {needsInWords(needs)} A project that runs it needs a task limit of at least {needs.tasks} and a media limit
+      of at least {needs.media}; the project form sets both when the workflow is chosen.
     </p>
   );
 }
@@ -660,7 +661,11 @@ export function WorkflowsManager({ initialWorkflows, isAdmin }: { initialWorkflo
     <div>
       <PageHeader
         title="Workflows"
-        description="Reusable, deterministic task plans. A project can run a workflow instead of AI-Manager planning."
+        description={
+          isAdmin
+            ? "Reusable, deterministic task plans. A project can run a workflow instead of AI-Manager planning."
+            : "Ready-made plans. Choose one for a project on the AI Manager page, and its steps are worked through in order."
+        }
         actions={isAdmin && !form ? <Button onClick={() => setForm({ mode: "new" })}><Icon name="plus" /> New workflow</Button> : undefined}
       />
       {form && (
@@ -682,7 +687,7 @@ export function WorkflowsManager({ initialWorkflows, isAdmin }: { initialWorkflo
           description={
             isAdmin
               ? "Build a step-based workflow to run projects deterministically, or start from the Reel template."
-              : "Build a step-based workflow to run projects deterministically."
+              : "An administrator has not made one yet. A project works without: the AI Manager plans it."
           }
         />
       ) : (

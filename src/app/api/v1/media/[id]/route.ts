@@ -6,5 +6,5 @@ export const dynamic = "force-dynamic";
 
 /** An image, a voice-over or a video of the user's library. */
 export const GET = v1("media", (_req, { params, caller }) =>
-  NextResponse.json(mediaJson(loadOwnedAsset(params.id!, caller.user))),
+  NextResponse.json(mediaJson(loadOwnedAsset(params.id!, caller.user), caller.user.role)),
 );

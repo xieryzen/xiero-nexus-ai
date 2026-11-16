@@ -466,8 +466,8 @@ mock. **How well a given model follows a skill was not measured.**
 | Role | What it does |
 |---|---|
 | **Owner** | Everything an administrator does, the accounts, and how many tokens each account may use. |
-| **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and their tokens, and changes none. |
-| **User** | Their own projects, chats, media, knowledge and API keys. |
+| **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and their tokens, and changes none: no role, no token limit. |
+| **User** | Their own projects, chats, media, knowledge and API keys. Sees no provider and no model, and chooses none ([below](#what-a-user-is-shown-v180)). |
 
 - **The first account is the owner.** An installation from before 1.7 has no
   owner: at its first start with 1.7 its first administrator becomes the
@@ -572,6 +572,72 @@ Over the API: `tokenLimit`, `tokensUsed` and `tokensLeft` are in
 `PATCH /api/admin/users/{id}` and `{"tokenLimit": 25000000}`, and gives a new
 account one with `tokenLimit` in `POST /api/admin/users`. Every change is in
 the audit log, with the limit before and after.
+
+## What a user is shown (v1.8.0)
+
+A user works with the installation and is not shown how it is set up. That is
+for administrators and owners.
+
+| | A user | An administrator, an owner |
+|---|---|---|
+| Menu | Overview, AI Manager, Agents & Teams, Workflows, Chat, Creative Studio, Knowledge, Usage, Settings | the same, and Providers, Models, Skills, Audit, Observability, Users & Roles |
+| Providers and models | not shown: no name, no list, no price | everything |
+| Which model does the work | the app chooses | they choose |
+| Agents, teams, workflows | who they are and what they are for | also what they are told, their models, tools and skills |
+| Skills | not shown | everything |
+| Usage | their tokens and requests | everyone's, with providers, models and costs |
+| When something fails | that it did not work, and what to do | what the provider answered |
+
+- **The app chooses the model for a user:** in Chat, for the manager of a
+  project and its images, videos and voice-overs, in Creative Studio, for a
+  knowledge base that is searched by meaning, and with an API key. A model a
+  user names in a request is not used.
+- **An administrator says which.** On the Models page every model has a
+  switch **for users**. When models of a kind (chat, images, videos,
+  voice-overs, embeddings) are marked, users work with those only: the
+  cheapest first, and one whose last check failed after the ones that answer.
+  While none of a kind is marked, the app takes the cheapest of that kind
+  that is switched on; a model without a price comes after the ones with
+  one. The page says which model users work with now, kind by kind. In
+  **Chat** on the site, when the first choice fails, up to two more are
+  asked before the user is told; everywhere else the first choice is the one
+  that is asked.
+- **Agents work with the models they are set to**, for everyone: marking a
+  model for users does not change an agent.
+- **A failure is told without the setup.** An error, a failed task, a
+  notification or a progress note that names a provider or a model of this
+  installation, or uses the words provider, model, upstream, adapter or
+  gateway, is replaced for a user by "This could not be done just now. Try
+  again in a moment; if it stays that way, tell an administrator." What is
+  about the request itself is said as it is: no tokens left, a file too
+  large, a name that is taken. An administrator who opens the user's project
+  reads what the provider said.
+- **When nothing can do the job** (no image model, say), a user is answered
+  503 `not_set_up`: "This installation cannot do that yet. An administrator
+  has to set it up." A user's project that cannot start for that reason
+  says the same; one whose team has no agent that is switched on says that.
+- **What the app writes about its own work names nothing either.** The line
+  an image, a video or a voice-over leaves in a task ("Generated image.
+  Asset …") is written without the model for a user's project, and read
+  without it by a user where an older line has it. A result that could not
+  be put together says so, and where the work of the tasks is; an
+  administrator reads what the provider said.
+- It is left out on the server: what a user is not shown is in no page and
+  in no answer of the API, also when asked for directly. `GET /api/providers`,
+  `/api/models`, `/api/skills` and `/api/agents/tools` answer a user 403.
+
+Not hidden:
+
+- **What a model wrote.** A chat's answer and a task's result are the user's
+  own work and are shown as they are, also when a model names itself in
+  them.
+- **What an administrator wrote for people to read:** the names and
+  descriptions of agents, teams and workflows, and the titles of a
+  workflow's steps. They are shown to users as written, so they are the
+  place to say what something makes and which team goes with which
+  workflow, and not which model does it. (The Reel template used to end a
+  workflow's description with what a project needs; it no longer does, and
+  a user reads an older one without that sentence.)
 
 ## Provider adapters
 
@@ -768,13 +834,20 @@ shown once; the server keeps only a hash of it. A key acts as the user who
 made it, and can be limited to:
 
 - what it may do: *Chat*, *Embeddings*, *Media*, *Projects*;
-- certain models;
+- certain models (an administrator's key);
 - a number of requests a minute (120 when nothing is set);
-- a number of tokens and an estimated cost a month, counted from the first
-  of the month (UTC);
+- a number of tokens a month, and for an administrator's key an estimated
+  cost a month, counted from the first of the month (UTC);
 - a date after which it no longer works.
 
 A key can be revoked at any time, and a user can have up to 20.
+
+**A user's key names no model.** `GET /models` lists one, `auto`, and every
+request sends `"model": "auto"`: the app chooses, as it does on the pages
+([What a user is shown](#what-a-user-is-shown-v180)). Another name is answered
+404 `model_not_found`, and the answers say `auto` where they would say the
+model. An administrator's key names the models as listed, and can send `auto`
+as well.
 
 ```bash
 curl https://nexus.example.com/api/v1/chat/completions \
@@ -817,7 +890,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
-| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner) | 🚧 release candidate: the first two parts of 1.8 |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses) | 🚧 release candidate: the first three parts of 1.8 |
 
 ---
 

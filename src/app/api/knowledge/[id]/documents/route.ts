@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 export const GET = handle(async (_req, { params }) => {
   const user = requireUser();
   const collection = loadReadableCollection(params.id!, user);
-  return json({ documents: listDocuments(collection.id) });
+  return json({ documents: listDocuments(collection.id, user.role) });
 });
 
 /**
@@ -37,5 +37,5 @@ export const POST = handle(async (req, { params }) => {
       ? await addLinkDocument(collection, user.id, body)
       : addTextDocument(collection, user.id, body);
   kickWorker();
-  return json({ document: serializeDocument(doc) }, { status: 201 });
+  return json({ document: serializeDocument(doc, user.role) }, { status: 201 });
 });

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { toolCalls } from "@/db/schema";
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
+import { toolResultFor } from "@/lib/for-viewer";
 import { loadOwnedProject } from "@/lib/project-access";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,7 @@ export const GET = handle(async (_req, { params }) => {
       step: c.step,
       name: c.name,
       arguments: c.arguments,
-      result: c.result,
+      result: toolResultFor(user.role, c.name, c.result),
       isError: c.isError,
       durationMs: c.durationMs,
       createdAt: c.createdAt.getTime(),

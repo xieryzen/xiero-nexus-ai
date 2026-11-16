@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import type { ZodSchema } from "zod";
+import { getCurrentUser } from "./auth";
 import { AppError, Errors } from "./errors";
+import { errorFor } from "./shown";
 
 type RouteCtx = { params: Record<string, string> };
 type Handler = (req: Request, ctx: RouteCtx) => Promise<Response> | Response;
@@ -21,13 +23,27 @@ export function toErrorResponse(err: unknown): NextResponse {
   );
 }
 
-/** Wrap a route handler so thrown AppErrors become safe JSON responses. */
+/** The role of whoever sent the request; none when they are not signed in. */
+function requesterRole(): string | null {
+  try {
+    return getCurrentUser()?.role ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wrap a route handler so thrown AppErrors become safe JSON responses. An
+ * error that names a provider or a model is told in full to those who are
+ * shown the setup, and to anyone else as "this could not be done just now"
+ * (shown.ts).
+ */
 export function handle(fn: Handler) {
   return async (req: Request, ctx: RouteCtx): Promise<Response> => {
     try {
       return await fn(req, ctx);
     } catch (err) {
-      return toErrorResponse(err);
+      return toErrorResponse(err instanceof AppError ? errorFor(requesterRole(), err) : err);
     }
   };
 }

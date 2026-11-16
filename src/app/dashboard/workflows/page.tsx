@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { serializeWorkflow } from "@/lib/workforce";
 import { WorkflowsManager } from "@/components/workflows/workflows-manager";
 import { isAdminRole } from "@/lib/roles";
+import { workflowFor } from "@/lib/for-viewer";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Workflows" };
@@ -12,5 +13,10 @@ export const metadata = { title: "Workflows" };
 export default function WorkflowsPage() {
   const user = getCurrentUser();
   const rows = db.select().from(workflows).orderBy(asc(workflows.name)).all();
-  return <WorkflowsManager initialWorkflows={rows.map(serializeWorkflow)} isAdmin={isAdminRole(user?.role)} />;
+  return (
+    <WorkflowsManager
+      initialWorkflows={rows.map((w) => workflowFor(user?.role, serializeWorkflow(w)))}
+      isAdmin={isAdminRole(user?.role)}
+    />
+  );
 }

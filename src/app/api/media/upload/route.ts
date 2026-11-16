@@ -1,6 +1,7 @@
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { AppError, Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { MAX_IMAGE_BYTES } from "@/lib/media/files";
 import { readBodyCapped } from "@/lib/media/http";
@@ -42,5 +43,5 @@ export const POST = handle(async (req) => {
     name = "";
   }
   const asset = await storeUploadedImage({ userId: user.id, bytes, name });
-  return json({ asset: serializeAsset(asset) }, { status: 201 });
+  return json({ asset: assetFor(user.role, serializeAsset(asset)) }, { status: 201 });
 });

@@ -1,5 +1,5 @@
 import { handle } from "@/lib/api";
-import { requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { skillMarkdown } from "@/lib/skills/parse";
 import { describeSkill, loadSkill, skillFilesWithContent } from "@/lib/skills/service";
 import { writeZip } from "@/lib/skills/zip";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  * `?format=md` the SKILL.md alone.
  */
 export const GET = handle(async (req, { params }) => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   const row = loadSkill(params.id!);
   const skill = describeSkill(row);
   const markdown = skillMarkdown({

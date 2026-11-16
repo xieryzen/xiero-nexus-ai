@@ -1,14 +1,14 @@
 import { TOOL_CATALOG, TOOL_GROUP_LABELS } from "@/lib/agent/catalog";
 import { toolAvailable, toolStatus } from "@/lib/agent/tools";
 import { handle, json } from "@/lib/api";
-import { requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { agentAllowedHosts } from "@/lib/web-fetch";
 
 export const dynamic = "force-dynamic";
 
 /** The tools agents can be given, and which of them work on this server as it is set up. */
 export const GET = handle(async () => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   const status = toolStatus();
   return json({
     groups: TOOL_GROUP_LABELS,

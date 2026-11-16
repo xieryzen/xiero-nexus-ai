@@ -181,10 +181,13 @@ function ApiKeysCard({
   initial,
   models,
   baseUrl,
+  chooses,
 }: {
   initial: ApiKeyDTO[];
   models: { id: string; label: string }[];
   baseUrl: string;
+  /** Whether a key names its models. A user's key does not: it sends "auto", and the app chooses. */
+  chooses: boolean;
 }) {
   const [keys, setKeys] = useState(initial);
   const [open, setOpen] = useState(false);
@@ -271,7 +274,7 @@ function ApiKeysCard({
 {`curl ${baseUrl}/api/v1/chat/completions \\
   -H "Authorization: Bearer ${created.secret.slice(0, 10)}…" \\
   -H "Content-Type: application/json" \\
-  -d '{"model": "<a name from GET /api/v1/models>", "messages": [{"role": "user", "content": "Hello"}]}'`}
+  -d '{"model": "${chooses ? "<a name from GET /api/v1/models>" : "auto"}", "messages": [{"role": "user", "content": "Hello"}]}'`}
             </pre>
           </>
         )}
@@ -315,14 +318,16 @@ function ApiKeysCard({
               <Field label="Tokens per month" htmlFor="ak-tokens" hint="Empty: no limit.">
                 <Input id="ak-tokens" type="number" min={1} value={tokens} onChange={(e) => setTokens(e.target.value)} />
               </Field>
-              <Field label="Cost per month ($)" htmlFor="ak-cost" hint="By the prices set on the models. Empty: no limit.">
-                <Input id="ak-cost" type="number" min={0} step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />
-              </Field>
+              {chooses && (
+                <Field label="Cost per month ($)" htmlFor="ak-cost" hint="By the prices set on the models. Empty: no limit.">
+                  <Input id="ak-cost" type="number" min={0} step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />
+                </Field>
+              )}
               <Field label="Expires after (days)" htmlFor="ak-days" hint="Empty: it does not expire.">
                 <Input id="ak-days" type="number" min={1} max={3650} value={days} onChange={(e) => setDays(e.target.value)} />
               </Field>
             </div>
-            <div>
+            <div className={chooses ? undefined : "hidden"}>
               <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-2">
                 <input type="checkbox" className="accent-current" checked={restrict} onChange={(e) => setRestrict(e.target.checked)} />
                 Only some models
@@ -388,7 +393,11 @@ function ApiKeysCard({
                         `this month: ${formatNumber(key.monthTokens)} tokens${key.monthlyTokenLimit ? ` of ${formatNumber(key.monthlyTokenLimit)}` : ""}` +
                           (key.monthCost > 0 || key.monthlyCostLimit ? `, ${formatCost(key.monthCost)}${key.monthlyCostLimit ? ` of ${formatCost(key.monthlyCostLimit)}` : ""}` : ""),
                         `${key.rateLimitPerMinute ?? 120} requests a minute`,
-                        key.modelRowIds ? `${key.modelRowIds.length} ${key.modelRowIds.length === 1 ? "model" : "models"}: ${key.modelRowIds.map((id) => modelLabel.get(id) ?? "a removed model").join(", ")}` : "all models",
+                        !chooses
+                          ? null
+                          : key.modelRowIds
+                            ? `${key.modelRowIds.length} ${key.modelRowIds.length === 1 ? "model" : "models"}: ${key.modelRowIds.map((id) => modelLabel.get(id) ?? "a removed model").join(", ")}`
+                            : "all models",
                         key.expiresAt ? <KeyExpiry at={key.expiresAt} /> : null,
                       ]}
                     />
@@ -423,15 +432,19 @@ export function IntegrationsClient({
   apiKeys,
   models,
   baseUrl,
+  chooses = true,
 }: {
   webhook: WebhookDTO | null;
   apiKeys: ApiKeyDTO[];
+  /** The models a key can be limited to. Empty for someone who chooses none. */
   models: { id: string; label: string }[];
   baseUrl: string;
+  /** Whether the account is shown the setup, and so names models. */
+  chooses?: boolean;
 }) {
   return (
     <div className="mt-6 space-y-6">
-      <ApiKeysCard initial={apiKeys} models={models} baseUrl={baseUrl} />
+      <ApiKeysCard initial={apiKeys} models={models} baseUrl={baseUrl} chooses={chooses} />
       <WebhookCard initial={webhook} />
     </div>
   );

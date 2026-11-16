@@ -11,6 +11,7 @@ import {
 } from "@/lib/public-api/openai-format";
 import { readJsonBody, resolveApiModel, v1 } from "@/lib/public-api/server";
 import { SSE_HEADERS } from "@/lib/run-bus";
+import { textFor } from "@/lib/shown";
 import { assertTokensLeft } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
 
@@ -105,7 +106,7 @@ export const POST = v1("chat", async (req, { caller }) => {
         record(null, err instanceof AppError ? err.code : "error");
         send({
           error: {
-            message: err instanceof AppError ? err.message : sanitizeUpstreamError(err),
+            message: textFor(caller.user.role, err instanceof AppError ? err.message : sanitizeUpstreamError(err)),
             type: "api_error",
             code: err instanceof AppError ? err.code : "upstream_error",
           },

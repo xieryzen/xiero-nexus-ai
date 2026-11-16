@@ -19,5 +19,5 @@ export const GET = v1("projects", (_req, { params, caller }) => {
     // Someone else's run looks the same as one that does not exist.
     throw Errors.notFound("Run not found");
   }
-  return NextResponse.json(runJson(run, { detail: true }));
+  return NextResponse.json(runJson(run, caller.user.role, { detail: true }));
 });

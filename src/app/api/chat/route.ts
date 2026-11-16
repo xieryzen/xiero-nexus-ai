@@ -4,7 +4,11 @@ import { AppError, sanitizeUpstreamError } from "@/lib/errors";
 import {
   gatewayChatStream,
   resolveChatModel,
+  type ResolvedModel,
 } from "@/lib/gateway";
+import { requireAppChoices } from "@/lib/model-choice";
+import { seesSetup } from "@/lib/roles";
+import { textFor } from "@/lib/shown";
 import type { ChatMessage } from "@/lib/adapters/types";
 import {
   formatHits,
@@ -20,6 +24,9 @@ export const dynamic = "force-dynamic";
 // Streaming can run longer than the default; allow up to 5 minutes.
 export const maxDuration = 300;
 
+/** How many of the app's choices are asked, one after the other, before the chat gives up. */
+const CHOICES_TRIED = 3;
+
 function sse(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
@@ -28,7 +35,25 @@ export const POST = handle(async (req) => {
   const user = requireUser();
   const body = await parseBody(req, chatRequestSchema);
   assertTokensLeft(user.id); // 402 before anything is asked of a provider
-  const resolved = resolveChatModel(body.modelRowId); // throws safe errors
+  // Someone who is shown the setup names the model, or leaves it to the app.
+  // Anyone else gets the app's choice, whatever the request names.
+  const named = seesSetup(user.role) && body.modelRowId ? body.modelRowId : null;
+  const candidates: ResolvedModel[] = [];
+  if (named) {
+    candidates.push(resolveChatModel(named)); // throws safe errors
+  } else {
+    // The app's choices in turn: when the first cannot answer, the next is
+    // asked, since nobody is there to pick another model by hand.
+    let problem: unknown = null;
+    for (const id of requireAppChoices("chat").slice(0, CHOICES_TRIED)) {
+      try {
+        candidates.push(resolveChatModel(id));
+      } catch (err) {
+        problem = err;
+      }
+    }
+    if (candidates.length === 0) throw problem;
+  }
 
   // Knowledge: the passages that fit the question are put in front of the model.
   let hits: KnowledgeHit[] = [];
@@ -66,7 +91,6 @@ export const POST = handle(async (req) => {
   if (system) messages.push({ role: "system", content: system });
   for (const m of body.messages) messages.push({ role: m.role, content: m.content });
 
-  const started = Date.now();
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -87,52 +111,66 @@ export const POST = handle(async (req) => {
             collectionName: hit.collectionName,
             excerpt: hit.content.length > 320 ? `${hit.content.slice(0, 319)}…` : hit.content,
           })),
-          knowledgeError,
+          knowledgeError: textFor(user.role, knowledgeError),
         });
       }
       try {
-        const result = await gatewayChatStream(
-          resolved,
-          messages,
-          (delta) => safeEnqueue({ delta }),
-          { temperature: body.temperature },
-        );
-        const promptTokens =
-          result.usage?.promptTokens ??
-          estimateTokens(messages.map((m) => m.content).join("\n"));
-        const completionTokens =
-          result.usage?.completionTokens ?? estimateTokens(result.content);
+        let failure: string | null = null;
+        for (const resolved of candidates) {
+          const asked = Date.now();
+          let wrote = false;
+          try {
+            const result = await gatewayChatStream(
+              resolved,
+              messages,
+              (delta) => {
+                wrote = true;
+                safeEnqueue({ delta });
+              },
+              { temperature: body.temperature },
+            );
+            const promptTokens =
+              result.usage?.promptTokens ??
+              estimateTokens(messages.map((m) => m.content).join("\n"));
+            const completionTokens =
+              result.usage?.completionTokens ?? estimateTokens(result.content);
 
-        recordUsage({
-          userId: user.id,
-          providerId: resolved.provider.id,
-          modelRowId: resolved.model.id,
-          kind: "chat",
-          promptTokens,
-          completionTokens,
-          estimatedCost: computeCost(resolved.model, promptTokens, completionTokens),
-          status: "ok",
-          latencyMs: Date.now() - started,
-        });
+            recordUsage({
+              userId: user.id,
+              providerId: resolved.provider.id,
+              modelRowId: resolved.model.id,
+              kind: "chat",
+              promptTokens,
+              completionTokens,
+              estimatedCost: computeCost(resolved.model, promptTokens, completionTokens),
+              status: "ok",
+              latencyMs: Date.now() - asked,
+            });
 
-        safeEnqueue({
-          done: true,
-          finishReason: result.finishReason ?? null,
-          usage: { promptTokens, completionTokens },
-        });
-      } catch (err) {
-        const message =
-          err instanceof AppError ? err.message : sanitizeUpstreamError(err);
-        recordUsage({
-          userId: user.id,
-          providerId: resolved.provider.id,
-          modelRowId: resolved.model.id,
-          kind: "chat",
-          status: "error",
-          errorCode: err instanceof AppError ? err.code : "error",
-          latencyMs: Date.now() - started,
-        });
-        safeEnqueue({ error: message });
+            safeEnqueue({
+              done: true,
+              finishReason: result.finishReason ?? null,
+              usage: { promptTokens, completionTokens },
+            });
+            failure = null;
+            break;
+          } catch (err) {
+            failure = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
+            recordUsage({
+              userId: user.id,
+              providerId: resolved.provider.id,
+              modelRowId: resolved.model.id,
+              kind: "chat",
+              status: "error",
+              errorCode: err instanceof AppError ? err.code : "error",
+              latencyMs: Date.now() - asked,
+            });
+            // Part of an answer is on the page: another model does not go on from there.
+            if (wrote) break;
+          }
+        }
+        // What a provider said is for those who are shown the setup (shown.ts).
+        if (failure !== null) safeEnqueue({ error: textFor(user.role, failure) });
       } finally {
         try {
           controller.close();

@@ -37,6 +37,7 @@ export function CommandCenter({
   canRender,
   teams,
   workflows,
+  chooses = true,
 }: {
   initialProjects: ProjectDTO[];
   managerModels: Option[];
@@ -44,6 +45,12 @@ export function CommandCenter({
   imageModels: Option[];
   videoModels: Option[];
   speechModels: Option[];
+  /**
+   * Whether the project's models are chosen here. For a user they are not:
+   * the app chooses, the lists hold one entry each ("yes") for what the
+   * installation can do, and the form asks only what the project may make.
+   */
+  chooses?: boolean;
   /** Whether this server can join clips into one video (it has ffmpeg). */
   canRender: boolean;
   teams: Option[];
@@ -82,9 +89,13 @@ export function CommandCenter({
     imageModels.length > 0 || videoModels.length > 0 || speechModels.length > 0 || needMedia > 0;
   const missing = (need: number, chosen: string, options: Option[], noun: string, capability: string) =>
     need > 0 && !chosen
-      ? options.length > 0
-        ? `This workflow has ${noun} steps: choose ${noun === "image" ? "an" : "a"} ${noun === "voice-over" ? "speech" : noun} model.`
-        : `This workflow has ${noun} steps, but no model is marked for ${capability} yet (Models page).`
+      ? !chooses
+        ? options.length > 0
+          ? `This workflow has ${noun} steps: let the project make ${noun}s.`
+          : `This workflow has ${noun} steps, which this installation cannot do yet. An administrator has to set it up.`
+        : options.length > 0
+          ? `This workflow has ${noun} steps: choose ${noun === "image" ? "an" : "a"} ${noun === "voice-over" ? "speech" : noun} model.`
+          : `This workflow has ${noun} steps, but no model is marked for ${capability} yet (Models page).`
       : null;
   const mediaProblem =
     missing(needImages, imageModelRowId, imageModels, "image", "image generation") ??
@@ -122,7 +133,7 @@ export function CommandCenter({
         body: JSON.stringify({
           title,
           goal,
-          managerModelRowId,
+          managerModelRowId: chooses ? managerModelRowId : null,
           teamId: teamId || null,
           maxTokens: Number(maxTokens),
           maxTasks: Number(maxTasks),
@@ -156,7 +167,9 @@ export function CommandCenter({
 
       {!canCreate && (
         <Alert tone="warn">
-          You need at least one enabled model (on an enabled provider) before creating a project.
+          {chooses
+            ? "You need at least one enabled model (on an enabled provider) before creating a project."
+            : "This installation is not ready for work yet. An administrator has to set it up."}
         </Alert>
       )}
 
@@ -172,13 +185,15 @@ export function CommandCenter({
                 <Textarea id="p-goal" value={goal} onChange={(e) => setGoal(e.target.value)} required className="min-h-[110px]" placeholder="Build a spec and reference implementation for a token-bucket rate limiter in TypeScript…" />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Manager model" htmlFor="p-mgr" hint="Plans and synthesizes.">
-                  <Select id="p-mgr" value={managerModelRowId} onChange={(e) => setManager(e.target.value)} required>
-                    {managerModels.map((m) => (
-                      <option key={m.id} value={m.id}>{m.label}</option>
-                    ))}
-                  </Select>
-                </Field>
+                {chooses && (
+                  <Field label="Manager model" htmlFor="p-mgr" hint="Plans and synthesizes.">
+                    <Select id="p-mgr" value={managerModelRowId} onChange={(e) => setManager(e.target.value)} required>
+                      {managerModels.map((m) => (
+                        <option key={m.id} value={m.id}>{m.label}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                )}
                 <Field label="Team" htmlFor="p-team" hint="Or leave as all active agents.">
                   <Select id="p-team" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
                     <option value="">All active agents</option>
@@ -203,7 +218,7 @@ export function CommandCenter({
               {showMedia && (
                 <div className="space-y-3">
                   <div className="grid gap-4 sm:grid-cols-3">
-                    <Field label="Image model" htmlFor="p-img" hint="Generates the images of image tasks.">
+                    <Field label={chooses ? "Image model" : "Images"} htmlFor="p-img" hint={chooses ? "Generates the images of image tasks." : "Whether the project may make images."}>
                       <Select id="p-img" value={imageModelRowId} onChange={(e) => setImageModel(e.target.value)}>
                         <option value="">No images</option>
                         {imageModels.map((m) => (
@@ -211,7 +226,7 @@ export function CommandCenter({
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Video model" htmlFor="p-vid" hint="Generates the clips of video tasks.">
+                    <Field label={chooses ? "Video model" : "Videos"} htmlFor="p-vid" hint={chooses ? "Generates the clips of video tasks." : "Whether the project may make videos."}>
                       <Select id="p-vid" value={videoModelRowId} onChange={(e) => setVideoModel(e.target.value)}>
                         <option value="">No videos</option>
                         {videoModels.map((m) => (
@@ -219,7 +234,7 @@ export function CommandCenter({
                         ))}
                       </Select>
                     </Field>
-                    <Field label="Speech model" htmlFor="p-tts" hint="Speaks the voice-overs.">
+                    <Field label={chooses ? "Speech model" : "Voice-overs"} htmlFor="p-tts" hint={chooses ? "Speaks the voice-overs." : "Whether the project may make voice-overs."}>
                       <Select id="p-tts" value={speechModelRowId} onChange={(e) => setSpeechModel(e.target.value)}>
                         <option value="">No voice-overs</option>
                         {speechModels.map((m) => (
@@ -238,8 +253,8 @@ export function CommandCenter({
                       ]
                         .filter(Boolean)
                         .join(", ")}{" "}
-                      per run. Each one is billed by the provider.
-                      {needRender && " Joining the clips is done on this server and costs nothing at a provider."}
+                      per run.{chooses && " Each one is billed by the provider."}
+                      {needRender && chooses && " Joining the clips is done on this server and costs nothing at a provider."}
                     </p>
                   )}
                   {mediaProblem && <Alert tone="warn">{mediaProblem}</Alert>}

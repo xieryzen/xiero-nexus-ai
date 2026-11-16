@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ROLES, isAdminRole, isOwnerRole, isRole, roleLabel, whyNot } from "../src/lib/roles";
+import { ROLES, isAdminRole, isOwnerRole, isRole, roleLabel, seesSetup, whyNot } from "../src/lib/roles";
 
 const owner = { id: "o1", role: "owner", status: "active" };
 const secondOwner = { id: "o2", role: "owner", status: "active" };
@@ -53,4 +53,11 @@ test("there is always an owner who can sign in", () => {
   assert.equal(whyNot(owner, secondOwner, { role: "owner" }, 0), null);
   assert.equal(whyNot(owner, { id: "o3", role: "owner", status: "disabled" }, { remove: true }, 0), null);
   assert.equal(whyNot(owner, secondOwner, { status: "active" }, 0), null);
+});
+
+test("the setup is shown to administrators and owners, and to nobody else", () => {
+  assert.deepEqual(ROLES.map((role) => seesSetup(role)), [true, true, false]);
+  for (const value of ["user", "", "Admin", "OWNER", "root", null, undefined]) {
+    assert.equal(seesSetup(value), false, String(value));
+  }
 });

@@ -1,6 +1,6 @@
 {
   "name": "xiero-nexus-ai",
-  "version": "1.8.0-rc.2",
+  "version": "1.8.0-rc.3",
   "private": true,
   "description": "Xiero Nexus AI — configurable multi-provider AI platform. One Command. Infinite Intelligence.",
   "scripts": {

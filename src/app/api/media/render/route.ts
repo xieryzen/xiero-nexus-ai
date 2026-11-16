@@ -1,6 +1,7 @@
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { checkRenderInput, createRenderAsset, queueRender } from "@/lib/media/render";
@@ -38,5 +39,5 @@ export const POST = handle(async (req) => {
   const asset = createRenderAsset({ ...body, userId: user.id });
   queueRender(asset);
   kickWorker();
-  return json({ asset: serializeAsset(asset) }, { status: 201 });
+  return json({ asset: assetFor(user.role, serializeAsset(asset)) }, { status: 201 });
 });

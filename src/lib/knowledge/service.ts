@@ -24,7 +24,9 @@ import {
   fuseRankings,
   vectorToBytes,
 } from "./chunk";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, seesSetup } from "@/lib/roles";
+import { appChoice } from "../model-choice";
+import { textFor } from "../shown";
 
 /**
  * The knowledge base: collections of documents that agents and the chat can
@@ -93,6 +95,24 @@ export function readableCollectionIds(ids: string[], user: User): string[] {
 
 // ─── Collections ─────────────────────────────────────────────────────────────
 
+/** What stands in a model's place for someone who chooses none: "the app's choice". */
+export const AUTO_MODEL = "auto";
+
+/**
+ * The embedding model a collection is given. An administrator names it. For
+ * anyone else a model's place only says yes or no: yes keeps the model the
+ * collection has, or takes the app's choice (none when the installation has
+ * no such model: the collection is then searched by its words).
+ */
+function embeddingModelFor(
+  user: User,
+  asked: string | null | undefined,
+  current: string | null = null,
+): string | null {
+  if (seesSetup(user.role)) return asked ?? null;
+  return asked ? (current ?? appChoice("embeddings")) : null;
+}
+
 export interface CollectionDTO {
   id: string;
   name: string;
@@ -121,13 +141,16 @@ export function serializeCollection(collection: KnowledgeCollection, user: User)
         .where(eq(models.id, collection.embeddingModelRowId))
         .get()
     : undefined;
+  // Someone who is not shown the setup is told that the collection is also
+  // searched by meaning ("auto"), not which model does it.
+  const sees = seesSetup(user.role);
   return {
     id: collection.id,
     name: collection.name,
     description: collection.description,
     visibility: collection.visibility,
-    embeddingModelRowId: collection.embeddingModelRowId,
-    embeddingModelLabel: model ? model.displayName || model.modelId : null,
+    embeddingModelRowId: sees ? collection.embeddingModelRowId : collection.embeddingModelRowId ? AUTO_MODEL : null,
+    embeddingModelLabel: sees && model ? model.displayName || model.modelId : null,
     documentCount: docs?.n ?? 0,
     chunkCount: Number(docs?.chunks ?? 0),
     owner: collection.createdBy === user.id,
@@ -180,14 +203,15 @@ export function createCollection(
     embeddingModelRowId?: string | null;
   },
 ): KnowledgeCollection {
-  checkEmbeddingModel(input.embeddingModelRowId);
+  const embeddingModelRowId = embeddingModelFor(user, input.embeddingModelRowId);
+  checkEmbeddingModel(embeddingModelRowId);
   return db
     .insert(knowledgeCollections)
     .values({
       name: input.name,
       description: input.description || null,
       visibility: input.visibility ?? "private",
-      embeddingModelRowId: input.embeddingModelRowId ?? null,
+      embeddingModelRowId,
       createdBy: user.id,
     })
     .returning()
@@ -196,13 +220,18 @@ export function createCollection(
 
 export function updateCollection(
   collection: KnowledgeCollection,
-  input: {
+  asked: {
     name?: string;
     description?: string | null;
     visibility?: "private" | "shared";
     embeddingModelRowId?: string | null;
   },
+  user: User,
 ): KnowledgeCollection {
+  const input =
+    asked.embeddingModelRowId === undefined
+      ? asked
+      : { ...asked, embeddingModelRowId: embeddingModelFor(user, asked.embeddingModelRowId, collection.embeddingModelRowId) };
   const modelChanged =
     input.embeddingModelRowId !== undefined &&
     (input.embeddingModelRowId ?? null) !== collection.embeddingModelRowId;
@@ -275,7 +304,8 @@ export interface DocumentDTO {
   createdAt: number;
 }
 
-export function serializeDocument(doc: KnowledgeDocument): DocumentDTO {
+/** A document as someone with this role is shown it: what went wrong names no provider to a user. */
+export function serializeDocument(doc: KnowledgeDocument, role: string | null | undefined): DocumentDTO {
   return {
     id: doc.id,
     title: doc.title,
@@ -286,19 +316,19 @@ export function serializeDocument(doc: KnowledgeDocument): DocumentDTO {
     charCount: doc.charCount,
     chunkCount: doc.chunkCount,
     embeddingStatus: doc.embeddingStatus,
-    error: doc.error,
+    error: textFor(role, doc.error),
     createdAt: doc.createdAt.getTime(),
   };
 }
 
-export function listDocuments(collectionId: string): DocumentDTO[] {
+export function listDocuments(collectionId: string, role: string | null | undefined): DocumentDTO[] {
   return db
     .select()
     .from(knowledgeDocuments)
     .where(eq(knowledgeDocuments.collectionId, collectionId))
     .orderBy(desc(knowledgeDocuments.createdAt), desc(knowledgeDocuments.id))
     .all()
-    .map(serializeDocument);
+    .map((doc) => serializeDocument(doc, role));
 }
 
 function queueEmbedding(documentId: string, userId: string | null): void {

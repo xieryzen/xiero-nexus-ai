@@ -1,3 +1,4 @@
+import { teamFor } from "@/lib/for-viewer";
 import { asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { teamAgents, teams } from "@/db/schema";
@@ -12,9 +13,9 @@ import { teamCreateSchema } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async () => {
-  requireUser();
+  const user = requireUser();
   const rows = db.select().from(teams).orderBy(asc(teams.name)).all();
-  return json({ teams: rows.map(serializeTeam) });
+  return json({ teams: rows.map((team) => teamFor(user.role, serializeTeam(team))) });
 });
 
 export const POST = handle(async (req) => {

@@ -1,18 +1,22 @@
+import { redirect } from "next/navigation";
 import { asc } from "drizzle-orm";
 import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { serializeModels } from "@/lib/models";
+import { whatUsersGet } from "@/lib/model-choice";
 import { healthStatus } from "@/lib/model-health";
 import { adapterAbilities, adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
 import { ModelsManager } from "@/components/models/models-manager";
-import { isAdminRole } from "@/lib/roles";
+import { isAdminRole, seesSetup } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Models" };
 
 export default function ModelsPage() {
   const user = getCurrentUser();
+  // How the installation is set up is shown to administrators (roles.ts: seesSetup).
+  if (!seesSetup(user?.role)) redirect("/dashboard");
   const modelRows = db.select().from(models).orderBy(asc(models.modelId)).all();
   const providerRows = db
     .select()
@@ -33,6 +37,7 @@ export default function ModelsPage() {
       }))}
       isAdmin={isAdminRole(user?.role)}
       initialHealth={healthStatus()}
+      initialUsers={whatUsersGet()}
     />
   );
 }

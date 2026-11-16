@@ -41,7 +41,8 @@ async function runRender(job: Job): Promise<void> {
       kind: "media",
       level: asset.error ? "warning" : "success",
       title: "Your joined video is ready",
-      body: asset.error ?? asset.prompt,
+      problem: asset.error,
+      body: asset.error ? undefined : asset.prompt,
       link: "/dashboard/studio",
     });
   } else if (asset.status === "failed") {
@@ -49,7 +50,7 @@ async function runRender(job: Job): Promise<void> {
       kind: "media",
       level: "error",
       title: "Joining the clips failed",
-      body: asset.error ?? undefined,
+      problem: asset.error,
       link: "/dashboard/studio",
     });
   }
@@ -104,7 +105,8 @@ function finish(job: Job, error: string | null): void {
         kind: "knowledge",
         level: "error",
         title: `Could not embed "${doc.title}"`,
-        body: `${error} The document can still be searched by its words.`,
+        problem: error,
+        body: "The document can still be searched by its words.",
         link: `/dashboard/knowledge?collection=${doc.collectionId}`,
       });
     }

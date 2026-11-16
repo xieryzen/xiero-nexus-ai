@@ -122,11 +122,14 @@ export const modelCreateSchema = z.object({
   pricePerMChars: z.number().nonnegative().max(100_000).optional(),
   capabilities: z.array(z.enum(CAPABILITIES)).optional(),
   notes: z.string().trim().max(1000).optional(),
+  // Marked for the work of users, who choose no model (model-choice.ts).
+  forUsers: z.boolean().optional(),
 });
 
 export const modelUpdateSchema = z.object({
   displayName: z.string().trim().max(120).nullable().optional(),
   enabled: z.boolean().optional(),
+  forUsers: z.boolean().optional(),
   contextWindow: z.number().int().positive().max(100_000_000).nullable().optional(),
   inputPricePerMTok: z.number().nonnegative().max(100_000).nullable().optional(),
   outputPricePerMTok: z.number().nonnegative().max(100_000).nullable().optional(),
@@ -138,7 +141,8 @@ export const modelUpdateSchema = z.object({
 });
 
 export const chatRequestSchema = z.object({
-  modelRowId: z.string().min(1),
+  // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+  modelRowId: z.string().min(1).nullable().optional(),
   systemPrompt: z.string().max(8000).optional(),
   messages: z
     .array(
@@ -216,7 +220,8 @@ export const skillUpdateSchema = z.object({
 export const projectCreateSchema = z.object({
   title: z.string().trim().min(1).max(120),
   goal: z.string().trim().min(1).max(8000),
-  managerModelRowId: z.string().min(1),
+  // An administrator chooses the manager; for a user the app does (model-choice.ts).
+  managerModelRowId: z.string().min(1).nullable().optional(),
   teamId: z.string().min(1).nullable().optional(),
   maxTokens: z.number().int().min(1000).max(5_000_000).optional(),
   maxTasks: z.number().int().min(1).max(MAX_PROJECT_TASKS).optional(),
@@ -293,7 +298,8 @@ const mediaPromptSchema = z
   .max(MAX_MEDIA_PROMPT_CHARS, `A prompt can be at most ${MAX_MEDIA_PROMPT_CHARS} characters`);
 
 export const imageGenerateSchema = z.object({
-  modelRowId: z.string().min(1),
+  // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+  modelRowId: z.string().min(1).nullable().optional(),
   prompt: mediaPromptSchema,
   n: z.number().int().min(1).max(MAX_IMAGES_PER_REQUEST).optional(),
   aspectRatio: aspectRatioSchema.optional(),
@@ -303,7 +309,8 @@ export const imageGenerateSchema = z.object({
 });
 
 export const videoGenerateSchema = z.object({
-  modelRowId: z.string().min(1),
+  // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+  modelRowId: z.string().min(1).nullable().optional(),
   prompt: mediaPromptSchema,
   durationSeconds: durationSchema.optional(),
   aspectRatio: aspectRatioSchema.optional(),
@@ -315,7 +322,8 @@ export const videoGenerateSchema = z.object({
 });
 
 export const speechGenerateSchema = z.object({
-  modelRowId: z.string().min(1),
+  // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+  modelRowId: z.string().min(1).nullable().optional(),
   text: z
     .string()
     .trim()

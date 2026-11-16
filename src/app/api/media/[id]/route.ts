@@ -1,6 +1,7 @@
 import { handle, json } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
+import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { deleteAsset, loadOwnedAsset } from "@/lib/media/service";
 import { getClientMeta } from "@/lib/request";
@@ -9,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = handle(async (_req, { params }) => {
   const user = requireUser();
-  return json({ asset: serializeAsset(loadOwnedAsset(params.id!, user)) });
+  return json({ asset: assetFor(user.role, serializeAsset(loadOwnedAsset(params.id!, user))) });
 });
 
 /** Delete the asset and its file. A video still in progress is abandoned. */

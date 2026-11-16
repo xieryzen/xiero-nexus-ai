@@ -2,7 +2,7 @@ import { asc } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentials, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin, requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { parseCustomHttpConfig } from "@/lib/adapters/custom-http-protocol";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
@@ -14,7 +14,7 @@ import { providerCreateSchema } from "@/lib/validation";
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async () => {
-  requireUser();
+  requireAdmin(); // how the installation is set up is shown to administrators (roles.ts: seesSetup)
   const rows = db
     .select()
     .from(providers)

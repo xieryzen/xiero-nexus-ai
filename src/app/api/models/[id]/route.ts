@@ -6,7 +6,9 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
+import { whatUsersGet } from "@/lib/model-choice";
 import { serializeModel, setCapabilities } from "@/lib/models";
+import { forgetSetupNames } from "@/lib/shown";
 import { modelUpdateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +29,7 @@ export const PATCH = handle(async (req, { params }) => {
   for (const f of [
     "displayName",
     "enabled",
+    "forUsers",
     "contextWindow",
     "inputPricePerMTok",
     "outputPricePerMTok",
@@ -53,7 +56,9 @@ export const PATCH = handle(async (req, { params }) => {
     userAgent,
   });
 
-  return json({ model: serializeModel(load(existing.id)) });
+  forgetSetupNames(); // a new name is a name users are not shown
+  // `users`: what users work with now, kind by kind (a mark or a switch can change it).
+  return json({ model: serializeModel(load(existing.id)), users: whatUsersGet() });
 });
 
 export const DELETE = handle(async (req, { params }) => {

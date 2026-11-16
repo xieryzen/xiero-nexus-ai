@@ -38,7 +38,7 @@ import {
   type MediaOptions,
   type TaskKind,
 } from "@/lib/creative/prompt";
-import { AppError, sanitizeUpstreamError } from "@/lib/errors";
+import { AppError, PlainError, sanitizeUpstreamError } from "@/lib/errors";
 import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
 import { collectionIdsForAgent } from "@/lib/knowledge/service";
 import { isFailing } from "@/lib/model-health-rules";
@@ -57,6 +57,8 @@ import {
 import { notify } from "@/lib/notifications";
 import { publish } from "@/lib/run-bus";
 import { runtime } from "@/lib/runtime";
+import { projectOwnerChooses, withRunModels } from "@/lib/model-choice";
+import { NOT_SET_UP } from "@/lib/public-text";
 import { taskTokenBudget, usedUpMessage } from "@/lib/token-rules";
 import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
@@ -214,7 +216,14 @@ export interface RunSetup {
  * model to answer with. Throws an error that says what is missing, before
  * anything is spent or changed.
  */
-export function prepareRun(project: Project): RunSetup {
+export function prepareRun(asSet: Project): RunSetup {
+  // What the run works with: the project's models, or the app's choice for a
+  // project whose account chooses none (model-choice.ts).
+  const project = withRunModels(asSet);
+  // An account that chooses no model can do nothing about what is missing:
+  // it is told so in words that are written for everyone (errors.ts).
+  const chooses = projectOwnerChooses(asSet);
+  if (!chooses && !project.managerModelRowId) throw new PlainError(400, "run_not_possible", NOT_SET_UP);
   let manager: ResolvedModel;
   try {
     if (!project.managerModelRowId) throw new AppError(400, "no_model", "No manager model set");
@@ -227,6 +236,16 @@ export function prepareRun(project: Project): RunSetup {
     (a) => buildCandidates(a, project, routable).length > 0,
   );
   if (workforce.length === 0) {
+    if (!chooses) {
+      // With the app's choice as the manager every agent can answer: none is there.
+      throw new PlainError(
+        400,
+        "run_not_possible",
+        project.teamId
+          ? "The team of this project has no agent that is switched on. An administrator has to add one; a new project can work with another team."
+          : NOT_SET_UP,
+      );
+    }
     throw new AppError(
       400,
       "run_not_possible",
@@ -309,13 +328,19 @@ export async function executeRun(runId: string): Promise<void> {
   if (!run || run.status !== "running") return;
   const projectId = run.projectId;
   const emit = (event: RunEvent) => publish(projectId, event);
-  const project = db.select().from(projects).where(eq(projects.id, projectId)).get();
+  const asSet = db.select().from(projects).where(eq(projects.id, projectId)).get();
+  // From here on the project is what the run works with: for an account that
+  // chooses no model, the app's choice stands in the places of the models.
+  const project = asSet ? withRunModels(asSet) : undefined;
+  // What a task leaves in writing is read by the account the project belongs
+  // to. Where the app chose the models, it does not say which they were.
+  const namesModels = asSet ? projectOwnerChooses(asSet) : true;
 
   /** Close the run's own record, tell the owner, and let the pages know. */
   const endRun = (
     status: ProjectRun["status"],
     fields: { deliverable?: string | null; reviewNotes?: string | null; error?: string | null; tokensUsed?: number },
-    notice?: { level: "success" | "warning" | "error"; title: string; body?: string },
+    notice?: { level: "success" | "warning" | "error"; title: string; body?: string; problem?: string },
   ) => {
     db.update(projectRuns)
       .set({ status, finishedAt: new Date(), ...fields })
@@ -328,6 +353,7 @@ export async function executeRun(runId: string): Promise<void> {
         level: notice.level,
         title: notice.title,
         body: notice.body,
+        problem: notice.problem,
         link: `/dashboard/projects/${projectId}`,
       });
     }
@@ -350,7 +376,7 @@ export async function executeRun(runId: string): Promise<void> {
   const fail = (message: string) => {
     setStatus("failed", { error: message, finishedAt: new Date() });
     emit({ type: "error", message });
-    endRun("failed", { error: message }, { level: "error", title: `Run failed: ${project.title}`, body: message });
+    endRun("failed", { error: message }, { level: "error", title: `Run failed: ${project.title}`, problem: message });
   };
 
   // A stop asked for in this process is seen at once; one asked for elsewhere
@@ -822,10 +848,14 @@ export async function executeRun(runId: string): Promise<void> {
             taskId: row.id,
             title: row.title,
           });
-          emit({ type: "progress", seq, message: `Joining ${clipIds.length} ${clipIds.length === 1 ? "clip" : "clips"} with ffmpeg` });
+          const joining = `Joining ${clipIds.length} ${clipIds.length === 1 ? "clip" : "clips"}`;
+          emit({ type: "progress", seq, message: joining, full: `${joining} with ffmpeg` });
           const started = Date.now();
           const ticker = setInterval(
-            () => emit({ type: "progress", seq, message: `Joining the clips with ffmpeg (${elapsedLabel(Date.now() - started)})` }),
+            () => {
+              const elapsed = elapsedLabel(Date.now() - started);
+              emit({ type: "progress", seq, message: `Joining the clips (${elapsed})`, full: `Joining the clips with ffmpeg (${elapsed})` });
+            },
             10_000,
           );
           let done: MediaAsset;
@@ -1159,7 +1189,7 @@ export async function executeRun(runId: string): Promise<void> {
                 !isCancelled() &&
                 (!(e instanceof AppError) || mayBeAboutTools(e));
               if (!refusedTools) break;
-              emit({ type: "progress", seq, message: "The model did not accept tools; answering without them" });
+              emit({ type: "progress", seq, message: "Answering without tools", full: "The model did not accept tools; answering without them" });
               attempt++;
             }
           }
@@ -1217,7 +1247,7 @@ export async function executeRun(runId: string): Promise<void> {
         logGeneration("ok");
         attempt++;
         return succeed(
-          mediaArtifact({ kind: generated, assetId: asset.id, modelLabel: label, prompt, options: used }),
+          mediaArtifact({ kind: generated, assetId: asset.id, modelLabel: namesModels ? label : "", prompt, options: used }),
           [serializeAsset(asset)],
         );
       };
@@ -1225,7 +1255,7 @@ export async function executeRun(runId: string): Promise<void> {
       try {
         if (adopted && adopted.status === "ready") return finished(adopted, parseMediaOptions(adopted.params));
 
-        if (!adopted) emit({ type: "progress", seq, message: `Generating the ${kindLabel} with ${label}` });
+        if (!adopted) emit({ type: "progress", seq, message: `Generating the ${kindLabel}`, full: `Generating the ${kindLabel} with ${label}` });
         const base = {
           userId: project.createdBy,
           modelRowId: mediaModel?.model.id ?? "",
@@ -1277,7 +1307,12 @@ export async function executeRun(runId: string): Promise<void> {
           timeoutMs: VIDEO_WAIT_MS,
           isCancelled,
           onTick: (elapsed) =>
-            emit({ type: "progress", seq, message: `Generating the video with ${label} (${elapsedLabel(elapsed)})` }),
+            emit({
+              type: "progress",
+              seq,
+              message: `Generating the video (${elapsedLabel(elapsed)})`,
+              full: `Generating the video with ${label} (${elapsedLabel(elapsed)})`,
+            }),
         });
         const dto = serializeAsset(waited.asset);
         if (waited.asset.status === "ready") return finished(waited.asset, used);

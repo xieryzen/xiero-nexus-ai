@@ -1,3 +1,4 @@
+import { textFor } from "@/lib/shown";
 import { NextResponse } from "next/server";
 import { Errors } from "@/lib/errors";
 import { loadOwnedAsset, refreshVideo } from "@/lib/media/service";
@@ -13,5 +14,5 @@ export const GET = v1("media", async (_req, { params, caller }) => {
   const { asset, checkError } = await refreshVideo(owned.id);
   // `check_error`: why the provider could not be asked this time. The video is
   // then unchanged, and the next request asks again.
-  return NextResponse.json({ ...mediaJson(asset), check_error: checkError ?? null });
+  return NextResponse.json({ ...mediaJson(asset, caller.user.role), check_error: textFor(caller.user.role, checkError) });
 });

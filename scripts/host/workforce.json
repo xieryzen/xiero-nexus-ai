@@ -1072,7 +1072,7 @@
     },
     {
       "name": "Short Reels Team",
-      "description": "Makes short vertical videos: script, pictures, voice-over, final cut, cover and caption. Use it with the workflow \"Short Reels\"; the project needs an image model and a speech model.",
+      "description": "Makes short vertical videos: script, pictures, voice-over, final cut, cover and caption. Use it with the workflow \"Short Reels\".",
       "agents": [
         "Short Reels",
         "Designer",
@@ -1087,7 +1087,7 @@
     },
     {
       "name": "Video Product",
-      "description": "Product videos, promos and explainers from still pictures and a voice-over. Use it with the workflow \"Video Product\"; the project needs an image model and a speech model.",
+      "description": "Product videos, promos and explainers from still pictures and a voice-over. Use it with the workflow \"Video Product\".",
       "agents": [
         "Video Director",
         "Designer",
@@ -1102,7 +1102,7 @@
     },
     {
       "name": "Brosur & Katalog",
-      "description": "Brochures, flyers, price lists and product catalogues, as print-ready HTML with their pictures and copy. Use it with the workflow \"Brosur & Katalog\"; the project needs an image model.",
+      "description": "Brochures, flyers, price lists and product catalogues, as print-ready HTML with their pictures and copy. Use it with the workflow \"Brosur & Katalog\".",
       "agents": [
         "Art Director",
         "Copywriter",
@@ -1240,7 +1240,7 @@
     },
     {
       "name": "Konten Media Sosial",
-      "description": "Carousels and feed posts: the plan, the slide pictures, the captions and hashtags. Use it with the workflow \"Konten Carousel\"; the project needs an image model.",
+      "description": "Carousels and feed posts: the plan, the slide pictures, the captions and hashtags. Use it with the workflow \"Konten Carousel\".",
       "agents": [
         "Social Media Strategist",
         "Designer",
@@ -1283,7 +1283,7 @@
   "workflows": [
     {
       "name": "Short Reels",
-      "description": "A vertical video of about 24 seconds without a video model: 4 pictures, each shown for as long as its voice-over, with subtitles; plus a cover image and a caption. The pictures are square and fill the vertical frame, because the free image model makes square ones only. The project needs an image model and a speech model; 12 steps and 9 generated files, within a project's default limits.",
+      "description": "A vertical video of about 24 seconds made of 4 pictures, each shown for as long as its voice-over, with subtitles; plus a cover image and a caption. The pictures are square and fill the vertical frame. Use the team \"Short Reels Team\". 12 steps and 9 generated files, within a project's default limits.",
       "steps": [
         {
           "title": "Script and storyboard",
@@ -1550,7 +1550,7 @@
     },
     {
       "name": "Video Product",
-      "description": "A product video of about 24 seconds in a wide 16:9 frame, without a video model: 4 pictures, each shown for as long as its voice-over, with subtitles; plus a thumbnail, and the title and description for the post. The pictures are square and fill the wide frame. Use the team \"Video Product\"; the project needs an image model and a speech model. 12 steps and 10 generated files, within a project's default limits.",
+      "description": "A product video of about 24 seconds in a wide 16:9 frame, made of 4 pictures, each shown for as long as its voice-over, with subtitles; plus a thumbnail, and the title and description for the post. The pictures are square and fill the wide frame. Use the team \"Video Product\". 12 steps and 10 generated files, within a project's default limits.",
       "steps": [
         {
           "title": "Brief and storyboard",
@@ -1703,7 +1703,7 @@
     },
     {
       "name": "Brosur & Katalog",
-      "description": "A brochure, flyer, price list or catalogue as print-ready HTML: the plan and art direction, the copy, three pictures, the layout, the handover notes for print, and a review. Use the team \"Brosur & Katalog\"; the project needs an image model. The generated pictures are placeholders for the client's own photographs.",
+      "description": "A brochure, flyer, price list or catalogue as print-ready HTML: the plan and art direction, the copy, three pictures, the layout, the handover notes for print, and a review. Use the team \"Brosur & Katalog\". The generated pictures are placeholders for the client's own photographs.",
       "steps": [
         {
           "title": "Plan, format and art direction",
@@ -1927,7 +1927,7 @@
     },
     {
       "name": "Landing Page",
-      "description": "One page with one job: the offer and the page plan, the art direction, the copy, a hero picture, the page itself, its SEO, and a review. The page is written to site/ in the project workspace. Use the team \"Landing Page\"; the project needs an image model.",
+      "description": "One page with one job: the offer and the page plan, the art direction, the copy, a hero picture, the page itself, its SEO, and a review. The page is written to site/ in the project workspace. Use the team \"Landing Page\".",
       "steps": [
         {
           "title": "Offer and page plan",
@@ -2575,7 +2575,7 @@
     },
     {
       "name": "Konten Carousel",
-      "description": "A carousel of five square slides for a social media feed: the plan with the words of every slide, the five pictures, the caption with hashtags and alt text, and a review. The words are set on the pictures afterwards: generated pictures carry no lettering. Use the team \"Konten Media Sosial\"; the project needs an image model.",
+      "description": "A carousel of five square slides for a social media feed: the plan with the words of every slide, the five pictures, the caption with hashtags and alt text, and a review. The words are set on the pictures afterwards: generated pictures carry no lettering. Use the team \"Konten Media Sosial\".",
       "steps": [
         {
           "title": "Carousel plan",
