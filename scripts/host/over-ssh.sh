@@ -66,6 +66,12 @@ umask 077
 
 here="$(cd "$(dirname "$0")" && pwd)"
 SCRIPTS="${DEPLOY_SCRIPTS:-${here}}"
+# What goes to the node with every run: the host scripts, and what
+# workforce.sh works with. The skills workforce.json names are folders next
+# to it.
+SENT=(pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh
+  workforce.sh workforce.py workforce.json)
+if [ -d "${SCRIPTS}/skills" ]; then SENT+=(skills); fi
 REMOTE_DIR="${DEPLOY_REMOTE_DIR:-}"
 SUDO_MODE="${DEPLOY_SUDO:-auto}"
 KEEP_LOGS=20
@@ -328,8 +334,7 @@ find "${dir}" -maxdepth 1 -name 'run.*' -mmin +1440 -exec rm -rf {} + 2> /dev/nu
 run="$(mktemp -d "${dir}/run.XXXXXX")"
 if ! base64 -d << 'PAYLOAD' | tar -xzf - -C "${run}"; then
 REMOTE
-  tar -czf - -C "${SCRIPTS}" pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh \
-    workforce.sh workforce.py workforce.json | base64
+  tar -czf - -C "${SCRIPTS}" "${SENT[@]}" | base64
   cat << 'REMOTE'
 PAYLOAD
   echo "error: the scripts did not arrive whole on the node."

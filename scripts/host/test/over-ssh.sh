@@ -156,6 +156,7 @@ echo "MY_SETTING=[${MY_SETTING:-}]"
 echo "stdin=$(wc -c | tr -d ' ')"
 echo "who=$(id -un)"
 echo "beside=$(cd "$(dirname "$0")" && ls | tr '\n' ' ')"
+echo "skill=$(cat "$(dirname "$0")/skills/a-skill/SKILL.md" 2> /dev/null)"
 echo "a line for stderr" >&2
 if [ -n "${STAND_IN_SLEEP:-}" ]; then sleep "${STAND_IN_SLEEP}"; fi
 echo "the end"
@@ -166,9 +167,11 @@ cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/disk-report.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/node-check.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/nginx-site.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/workforce.sh"
-# What workforce.sh works with travels with it.
+# What workforce.sh works with travels with it: its program, its file, and the skills the file names.
 echo "# a stand-in" > "${WORK}/scripts/workforce.py"
 echo "{}" > "${WORK}/scripts/workforce.json"
+mkdir -p "${WORK}/scripts/skills/a-skill"
+echo "# A skill of the test" > "${WORK}/scripts/skills/a-skill/SKILL.md"
 
 # An ssh that says which process it is, for the test that cuts a connection.
 REAL_SSH="$(command -v ssh)"
@@ -294,7 +297,8 @@ check "site: --yes, and what came after \"--\"" args_are --server 0a11ce00 --sit
 DEPLOY_SERVER=0a11ce00 remote workforce-plan || true
 check "workforce-plan: runs workforce.sh" said "ran=workforce.sh"
 check "  with the server and --dry-run" args_are --server 0a11ce00 --dry-run
-check "  its program and its file are next to it on the node" said "workforce.json workforce.py workforce.sh"
+check "  its program, its file and the skills are next to it on the node" said "skills workforce.json workforce.py workforce.sh"
+check "  a skill arrives as it was written" said "skill=# A skill of the test"
 DEPLOY_SERVER=0a11ce00 remote workforce -- --update --test || true
 check "workforce: --yes, and what came after \"--\"" args_are --server 0a11ce00 --yes --update --test
 DEPLOY_ENV=$'MY_SETTING=a value with spaces\n\nSTAND_IN_EXIT=0' remote plan || true

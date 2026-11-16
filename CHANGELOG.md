@@ -80,6 +80,8 @@ server is under Notes.
   proposals, and reviewing.
 - A fourth provider without a key in the file: Pollinations, with the one
   model its old open API still serves.
+- `over-ssh.sh` and the Deploy workflow send the `skills` folder to the node
+  with `workforce.json`.
 - CI puts the file with its skills into the built app, runs **every**
   workflow of it to the end in a project of the team that names it, and
   tries `--only-usable` on a gateway that lists billed, refused, limited and
