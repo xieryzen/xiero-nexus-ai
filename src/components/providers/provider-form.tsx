@@ -9,6 +9,13 @@ import {
   detectMediaApi,
   type MediaApiSetting,
 } from "@/lib/adapters/media-protocol";
+import {
+  PRESETS_READ_ON,
+  PRESET_GROUP_LABELS,
+  PROVIDER_PRESETS,
+  presetById,
+  type PresetGroup,
+} from "@/lib/provider-presets";
 import type { ProviderDTO } from "@/lib/providers";
 import { apiFetch, ApiError } from "@/lib/client";
 import { Alert, Button, Field, Input, Select, Textarea } from "@/components/ui";
@@ -73,6 +80,9 @@ const DEFAULT_BASE_URLS = new Set(
     .filter(Boolean),
 );
 
+/** Addresses that a known provider filled in: like an adapter's own, they were not typed. */
+const PRESET_BASE_URLS = new Set(PROVIDER_PRESETS.map((p) => p.baseUrl));
+
 const EXAMPLE_CONFIG = JSON.stringify(CUSTOM_HTTP_EXAMPLE, null, 2);
 
 export function ProviderForm({
@@ -99,6 +109,29 @@ export function ProviderForm({
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [presetId, setPresetId] = useState("");
+  const preset = presetById(presetId);
+
+  /** Start from a known provider: its name, its address and how it signs in. What was typed for the key stays. */
+  function choosePreset(id: string) {
+    const before = presetById(presetId);
+    const next = presetById(id);
+    setPresetId(id);
+    if (!next) {
+      // Back to a provider of one's own: what the known provider filled in goes, what was typed stays.
+      if (before) {
+        if (name === before.name) setName("");
+        if (baseUrl.trim() === before.baseUrl) setBaseUrl(HINTS[adapter as AdapterId]?.baseUrlDefault ?? "");
+        setAuthType("bearer");
+      }
+      return;
+    }
+    // A name that was typed is kept; one that came from the provider chosen before is replaced.
+    if (name.trim() === "" || name === before?.name) setName(next.name);
+    setAdapter(next.adapter);
+    setBaseUrl(next.baseUrl);
+    setAuthType(next.authType);
+  }
 
   const hints = HINTS[adapter as AdapterId] ?? HINTS["openai-compatible"];
   // The request style setting is the OpenAI-compatible adapter's: other
@@ -111,7 +144,7 @@ export function ProviderForm({
     setAdapter(next);
     const nextHints = HINTS[next as AdapterId];
     // A new provider starts from the adapter's own address, unless one was typed.
-    if (!editing && (baseUrl.trim() === "" || DEFAULT_BASE_URLS.has(baseUrl.trim()))) {
+    if (!editing && (baseUrl.trim() === "" || DEFAULT_BASE_URLS.has(baseUrl.trim()) || PRESET_BASE_URLS.has(baseUrl.trim()))) {
       setBaseUrl(nextHints?.baseUrlDefault ?? "");
     }
     if (next === "custom-http" && !config.trim()) setConfig(EXAMPLE_CONFIG);
@@ -157,6 +190,46 @@ export function ProviderForm({
   return (
     <form onSubmit={submit} className="space-y-4">
       {error && <Alert tone="danger">{error}</Alert>}
+      {!editing && (
+        <div>
+          <Field
+            label="Start from"
+            htmlFor="p-preset"
+            hint="Optional. A known provider fills in the name, the address and how it signs in; everything can still be changed."
+          >
+            <Select id="p-preset" value={presetId} onChange={(e) => choosePreset(e.target.value)}>
+              <option value="">A provider of your own</option>
+              {(Object.keys(PRESET_GROUP_LABELS) as PresetGroup[]).map((group) => (
+                <optgroup key={group} label={PRESET_GROUP_LABELS[group]}>
+                  {PROVIDER_PRESETS.filter((p) => p.group === group).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
+          </Field>
+          {preset && (
+            <p className="mt-2 text-xs text-ink-2" id="p-preset-note">
+              {preset.free && <>{preset.free} </>}
+              {preset.note && <>{preset.note} </>}
+              {preset.keyUrl && (
+                <>
+                  A key is made at{" "}
+                  <a className="underline" href={preset.keyUrl} target="_blank" rel="noreferrer noopener">
+                    {new URL(preset.keyUrl).host}
+                  </a>
+                  .{" "}
+                </>
+              )}
+              <span className="text-ink-3">
+                What a provider gives for nothing changes: this was read on {PRESETS_READ_ON}; its own site says what holds now.
+              </span>
+            </p>
+          )}
+        </div>
+      )}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Name" htmlFor="p-name">
           <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} required placeholder="e.g. Primary OpenAI" />

@@ -217,6 +217,20 @@ try {
   await open("/dashboard/providers");
   await clickText(/Add provider/);
   await page.waitForSelector("#p-adapter");
+  await page.select("#p-preset", "groq");
+  check(
+    "starting from a known provider fills in its name, its address and how it signs in",
+    (await page.$eval("#p-name", (e) => e.value)) === "Groq" &&
+      (await page.$eval("#p-baseurl", (e) => e.value)) === "https://api.groq.com/openai/v1" &&
+      (await page.$eval("#p-auth", (e) => e.value)) === "bearer",
+  );
+  check("  and says where a key is made, and when that was read", (await has("console.groq.com")) && (await has("this was read on")));
+  await page.select("#p-preset", "ovhcloud");
+  check(
+    "a provider that takes no key is set to no key, and the name follows the choice",
+    (await page.$eval("#p-name", (e) => e.value)) === "OVHcloud AI Endpoints" && (await page.$eval("#p-auth", (e) => e.value)) === "none",
+  );
+  await page.select("#p-preset", "");
   await page.select("#p-adapter", "gemini");
   check("choosing Gemini fills in its address", (await page.$eval("#p-baseurl", (e) => e.value)) === "https://generativelanguage.googleapis.com/v1beta");
   check("  and explains where the key goes", await has("x-goog-api-key"));
@@ -430,6 +444,32 @@ try {
   check("a question finds the passage", await waitText("by words"), null);
   await snap("knowledge");
 
+  begin("Browser: skills");
+  await open("/dashboard/skills");
+  check("the navigation has Skills", (await page.$('a[href="/dashboard/skills"]')) !== null);
+  const skillInput = await page.$("#skill-files");
+  // "a..." so that it is the first of the list, whatever the other checks left there.
+  const skillUpload = join(tmpdir(), `browser-skill-${Date.now()}.md`);
+  writeFileSync(skillUpload, "---\nname: a-browser-skill\ndescription: A skill uploaded from the browser.\n---\n\n# A browser skill\n\nSay hello first.\n");
+  await skillInput.uploadFile(skillUpload);
+  check("a SKILL.md can be uploaded", await waitText('"a-browser-skill" added'), null);
+  check("  and is listed with its description", await has("A skill uploaded from the browser."), null);
+  await clickText(/^\s*Read\s*$/);
+  check("its instructions can be read on the page", await waitText("Say hello first."), null);
+  await skillInput.uploadFile(skillUpload);
+  check("the same skill a second time is refused, with what to do", await waitText(/There is a skill named "a-browser-skill" already/), null);
+  await clickText(/Write a skill/);
+  await fill("#skill-name", "A typed skill");
+  await fill("#skill-description", "Written on the page.");
+  await fill("#skill-instructions", "One rule: be brief.");
+  await clickText("Add skill", { tag: 'button[type="submit"]' });
+  check("a skill can be written on the page", await waitText("One rule: be brief."), null);
+  await snap("skills");
+  await open("/dashboard/agents");
+  await clickText(/Add agent/);
+  check("the agent form offers the skills", await waitText("a-browser-skill"), null);
+  await snap("agent-skills");
+
   begin("Browser: chat with knowledge");
   await open("/dashboard/chat");
   // The first model of the list is one the mock refuses on purpose.
@@ -473,7 +513,7 @@ try {
   // ─── A phone ───────────────────────────────────────────────────────────────
   begin("Browser: on a phone");
   await page.setViewport({ width: 390, height: 780, isMobile: true, hasTouch: true });
-  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
+  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
     await open(path);
     const overflow = await sideways();
     check(`${path.replace(/[0-9a-f-]{36}/, "<id>")} does not scroll sideways`, overflow <= 1, `${overflow}px`);
@@ -493,6 +533,7 @@ try {
     "/dashboard/chat",
     "/dashboard/studio",
     "/dashboard/knowledge",
+    "/dashboard/skills",
     "/dashboard/providers",
     "/dashboard/models",
     "/dashboard/usage",
