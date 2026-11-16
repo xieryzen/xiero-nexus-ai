@@ -7,6 +7,8 @@ import { AppError, sanitizeUpstreamError } from "../errors";
 import { safeFetch } from "../http-client";
 import { formatHits, searchKnowledge } from "../knowledge/service";
 import { readBodyCapped } from "../media/http";
+import { SKILLS_PROMPT_TOTAL_CHARS, SKILL_PROMPT_CHARS } from "../skills/prompt";
+import { readSkillFile, type WorkSkill } from "../skills/service";
 import { htmlToText } from "../text/html";
 import { fetchWeb, isTextContentType } from "../web-fetch";
 import { FILE_MAX_BYTES, allFiles, listFiles, recordExec, upsertFile } from "../workspace";
@@ -47,6 +49,8 @@ export interface ToolContext {
   agent: Agent;
   /** Shared knowledge collections the agent was given. */
   collectionIds: string[];
+  /** The skills the agent has for this task: its own and its team's. */
+  skills?: WorkSkill[];
 }
 
 // ─── Server configuration ────────────────────────────────────────────────────
@@ -533,6 +537,65 @@ function memoryTools(ctx: ToolContext): Record<string, LoopTool> {
   };
 }
 
+// ─── Skills ──────────────────────────────────────────────────────────────────
+
+/** Most characters of a skill or of one of its files that one call returns. */
+const SKILL_READ_CHARS = 60_000;
+
+function skillTool(skills: WorkSkill[]): LoopTool {
+  const names = skills.map((s) => s.name);
+  return {
+    definition: {
+      name: "read_skill",
+      description:
+        "Read one of your skills in full, or one of the files that belong to it. Your skills are named in your instructions; a part that is not shown there, and the files a skill refers to, are read with this. " +
+        `Your skills: ${names.join("; ")}.`,
+      parameters: object(
+        {
+          skill: { type: "string", description: "The skill's name, as it is written in your instructions." },
+          file: {
+            type: "string",
+            description: "The path of one of the skill's files, as listed with the skill. Leave it out to read the skill's instructions.",
+          },
+          offset: { type: "integer", description: "Where to start reading, in characters, for a text that was cut off. Default 0." },
+        },
+        ["skill"],
+      ),
+    },
+    async run(args) {
+      const wanted = str(args, "skill", { max: 200 }).trim().toLowerCase();
+      const skill =
+        skills.find((s) => s.name.toLowerCase() === wanted) ??
+        skills.find((s) => s.name.toLowerCase().replace(/[^a-z0-9]+/g, "") === wanted.replace(/[^a-z0-9]+/g, ""));
+      if (!skill) throw new ToolError(`You have no skill of that name. Your skills: ${names.join("; ")}.`);
+      const file = str(args, "file", { max: 400, optional: true }).trim().replace(/^\.?\/+/, "");
+      const offset = int(args, "offset", 0, 0, 10_000_000);
+      let text: string;
+      if (file) {
+        const content = readSkillFile(skill.id, file);
+        if (content === null) {
+          const listed = skill.files.map((f) => f.path).join(", ");
+          throw new ToolError(
+            listed ? `"${skill.name}" has no file "${file}". Its files: ${listed}.` : `"${skill.name}" has no files.`,
+          );
+        }
+        text = content;
+      } else {
+        const listed = skill.files.map((f) => f.path).join(", ");
+        text =
+          `# Skill: ${skill.name}\n${skill.description ? `${skill.description}\n` : ""}\n${skill.instructions.trim()}` +
+          (listed ? `\n\nFiles of this skill: ${listed}.` : "");
+      }
+      if (offset >= text.length && text.length > 0) throw new ToolError(`That text ends at character ${text.length}.`);
+      const piece = text.slice(offset, offset + SKILL_READ_CHARS);
+      const rest = text.length - offset - piece.length;
+      return rest > 0
+        ? `${piece}\n\n(${rest} more characters. Read on with offset ${offset + piece.length}.)`
+        : piece;
+    },
+  };
+}
+
 // ─── Assembly ────────────────────────────────────────────────────────────────
 
 /**
@@ -557,7 +620,24 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
   }
   if (ctx.collectionIds.length > 0) tools.push(knowledgeTool(ctx));
   if (ctx.agent.memoryEnabled) tools.push(...Object.values(memoryTools(ctx)));
+  // Skills are read in the instructions; the tool is for what does not fit
+  // there and for the files a skill brings. An agent that has no other tool
+  // does not get this one alone: it answers in one pass, as it always did,
+  // unless there is something to read that its instructions cannot show.
+  const skills = ctx.skills ?? [];
+  if (skills.length > 0 && (tools.length > 0 || skillsNeedReading(skills))) tools.push(skillTool(skills));
   return tools;
+}
+
+/** Whether there is more to these skills than a prompt shows: files, or more text than fits. */
+export function skillsNeedReading(skills: WorkSkill[]): boolean {
+  let total = 0;
+  for (const skill of skills) {
+    if (skill.files.length > 0) return true;
+    if (skill.instructions.length > SKILL_PROMPT_CHARS) return true;
+    total += skill.instructions.length;
+  }
+  return total > SKILLS_PROMPT_TOTAL_CHARS;
 }
 
 /** The names of an agent's tools, without building them. */

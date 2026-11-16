@@ -17,8 +17,8 @@ export const TOOL_NAMES = [
 
 export type ToolName = (typeof TOOL_NAMES)[number];
 
-/** Tools that are not chosen one by one: they come with knowledge and memory. */
-export const IMPLIED_TOOL_NAMES = ["search_knowledge", "remember", "recall"] as const;
+/** Tools that are not chosen one by one: they come with knowledge, memory and skills. */
+export const IMPLIED_TOOL_NAMES = ["search_knowledge", "remember", "recall", "read_skill"] as const;
 export type ImpliedToolName = (typeof IMPLIED_TOOL_NAMES)[number];
 
 export type ToolGroup = "workspace" | "execution" | "web";

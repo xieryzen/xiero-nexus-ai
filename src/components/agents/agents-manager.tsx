@@ -38,12 +38,20 @@ export interface CollectionOption {
   name: string;
 }
 
+export interface SkillOption {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
 const GROUPS: ToolGroup[] = ["workspace", "execution", "web"];
 
 function AgentForm({
   models,
   toolSetup,
   collections,
+  skills,
   initial,
   onSaved,
   onCancel,
@@ -51,6 +59,7 @@ function AgentForm({
   models: ModelOption[];
   toolSetup: ToolSetup;
   collections: CollectionOption[];
+  skills: SkillOption[];
   initial?: AgentDTO;
   onSaved: (a: AgentDTO) => void;
   onCancel: () => void;
@@ -68,6 +77,7 @@ function AgentForm({
   const [maxSteps, setMaxSteps] = useState(String(initial?.maxSteps ?? DEFAULT_MAX_STEPS));
   const [memoryEnabled, setMemoryEnabled] = useState(initial?.memoryEnabled ?? false);
   const [collectionIds, setCollectionIds] = useState<Set<string>>(new Set(initial?.collectionIds ?? []));
+  const [skillIds, setSkillIds] = useState<Set<string>>(new Set(initial?.skillIds ?? []));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -110,6 +120,7 @@ function AgentForm({
       maxSteps: Number(maxSteps) || DEFAULT_MAX_STEPS,
       memoryEnabled,
       collectionIds: [...collectionIds],
+      skillIds: [...skillIds],
     };
     try {
       const res = editing
@@ -231,6 +242,46 @@ function AgentForm({
               </div>
             );
           })}
+        </div>
+
+        <div className="mt-4">
+          <Field
+            label="Skills"
+            hint={
+              skills.length === 0
+                ? "No skill yet. Upload a SKILL.md or a .skill on the Skills page."
+                : "A way of working, written down. The agent reads its skills with each task; a team's skills come on top."
+            }
+          >
+            {skills.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {skills.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    title={s.description || undefined}
+                    aria-pressed={skillIds.has(s.id)}
+                    onClick={() =>
+                      setSkillIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(s.id)) next.delete(s.id);
+                        else next.add(s.id);
+                        return next;
+                      })
+                    }
+                    className={cn(
+                      "rounded-full border px-3 py-1 text-xs font-medium transition",
+                      skillIds.has(s.id) ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                      !s.enabled && "opacity-60",
+                    )}
+                  >
+                    {s.name}
+                    {!s.enabled && " (off)"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </Field>
         </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -442,12 +493,14 @@ export function AgentsManager({
   models,
   toolSetup,
   collections,
+  skills,
   isAdmin,
 }: {
   initialAgents: AgentDTO[];
   models: ModelOption[];
   toolSetup: ToolSetup;
   collections: CollectionOption[];
+  skills: SkillOption[];
   isAdmin: boolean;
 }) {
   const [list, setList] = useState(initialAgents);
@@ -455,6 +508,7 @@ export function AgentsManager({
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [memoryOf, setMemoryOf] = useState<string | null>(null);
   const collectionName = new Map(collections.map((c) => [c.id, c.name] as const));
+  const skillName = new Map(skills.map((s) => [s.id, s.name] as const));
 
   function patch(a: AgentDTO) {
     setList((l) => {
@@ -489,6 +543,7 @@ export function AgentsManager({
             models={models}
             toolSetup={toolSetup}
             collections={collections}
+            skills={skills}
             initial={form.agent}
             onSaved={(a) => { patch(a); setForm(null); }}
             onCancel={() => setForm(null)}
@@ -533,6 +588,13 @@ export function AgentsManager({
                       <Badge tone="signal">
                         <Icon name="memory" size={12} /> memory
                       </Badge>
+                    )}
+                    {a.skillIds.length > 0 && (
+                      <span title={a.skillIds.map((id) => skillName.get(id) ?? "a skill").join(", ")}>
+                        <Badge tone="signal">
+                          <Icon name="skill" size={12} /> {a.skillIds.length} {a.skillIds.length === 1 ? "skill" : "skills"}
+                        </Badge>
+                      </span>
                     )}
                   </div>
                   <p className="mt-1 text-xs text-ink-3">

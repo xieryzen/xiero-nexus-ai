@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
+import { setTeamSkills } from "@/lib/skills/service";
 import { serializeTeam } from "@/lib/workforce";
 import { teamUpdateSchema } from "@/lib/validation";
 
@@ -18,6 +19,8 @@ export const PATCH = handle(async (req, { params }) => {
   if (!existing) throw Errors.notFound("Team not found");
   const body = await parseBody(req, teamUpdateSchema);
 
+  // Checked first: it can refuse, and then nothing is changed.
+  if (body.skillIds !== undefined) setTeamSkills(existing.id, body.skillIds);
   db.transaction((tx) => {
     const patch: Record<string, unknown> = { updatedAt: new Date() };
     if (body.name !== undefined) patch.name = body.name;

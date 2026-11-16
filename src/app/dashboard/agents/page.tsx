@@ -6,6 +6,7 @@ import { toolStatus } from "@/lib/agent/tools";
 import { getCurrentUser } from "@/lib/auth";
 import { agentCollectionMap, sharedCollections } from "@/lib/knowledge/service";
 import { chatModels } from "@/lib/model-options";
+import { agentSkillMap, listSkills } from "@/lib/skills/service";
 import { serializeAgents, serializeTeam } from "@/lib/workforce";
 import { PageHeader } from "@/components/ui";
 import { AgentsManager, type ModelOption } from "@/components/agents/agents-manager";
@@ -30,10 +31,17 @@ export default function AgentsPage() {
 
   const serializedAgents = serializeAgents(agentRows, {
     collections: agentCollectionMap(),
+    skills: agentSkillMap(),
     // An administrator sees how many notes there are; everyone else, their own.
     memories: memoryCounts(isAdmin ? undefined : user?.id),
   });
   const status = toolStatus();
+  const skills = listSkills({ withInstructions: false }).map((s) => ({
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    enabled: s.enabled,
+  }));
 
   return (
     <div className="space-y-6">
@@ -43,11 +51,13 @@ export default function AgentsPage() {
         models={modelOptions}
         toolSetup={{ sandbox: status.sandbox, search: status.search }}
         collections={sharedCollections()}
+        skills={skills}
         isAdmin={isAdmin}
       />
       <TeamsManager
         initialTeams={teamRows.map(serializeTeam)}
         agents={serializedAgents.map((a) => ({ id: a.id, name: a.name, role: a.role }))}
+        skills={skills}
         isAdmin={isAdmin}
       />
     </div>

@@ -9,6 +9,7 @@ import { Errors } from "@/lib/errors";
 import { modelIsMediaOnly } from "@/lib/gateway";
 import { collectionIdsForAgent, setAgentCollections } from "@/lib/knowledge/service";
 import { getClientMeta } from "@/lib/request";
+import { setAgentSkills, skillIdsForAgent } from "@/lib/skills/service";
 import { serializeAgent } from "@/lib/workforce";
 import { agentUpdateSchema } from "@/lib/validation";
 
@@ -44,16 +45,20 @@ export const PATCH = handle(async (req, { params }) => {
   if (body.maxSteps !== undefined) patch.maxSteps = body.maxSteps;
   if (body.memoryEnabled !== undefined) patch.memoryEnabled = body.memoryEnabled;
 
-  // Checked first: it can refuse, and then nothing is changed.
+  // Checked first: they can refuse, and then nothing is changed.
   if (body.collectionIds !== undefined) setAgentCollections(existing.id, body.collectionIds);
+  if (body.skillIds !== undefined) setAgentSkills(existing.id, body.skillIds);
   db.update(agents).set(patch).where(eq(agents.id, existing.id)).run();
   audit({
     actorUserId: user.id,
     action: "agent.update",
     targetType: "agent",
     targetId: existing.id,
-    // What an agent may do is worth a line in the log of its own.
-    metadata: body.tools !== undefined ? { tools: body.tools } : undefined,
+    // What an agent may do, and what it works by, is worth a line in the log of its own.
+    metadata:
+      body.tools !== undefined || body.skillIds !== undefined
+        ? { ...(body.tools !== undefined ? { tools: body.tools } : {}), ...(body.skillIds !== undefined ? { skills: body.skillIds.length } : {}) }
+        : undefined,
     ip,
     userAgent,
   });
@@ -62,6 +67,7 @@ export const PATCH = handle(async (req, { params }) => {
   return json({
     agent: serializeAgent(fresh, undefined, {
       collectionIds: collectionIdsForAgent(fresh.id),
+      skillIds: skillIdsForAgent(fresh.id),
       memoryCount: memoryCounts().get(fresh.id),
     }),
   });

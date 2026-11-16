@@ -41,6 +41,8 @@ import {
 import { AppError, sanitizeUpstreamError } from "@/lib/errors";
 import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
 import { collectionIdsForAgent } from "@/lib/knowledge/service";
+import { skillNames, skillsBlock } from "@/lib/skills/prompt";
+import { skillsForWork } from "@/lib/skills/service";
 import { serializeAsset, type MediaAssetDTO } from "@/lib/media/dto";
 import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { checkRenderInput, createRenderAsset, renderAsset } from "@/lib/media/render";
@@ -114,9 +116,16 @@ function elapsedLabel(ms: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function describeAgents(list: Agent[]): string {
+/** The agents as the one who plans sees them: who they are, and what they have a skill for. */
+function describeAgents(list: Agent[], teamId: string | null): string {
   return list
-    .map((a) => `- ${a.name} (${a.role})${a.instructions ? `: ${a.instructions.slice(0, 160)}` : ""}`)
+    .map((a) => {
+      const skilled = skillNames(skillsForWork(a.id, teamId));
+      return (
+        `- ${a.name} (${a.role})${skilled ? ` [skills: ${skilled}]` : ""}` +
+        (a.instructions ? `: ${a.instructions.slice(0, 160)}` : "")
+      );
+    })
     .join("\n");
 }
 
@@ -520,7 +529,7 @@ export async function executeRun(runId: string): Promise<void> {
               '(code/config), add an "outputFile" relative path and the agent should return ONLY that file\'s contents; ' +
               "its artifact is saved to the project workspace. Keep it minimal and ordered." +
               creative +
-              `\n\nAvailable agents:\n${describeAgents(workforce)}`,
+              `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId)}`,
           },
           { role: "user", content: `Goal:\n${goal}${memoryNote}` },
         ];
@@ -842,6 +851,8 @@ export async function executeRun(runId: string): Promise<void> {
           return dt ? { title: dt.row.title, artifact: artifactBySeq.get(d) } : undefined;
         });
 
+        // What the agent works by: its own skills, and those of the project's team.
+        const workSkills = agent ? skillsForWork(agent.id, project.teamId) : [];
         const tools: LoopTool[] =
           kind === "text" && agent
             ? buildTools({
@@ -851,6 +862,7 @@ export async function executeRun(runId: string): Promise<void> {
                 userId: project.createdBy,
                 agent,
                 collectionIds: collectionIdsForAgent(agent.id),
+                skills: workSkills,
               })
             : [];
         const toolNames = tools.map((t) => t.definition.name);
@@ -902,7 +914,9 @@ export async function executeRun(runId: string): Promise<void> {
             role: "system",
             content:
               `You are ${agent?.name ?? "an agent"}, acting as ${agent?.role ?? "a specialist"}.\n` +
-              `${agent?.instructions ?? ""}\n\n` +
+              `${agent?.instructions ?? ""}` +
+              skillsBlock(workSkills, { canRead: toolNames.includes("read_skill") }) +
+              "\n\n" +
               `Overall project goal: ${goal}\n` +
               deliverableInstruction +
               (row.acceptanceCriteria ? `\nAcceptance criteria: ${row.acceptanceCriteria}` : "") +
@@ -1339,6 +1353,8 @@ export async function executeRun(runId: string): Promise<void> {
           : [];
       if (reviewModelIds.length > 0) {
         const execSummary = latestExecSummary(workspace.id);
+        // A reviewer with a skill reviews by it: a checklist is what a review is made of.
+        const reviewSkills = reviewer ? skillsForWork(reviewer.id, project.teamId) : [];
         const reviewMessages: ChatMessage[] = [
           {
             role: "system",
@@ -1351,7 +1367,12 @@ export async function executeRun(runId: string): Promise<void> {
                   "or 'Joined video' is media you cannot see or hear: review its prompt against the criteria, " +
                   "say that the media itself was not reviewed, and do not count that against the task. "
                 : "") +
-              "End with a line exactly 'VERDICT: pass', 'VERDICT: concerns', or 'VERDICT: fail'.",
+              "End with a line exactly 'VERDICT: pass', 'VERDICT: concerns', or 'VERDICT: fail'." +
+              skillsBlock(reviewSkills, { canRead: false, perSkillChars: 8_000, totalChars: 16_000 }) +
+              (reviewSkills.length > 0
+                ? "\n\nReview by these skills as well: where a deliverable goes against one, name the rule it breaks. " +
+                  "The last line is still the verdict."
+                : ""),
           },
           {
             role: "user",
