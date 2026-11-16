@@ -44,9 +44,8 @@
 #                        The same, with the file itself sealed for this node.
 #   --skill-url <addr>   The same, for a file at an https address, which is
 #                        fetched from this node: a SKILL.md, a .skill or a
-#                        .zip, also one that holds several packed skills. The
-#                        address of a file's page at MediaFire is followed to
-#                        the file. May be given again.
+#                        .zip. The address of a file's page at MediaFire is
+#                        followed to the file. May be given again.
 #   --skill-url-sealed <text>
 #                        The same, with the address sealed for this node: an
 #                        address is all it takes to have the file.
@@ -104,7 +103,7 @@ while [ "$#" -gt 0 ]; do
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
     --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
     -h | --help)
-      sed -n '2,74p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;

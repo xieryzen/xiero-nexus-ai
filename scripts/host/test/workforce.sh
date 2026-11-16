@@ -560,7 +560,7 @@ PYTHON_END
 run -- --user boss --file "${FILE}" --yes --upload-skill "${WORK}/own/bundle.skill"
 is "an archive is uploaded too" "0" "${CODE}"
 check "  with its files" line 'added "house-checklist": [0-9]+ characters of instructions, 1 file\.'
-check "  and what is no text is left out, and named" line "left out of it: .*logo\.png"
+check "  and what is no text is left out, with how many and why, and named" line "left out of it: 1 file \(it is not text .*\): house-checklist/logo\.png"
 # A skill that a team was given by hand stays when the file gives it others.
 HOUSE_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'house-checklist'][0]")"
 TEAM_ID="$(ask /api/teams "[t['id'] for t in d['teams'] if t['name'] == '${OWN_TEAM}'][0]")"
@@ -585,25 +585,20 @@ check "  with what the app said" says "neither text nor a ZIP archive"
 wrong "a skill of your own cannot also be written in the file" \
   'd["skills"]["both"] = {"uploaded": True, "instructions": "Words."}' 'what it says is in the app, not in this file'
 
-# Skill files at an address. One archive holds two packed skills, as people pack them to send them.
+# Skill files at an address. One archive holds two skills, each a folder with a SKILL.md.
 mkdir -p "${WORK}/www"
 python3 - "${WORK}/www" << 'PYTHON_END'
 import io, sys, zipfile
 
-def packed(name, files=None):
-    data = io.BytesIO()
-    with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("%s/SKILL.md" % name, "---\nname: %s\ndescription: Fetched from an address.\n---\n\n# %s\n\nFetched, not typed.\n" % (name, name))
-        for path, text in (files or {}).items():
-            archive.writestr("%s/%s" % (name, path), text)
-    return data.getvalue()
+def words(name):
+    return "---\nname: %s\ndescription: Fetched from an address.\n---\n\n# %s\n\nFetched, not typed.\n" % (name, name)
 
-with zipfile.ZipFile(sys.argv[1] + "/all-skills.zip", "w") as archive:
-    archive.writestr("fetched-one.skill", packed("fetched-one", {"references/notes.md": "# Notes\n"}))
-    archive.writestr("more/fetched-two.skill.zip", packed("fetched-two"))
-    archive.writestr("read-me-first.txt", "Two skills.\n")
-    archive.writestr("broken.zip", b"PK and nothing more")
-open(sys.argv[1] + "/fetched-three.skill", "wb").write(packed("fetched-three"))
+with zipfile.ZipFile(sys.argv[1] + "/all-skills.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("all/fetched-one/SKILL.md", words("fetched-one"))
+    archive.writestr("all/fetched-one/references/notes.md", "# Notes\n")
+    archive.writestr("all/more/fetched-two/SKILL.md", words("fetched-two"))
+with zipfile.ZipFile(sys.argv[1] + "/fetched-three.skill", "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("fetched-three/SKILL.md", words("fetched-three"))
 open(sys.argv[1] + "/sign-in.html", "w").write("<!DOCTYPE html>\n<html><body>Sign in to download.</body></html>\n")
 PYTHON_END
 (cd "${WORK}/www" && exec python3 -m http.server "${WWW_PORT}" --bind 127.0.0.1) > "${WORK}/www.log" 2>&1 &
@@ -615,15 +610,13 @@ done
 before_fetch="$(ask /api/skills 'len(d["skills"])')"
 run -- --user boss --file "${FILE}" --dry-run --skill-url "${WWW}/all-skills.zip"
 is "a dry run fetches a skill file from an address" "0" "${CODE}"
-check "  an archive of packed skills is opened: each of them is one upload, and what it holds is said" \
-  line '\+ Skill file "fetched-one\.skill" \([0-9]+ bytes\), from 127\.0\.0\.1, in "all-skills\.zip": upload it; a skill of the same name is replaced\. It holds the skill "fetched-one" with 1 more file\.'
-check "  also one in a folder of the archive" line '\+ Skill file "fetched-two\.skill\.zip" .* It holds the skill "fetched-two"\.'
-check "  what in it is no archive is left out, and named" says 'Skill file "all-skills.zip": left out of it: broken.zip (not an archive).'
+check "  and names the skills it holds, with their files" \
+  line '\+ Skill file "all-skills\.zip" \([0-9]+ bytes\), from 127\.0\.0\.1: upload it; a skill of the same name is replaced\. It holds 2 skills: "fetched-one" with 1 more file, "fetched-two"\.'
 is "  nothing is uploaded" "${before_fetch}" "$(ask /api/skills 'len(d["skills"])')"
 run -- --user boss --file "${FILE}" --yes --skill-url "${WWW}/all-skills.zip" --skill-url "${WWW}/fetched-three.skill"
 is "fetched for good, it ends well" "0" "${CODE}"
-check "the packed skills are added, with their files" line 'added "fetched-one": [0-9]+ characters of instructions, 1 file\.'
-check "  and a skill file that is not packed twice, as it is" line 'done +Skill file "fetched-three\.skill" \([0-9]+ bytes\), from 127\.0\.0\.1: upload it'
+check "the skills of the archive are added, with their files" line 'added "fetched-one": [0-9]+ characters of instructions, 1 file\.'
+check "  and so is the one of the second address" line 'done +Skill file "fetched-three\.skill" \([0-9]+ bytes\), from 127\.0\.0\.1: upload it'
 is "the app has the three" "fetched-one fetched-three fetched-two" "$(ask /api/skills '" ".join(sorted(s["name"] for s in d["skills"] if s["name"].startswith("fetched-")))')"
 is "  with the words that were fetched" "True" "$(ask "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'fetched-two'][0]")" '"Fetched, not typed." in d["skill"]["instructions"]')"
 run -- --user boss --file "${FILE}" --yes --skill-url "${WWW}/sign-in.html"
@@ -643,6 +636,21 @@ import workforce
 plain = '<a class="input popsok" aria-label="Download file" href="https://download1.mediafire.com/a/k/x.zip?p=1&amp;q=2" id="downloadButton">'
 scrambled = '<a class="input popsok" href="javascript:void(0)" data-scrambled-url="%s" id="downloadButton">' % base64.b64encode(b"https://download22.mediafire.com/b/k/y.skill.zip").decode()
 print(workforce.mediafire_direct(plain), workforce.mediafire_direct(scrambled), workforce.mediafire_direct("<html>Just a moment...</html>"))
+PYTHON_END
+)"
+is "a site passes a request on to another https address, and to no other" "onwards refused refused" "$(python3 - "${host}" << 'PYTHON_END'
+import sys, urllib.request
+sys.path.insert(0, sys.argv[1])
+import workforce
+asked = urllib.request.Request("https://files.example/a.skill")
+said = []
+for onwards in ("https://cdn.example/a.skill", "http://127.0.0.1:8080/secret", "http://cdn.example/a.skill"):
+    try:
+        workforce.OnlyOnwardsSafely(False).redirect_request(asked, None, 302, "Found", {}, onwards)
+        said.append("onwards")
+    except workforce.NotFetched:
+        said.append("refused")
+print(" ".join(said))
 PYTHON_END
 )"
 for fetched in fetched-one fetched-two fetched-three; do

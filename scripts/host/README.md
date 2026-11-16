@@ -367,14 +367,11 @@ It adds what is missing and leaves the rest:
   name). Agents and teams that name it get it when the app has it, and are
   made without it until then: the program says who waits for it.
   `--skill-url <address>` does the same for a file at an https address: the
-  program fetches it (up to 64 MB) and uploads it, and follows the address
-  of a file's page at MediaFire to the file. An archive that holds several
-  packed skills (`.skill` or `.zip` files inside a `.zip`, the way skills
-  are packed to be sent) is opened one level deep and each of them is
-  uploaded; the app itself does not open an archive inside an archive. With
-  `--dry-run` the file is fetched and what it holds is said. A site that
-  wants to see a browser or a sign-in first gives no file: download it
-  yourself then, and upload it on the Skills page.
+  program fetches it and uploads it, and follows the address of a file's
+  page at MediaFire to the file. With `--dry-run` the file is fetched and
+  the skills it holds are named. A site that wants to see a browser or a
+  sign-in first gives no file: download it yourself then, and upload it on
+  the Skills page.
 - A provider that takes no key (`"authType": "none"`) is added when the app
   does not have it, with the address of the file. One that takes a key is not
   added: the program has no keys, and says that the provider is to be added

@@ -16,11 +16,12 @@ bundle: the Deploy workflow runs the ones of the branch it is started on.
   fetched and uploaded as the Skills page does; the address of a file's
   page at MediaFire is followed to the file. `workforce.sh` also takes the
   address sealed for the node (`--skill-url-sealed`). A dry run fetches the
-  file and says what it holds.
-- An archive that holds packed skills (`.skill` or `.zip` files inside a
-  `.zip`) is opened one level deep by `--upload-skill` and `--skill-url`,
-  and each of them is uploaded. The app does not open an archive inside an
-  archive: on the Skills page such a file is still refused.
+  file and names the skills it holds.
+
+### Changed
+
+- What the app left out of an uploaded skill is said by its reason, with
+  how many files and the first of them by name.
 
 ## [1.7.0] - 2026-11-16
 

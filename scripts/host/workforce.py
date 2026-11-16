@@ -42,15 +42,12 @@
 #                        SKILL.md, or a .skill or .zip of a folder with one.
 #                        It is uploaded as on the Skills page, and replaces a
 #                        skill of the same name. May be given more than once.
-#                        An archive that holds packed skills (.skill or .zip
-#                        files inside it) is opened, one level deep, and each
-#                        of them is uploaded.
 #   --skill-url <addr>   The same, for a file at an https address: this
-#                        program fetches it (up to 64 MB) and uploads it. The
-#                        address of a file's page at MediaFire is followed to
-#                        the file. With --dry-run the file is fetched and
-#                        what it holds is said; nothing is uploaded. More
-#                        addresses can come in NEXUS_SKILL_URLS, one a line.
+#                        program fetches it and uploads it. The address of a
+#                        file's page at MediaFire is followed to the file.
+#                        With --dry-run the file is fetched and the skills it
+#                        holds are named; nothing is uploaded. More addresses
+#                        can come in NEXUS_SKILL_URLS, one a line.
 #   --only-usable        Afterwards, look at every model that is switched on
 #                        and that the file does not name, and switch off the
 #                        ones that cannot be used: a model that a provider
@@ -120,8 +117,6 @@ AGENT = "xiero-nexus-workforce/1"
 PARTS = ["accounts", "providers", "models", "skills", "agents", "teams", "workflows"]
 ROLES = ["owner", "admin", "user"]
 SKILL_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
-# A file that is fetched, or an archive of packed skills: more than one upload can be in it.
-SKILL_DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024
 # Sites that hand out files to people turn away a program that says it is one.
 BROWSER = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 # A skill of the owner's own that the file names and the app does not have.
@@ -1192,9 +1187,27 @@ def looks_like_page(content, kind):
     return start.startswith((b"<!doctype html", b"<html")) or (kind.startswith("text/html") and b"<" in start[:1])
 
 
+class OnlyOnwardsSafely(urllib.request.HTTPRedirectHandler):
+    """
+    A site may pass a request on, to another https address only. Without this,
+    an address somebody gave could send this program to a service that listens
+    on this machine or on its network, and what that answers would be uploaded.
+    `local` is for an address that was on this machine to begin with.
+    """
+
+    def __init__(self, local):
+        self.local = local
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https" and not (self.local and fetchable(newurl)):
+            raise NotFetched("the site passed this on to an address that is not https.")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_skill(url):
     """The file at an address: (its name, its content). Raises NotFetched with the reason."""
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    local = urllib.parse.urlsplit(url).scheme == "http"
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()), OnlyOnwardsSafely(local))
 
     def get(address, most, accept):
         request = urllib.request.Request(address, headers={"user-agent": BROWSER, "accept": accept, "accept-language": "en-US,en;q=0.8"})
@@ -1206,10 +1219,10 @@ def fetch_skill(url):
                 err.code, ": it wants a browser, or a sign-in" if err.code in (401, 403, 429, 503) else ": no such file" if err.code in (404, 410) else ""))
         except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as err:
             raise NotFetched("the site cannot be reached (%s)." % getattr(err, "reason", err))
-        if not fetchable(response.geturl()):
+        if urllib.parse.urlsplit(response.geturl()).scheme != "https" and not local:
             raise NotFetched("the site passed this on to an address that is not https.")
         if len(content) > most:
-            raise NotFetched("it is larger than %d MB." % (most // (1024 * 1024)))
+            raise NotFetched("it is larger than %d MB, which is what a skill can be." % (most // (1024 * 1024)))
         return content, response
 
     host = (urllib.parse.urlsplit(url).hostname or "").lower()
@@ -1220,7 +1233,7 @@ def fetch_skill(url):
             target = mediafire_direct(page.decode("utf-8", "replace"))
             if not target:
                 raise NotFetched("MediaFire's page for this file names no download: the file is gone, or the site wanted to see a browser first.")
-    content, response = get(target, SKILL_DOWNLOAD_MAX_BYTES, "*/*")
+    content, response = get(target, SKILL_UPLOAD_MAX_BYTES, "*/*")
     if not content:
         raise NotFetched("the file is empty.")
     if looks_like_page(content, (response.headers.get("content-type") or "").lower()):
@@ -1248,43 +1261,6 @@ def entries_of(archive):
     """The files of an archive that are somebody's work: not what a system left behind."""
     return [i for i in archive.infolist()
             if not i.is_dir() and "__MACOSX/" not in i.filename and not os.path.basename(i.filename).startswith(".")]
-
-
-def skill_units(name, content):
-    """
-    What of a file is uploaded: [(name, content)], and what is left out of it.
-    A SKILL.md, and an archive of folders with one, is uploaded as it is. An
-    archive that holds packed skills (.skill or .zip files) is opened, one
-    level deep, and each of them is uploaded: the app does not open an archive
-    inside an archive.
-    """
-    archive = archive_of(content)
-    if archive is None:
-        return [(name, content)], []
-    files = entries_of(archive)
-    own = any(os.path.basename(i.filename).lower() == "skill.md" for i in files)
-    packed = [i for i in files if i.filename.lower().endswith((".skill", ".zip"))]
-    units = [(name, content)] if own or not packed else []
-    left = []
-    total = 0
-    for info in packed:
-        inner = os.path.basename(info.filename)
-        if info.flag_bits & 0x1:
-            left.append("%s (it has a password)" % inner)
-        elif info.file_size > SKILL_UPLOAD_MAX_BYTES or total + info.file_size > SKILL_DOWNLOAD_MAX_BYTES:
-            left.append("%s (larger than %d MB)" % (inner, SKILL_UPLOAD_MAX_BYTES // (1024 * 1024)))
-        else:
-            try:
-                data = archive.read(info)
-            except Exception:  # whatever a damaged archive makes of itself
-                left.append("%s (it cannot be unpacked)" % inner)
-                continue
-            total += len(data)
-            if archive_of(data) is None:
-                left.append("%s (not an archive)" % inner)
-            else:
-                units.append((inner, data))
-    return units, left
 
 
 def front_name(text):
@@ -1332,65 +1308,65 @@ def holds(name, content):
     return "%s %s" % ("the skill" if len(found) == 1 else "%d skills:" % len(found), ", ".join(found[:30]) + (", and %d more" % (len(found) - 30) if len(found) > 30 else ""))
 
 
-# What was given, read once: a file or an address -> its units, or why there are none.
+def left_out_words(items):
+    """What the app left out of an upload: for each reason how many files, and the first of them by name."""
+    reasons = {}
+    for item in items:
+        text = str(item.get("path") if isinstance(item, dict) else item)
+        where, _, reason = text.partition(": ")
+        reasons.setdefault(reason or "no reason given", []).append(where)
+    parts = []
+    for reason, paths in reasons.items():
+        named = ", ".join(short(p, 120) for p in paths[:5]) + (", and %d more" % (len(paths) - 5) if len(paths) > 5 else "")
+        parts.append("%s (%s): %s" % (plural(len(paths), "file"), reason, named))
+    # The app names a hundred at most.
+    return "; ".join(parts) + (" (and there may be more: the app names the first %d)" % len(items) if len(items) >= 100 else "")
+
+
+# What was given, read once: a file or an address -> its name and content, or why there is none.
 SOURCES = {}
-# The units that this run has uploaded already: asked for once, done once.
+# The files that this run has uploaded already: asked for once, done once.
 UPLOADED = set()
 
 
 def skill_sources(options):
-    """Every skill file that was asked for, as [(key, from where, name, content)], with what stands in the way."""
+    """Every skill file that was asked for, as [(key, from where, name, content)], and the addresses that gave none."""
     units = []
     problems = []
-    notes = []
     wanted = [("file", given) for given in options.upload_skill] + [("url", url) for url in options.skill_url]
     for kind, given in wanted:
         key = "%s:%s" % (kind, os.path.abspath(given) if kind == "file" else given)
-        if key not in SOURCES:
-            if kind == "file":
-                try:
-                    with open(given, "rb") as handle:
-                        content = handle.read(SKILL_DOWNLOAD_MAX_BYTES + 1)
-                except OSError as err:
-                    raise Wrong("--upload-skill: %s cannot be read: %s." % (given, err.strerror or err))
-                if not content:
-                    raise Wrong("--upload-skill: %s is empty." % given)
-                if len(content) > SKILL_DOWNLOAD_MAX_BYTES:
-                    raise Wrong("--upload-skill: %s is larger than %d MB." % (given, SKILL_DOWNLOAD_MAX_BYTES // (1024 * 1024)))
-                SOURCES[key] = {"name": os.path.basename(given), "content": content, "from": ""}
-            else:
-                try:
-                    name, content = fetch_skill(given)
-                    SOURCES[key] = {"name": name, "content": content, "from": ", from %s" % (urllib.parse.urlsplit(given).hostname or "?")}
-                except NotFetched as err:
-                    SOURCES[key] = {"error": "Skill from %s: %s" % (url_words(given), err)}
-            source = SOURCES[key]
-            if "error" not in source:
-                source["units"], source["left"] = skill_units(source["name"], source["content"])
+        if key not in SOURCES and kind == "file":
+            try:
+                with open(given, "rb") as handle:
+                    content = handle.read(SKILL_UPLOAD_MAX_BYTES + 1)
+            except OSError as err:
+                raise Wrong("--upload-skill: %s cannot be read: %s." % (given, err.strerror or err))
+            if not content:
+                raise Wrong("--upload-skill: %s is empty." % given)
+            if len(content) > SKILL_UPLOAD_MAX_BYTES:
+                raise Wrong("--upload-skill: %s is larger than %d MB, which is what a skill can be." % (given, SKILL_UPLOAD_MAX_BYTES // (1024 * 1024)))
+            SOURCES[key] = {"name": os.path.basename(given), "content": content, "from": ""}
+        elif key not in SOURCES:
+            try:
+                name, content = fetch_skill(given)
+                SOURCES[key] = {"name": name, "content": content, "from": ", from %s" % (urllib.parse.urlsplit(given).hostname or "?")}
+            except NotFetched as err:
+                SOURCES[key] = {"error": "Skill from %s: %s" % (url_words(given), err)}
         source = SOURCES[key]
         if "error" in source:
             problems.append(source["error"])
-            continue
-        if source["left"]:
-            notes.append('Skill file "%s": left out of it: %s.' % (source["name"], ", ".join(source["left"])))
-        if not source["units"]:
-            problems.append('Skill file "%s"%s: nothing in it can be uploaded.' % (source["name"], source["from"]))
-        packed = len(source["units"]) > 1 or (source["units"] and source["units"][0][1] is not source["content"])
-        for index, (name, content) in enumerate(source["units"]):
-            units.append(("%s#%d" % (key, index), source["from"] + (', in "%s"' % source["name"] if packed else ""), name, content))
-    return units, problems, notes
+        else:
+            units.append((key, source["from"], source["name"], source["content"]))
+    return units, problems
 
 
 def plan_uploads(state, options, plan):
     """The skill files that were named with --upload-skill and --skill-url: each is uploaded as on the Skills page."""
-    units, problems, notes = skill_sources(options)
+    units, problems = skill_sources(options)
     plan.problems.extend(problems)
-    plan.notes.extend(note for note in notes if note not in plan.notes)
     for key, where, name, content in units:
         if key in UPLOADED:
-            continue
-        if len(content) > SKILL_UPLOAD_MAX_BYTES:
-            plan.problems.append('Skill file "%s"%s is larger than %d MB, which is what a skill can be.' % (name, where, SKILL_UPLOAD_MAX_BYTES // (1024 * 1024)))
             continue
         if state.skills is None:
             plan.problems.append('Skill file "%s": this app has no skills: they came with version 1.7. Upgrade the app first.' % name)
@@ -1407,7 +1383,7 @@ def plan_uploads(state, options, plan):
                     plural(skill.get("instructionChars") or 0, "character"),
                     ", %s" % plural(len(skill.get("files") or []), "file") if skill.get("files") else ""), indent=10)
             if data.get("leftOut"):
-                more("left out of it: %s" % short(", ".join(str(item.get("path") if isinstance(item, dict) else item) for item in data["leftOut"]), 300), indent=10)
+                more("left out of it: %s" % left_out_words(data["leftOut"]), indent=10)
 
         plan.changes.append(Change("skills", 'Skill file "%s" (%s)%s: upload it; a skill of the same name is replaced. It holds %s.' % (
             name, plural(len(content), "byte"), where, holds(name, content)), upload))
