@@ -99,6 +99,27 @@ test("a task whose agent saved the file hands over the file, then what the agent
 
 // ─── What the reviewer reads ─────────────────────────────────────────────────
 
+test("two files with the same words: each deliverable is the file of its own task", () => {
+  const words = "# Notes\n\nThe same words in two files.\n";
+  const material = reviewMaterial(
+    [
+      { seq: 1, title: "First", acceptanceCriteria: "", artifact: words, outputFile: "a/notes.md", wrote: ["a/notes.md"] },
+      { seq: 2, title: "Second", acceptanceCriteria: "", artifact: words, outputFile: "b/notes.md" },
+      { seq: 3, title: "Third", acceptanceCriteria: "", artifact: `Copied here: ${words}` },
+    ],
+    [
+      { path: "a/notes.md", content: words },
+      { path: "b/notes.md", content: words },
+      { path: "c/unclaimed.md", content: words },
+    ],
+  );
+  assert.match(material, /## 1\. First\n.*\nFiles of this task: a\/notes\.md\nDeliverable \(it holds the files a\/notes\.md, c\/unclaimed\.md, as saved in the workspace\):/);
+  assert.match(material, /## 2\. Second\n.*\nFiles of this task: b\/notes\.md\nDeliverable \(it holds the files b\/notes\.md, c\/unclaimed\.md, as saved in the workspace\):/);
+  // A task that names no file holds only what no task says is its own.
+  assert.match(material, /## 3\. Third\n.*\nDeliverable \(it holds the file c\/unclaimed\.md, as saved in the workspace\):/);
+  assert.ok(!material.includes("#### File:"));
+});
+
 test("the reviewer is shown the files that the deliverables only speak of", () => {
   const material = reviewMaterial(
     [
@@ -113,11 +134,30 @@ test("the reviewer is shown the files that the deliverables only speak of", () =
   );
   assert.match(material, /^## 1\. Write the README\nAcceptance criteria: Has a commands table\.\nFiles of this task: README\.md\nDeliverable:\nI wrote README\.md with five sections\./);
   assert.match(material, /## 2\. plugin\.yml\nAcceptance criteria: \(none\)\nFiles of this task: plugin\.yml\nDeliverable:\nname: FlyPass/);
-  assert.match(material, /### Files in the project workspace, as they are now\n\n#### File: README\.md \(36 characters\)\n# FlyPass\n\n\| Command \| Permission \|/);
-  // A file a deliverable already holds is not shown twice, and an empty one not at all.
-  assert.equal(material.match(/#### File:/g)?.length, 1);
-  assert.equal(material.split("name: FlyPass").length - 1, 1);
+  // The file of task 2 is thirteen characters: too short to be looked for in a deliverable, so it is shown as a file.
+  assert.match(material, /#### File: plugin\.yml \(14 characters\)\nname: FlyPass/);
+  assert.match(material, /### Files in the project workspace, as they are now\n\n#### File: /);
+  assert.match(material, /#### File: README\.md \(36 characters\)\n# FlyPass\n\n\| Command \| Permission \|/);
+  // An empty file is not shown at all.
+  assert.equal(material.match(/#### File:/g)?.length, 2);
+  assert.ok(!material.includes("empty.txt"));
   assert.ok(!material.includes(CUT_MARK));
+});
+
+test("a deliverable that is the file says so, and the file is not shown a second time", () => {
+  const yml = "name: FlyPass\nversion: 1.0.0\nmain: dev.example.FlyPass\n";
+  const material = reviewMaterial(
+    [
+      { seq: 1, title: "plugin.yml", acceptanceCriteria: "Valid.", artifact: `${yml.trimEnd()}\n\n[Saved as plugin.yml by the agent, which said: done]`, outputFile: "plugin.yml", wrote: ["plugin.yml"] },
+      { seq: 2, title: "Notes", acceptanceCriteria: "", artifact: "Nothing to add." },
+    ],
+    [{ path: "plugin.yml", content: yml }],
+  );
+  assert.match(material, /Files of this task: plugin\.yml\nDeliverable \(it holds the file plugin\.yml, as saved in the workspace\):\nname: FlyPass\nversion: 1\.0\.0/);
+  assert.match(material, /## 2\. Notes\nAcceptance criteria: \(none\)\nDeliverable:\nNothing to add\./);
+  assert.ok(!material.includes("#### File:"));
+  assert.equal(material.split("main: dev.example.FlyPass").length - 1, 1);
+  assert.ok(material.endsWith("### Files in the project workspace, as they are now\n\nShown above, in the deliverable that holds it, and not again here: plugin.yml"));
 });
 
 test("a project without files is reviewed by its deliverables alone", () => {

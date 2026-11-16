@@ -1373,9 +1373,9 @@ export async function executeRun(runId: string): Promise<void> {
             "You are the AI Manager. Consolidate the team's task outputs into a single, " +
             "well-structured final deliverable for the user. At the end, briefly note whether each " +
             "task's acceptance criteria appear met — state clearly that this is your assessment, not " +
-            "automated verification. Files the team wrote are in the project's workspace and are listed " +
-            "after the task outputs: refer to them by their paths. Do not write out a file you were not " +
-            "shown, and do not make up what one contains." +
+            "automated verification. You work from the task outputs alone. The names of the files in the " +
+            "project's workspace follow them only so that you can say where a deliverable is: you cannot " +
+            "open a file and need not, and you never make up what one contains." +
             (mediaTasks.length > 0
               ? " Some tasks generated an image, a video or a voice-over, or joined clips into one " +
                 "video. You cannot see or hear those: list each one by its task title, say what it " +
@@ -1426,8 +1426,9 @@ export async function executeRun(runId: string): Promise<void> {
               "acceptance criteria, and flag correctness, security, and missing-requirement concerns. Be " +
               "concise and specific. Where sandbox execution output is provided, ground your judgment in it. " +
               "After the tasks come the files of the project's workspace, as they are now: where a deliverable " +
-              "says that it wrote a file, judge the file. Text marked as cut, and files listed as not shown, " +
-              "you have not seen: say so, and do not count what you have not seen against a task. " +
+              "says that it wrote a file, judge the file. A deliverable that is marked as holding a file is that " +
+              "file: you have seen it. Text marked as cut, and files listed as not shown, you have not seen: " +
+              "say so, and do not count what you have not seen against a task. " +
               (mediaTasks.length > 0
                 ? "A deliverable that starts with 'Generated image', 'Generated video', 'Generated voice-over' " +
                   "or 'Joined video' is media you cannot see or hear: review its prompt against the criteria, " +

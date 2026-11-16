@@ -737,7 +737,7 @@ links in the answers to be right.
 | 1.4.0 | Creative Workflows (image and video generation, Creative Studio, media tasks, Reel template) | ✅ implemented (tested against a mock provider, not a live one) |
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
-| 1.7.0 | Skills (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool) | ✅ implemented (tested against a mock provider) |
+| 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
 
 ---
 
@@ -911,8 +911,12 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
   removed when their owner's account is deleted; an administrator can delete
   them from Creative Studio.
 - Costs are **estimates** from your own price metadata, not provider billing.
-- No provider adapter, and nothing built on them (tools, embeddings, image,
-  video and speech generation), has been run against a live provider.
+- What has run against live providers, on one server in November 2026: the
+  `openai-compatible` adapter (chat with tools at four providers that take
+  no key, pictures at one of them) and the `gemini` adapter (chat, speech).
+  The `anthropic` adapter was only refused there, for a key without credit;
+  video generation, embeddings and `custom-http` have run against the mock
+  alone.
 - **Prompt injection.** A web page, a search result or a document that an
   agent reads is text someone else wrote, and it can try to talk the model
   into misusing the agent's other tools. Nothing in the app can rule that

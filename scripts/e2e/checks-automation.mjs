@@ -681,6 +681,9 @@ export async function automation(ctx) {
     const reviewUser = String(reviewAsk?.body?.messages?.[1]?.content ?? "");
     check("  a file is shown as it is in the workspace, after the edit", /#### File: notes\/plan\.md \(\d+ characters\)\n# Plan\n\nStep one is done\./.test(reviewUser), reviewUser.slice(-600));
     check("  a file that a deliverable holds is not shown a second time", !/#### File: docs\/guide\.md/.test(reviewUser) && reviewUser.split("By the agent, in the file.").length - 1 === 2, reviewUser.slice(0, 900));
+    check("  and that deliverable is said to be the file, so that the file is not taken for missing", /Deliverable \(it holds the file docs\/guide\.md, as saved in the workspace\):\n# Written with the tool/.test(reviewUser) && /Shown above, in the deliverable that holds it, and not again here: .*docs\/guide\.md/.test(reviewUser), reviewUser.slice(0, 600));
+    const sumAsk = outChats.find((l) => /You are the AI Manager\. Consolidate/.test(String(l.body?.messages?.[0]?.content ?? "")));
+    check("the manager is told that it works from the task outputs, and cannot open a file", /You work from the task outputs alone\./.test(String(sumAsk?.body?.messages?.[0]?.content ?? "")) && /Files in the project workspace:\n- data\/pack\.json \(\d+ characters\)/.test(String(sumAsk?.body?.messages?.[1]?.content ?? "")), String(sumAsk?.body?.messages?.[1]?.content ?? "").slice(-400));
     check("  and the reviewer is told what the files are", /After the tasks come the files of the project's workspace/.test(String(reviewAsk?.body?.messages?.[0]?.content ?? "")), String(reviewAsk?.body?.messages?.[0]?.content ?? "").slice(0, 700));
     check("the manager is given the files by name when it sums up", /files=5/.test(outDetail?.finalDeliverable ?? ""), outDetail?.finalDeliverable);
 

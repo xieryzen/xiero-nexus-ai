@@ -19,8 +19,9 @@ from the source of Wings 1.12; no test here talks to a real Wings. Outside
 the tests they have been used on one real node (Debian 13, Docker 29, the
 Node.js egg of ptero-eggs, nginx 1.26), in November 2026: an installation,
 the check, the disk report, one upgrade, which installed the version that was
-there again, the site in nginx with its certificate, and the workforce of
-`workforce.json`. **Going back by
+there again, upgrades to four later versions, the site in nginx with its
+certificate, the workforce of `workforce.json`, and an account and two
+skills sealed for the node. **Going back by
 itself after a new version does not come up has only run against the
 stand-in**, and so has taking a site out of nginx again after a step failed.
 So do the dry run first and read the plan; the upgrade keeps a backup outside
