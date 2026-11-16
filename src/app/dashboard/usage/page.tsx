@@ -3,13 +3,14 @@ import { getUsageSummary } from "@/lib/stats";
 import { formatCompact, formatCost, formatNumber } from "@/lib/format";
 import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Usage & Costs" };
 
 export default function UsagePage() {
   const user = getCurrentUser();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = isAdminRole(user?.role);
   const summary = getUsageSummary(isAdmin ? null : user!.id);
 
   const tiles = [

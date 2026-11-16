@@ -24,8 +24,21 @@
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but
 #                        differs from the file.
-#   --only <parts>       Only these parts of the file: providers, models,
+#   --only <parts>       Only these parts: accounts, providers, models,
 #                        skills, agents, teams, workflows (separated by commas).
+#   --account <name>     An account the app is to have, with --account-email
+#                        and --account-role (owner, admin or user; user when
+#                        it is not said). Its password comes in the
+#                        environment, as NEXUS_ACCOUNT_PASSWORD, and is needed
+#                        for a new account. One that is there under that name
+#                        or that email is left as it is; with --update its
+#                        role, name and email are made as asked, and its
+#                        password when one is given. Needs to sign in as an
+#                        owner: only an owner manages accounts.
+#   --upload-skill <f>   A skill of your own that is not in the file: a
+#                        SKILL.md, or a .skill or .zip of a folder with one.
+#                        It is uploaded as on the Skills page, and replaces a
+#                        skill of the same name. May be given more than once.
 #   --only-usable        Afterwards, look at every model that is switched on
 #                        and that the file does not name, and switch off the
 #                        ones that cannot be used: a model that a provider
@@ -56,6 +69,12 @@
 #   --keep-try-run       Keep what --try-run made on the Projects page.
 #   --inventory-only     Say what the app has, and stop. No file is needed.
 #
+# In the file, a skill can also be one of your own: `"my-skill": {"uploaded":
+# true}` names a skill that is uploaded on the Skills page (or with
+# --upload-skill) and is not in the file. Agents and teams that name it get
+# it when the app has it, and are made without it until then. A skill that
+# an agent or a team was given by hand is kept when the file gives it others.
+#
 # The password is taken from the environment (NEXUS_PASSWORD) or from the
 # --env-file, never from the command line, and is not printed. One sign-in is
 # tried and no more: a wrong password is not tried again. An account with
@@ -81,7 +100,11 @@ import urllib.parse
 import urllib.request
 
 AGENT = "xiero-nexus-workforce/1"
-PARTS = ["providers", "models", "skills", "agents", "teams", "workflows"]
+PARTS = ["accounts", "providers", "models", "skills", "agents", "teams", "workflows"]
+ROLES = ["owner", "admin", "user"]
+SKILL_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
+# A skill of the owner's own that the file names and the app does not have.
+MISSING = object()
 CAPABILITIES = [
     "text", "reasoning", "tool_calling", "structured_output", "vision", "audio",
     "image_generation", "video_generation", "speech_generation", "embeddings", "streaming",
@@ -240,8 +263,17 @@ def text_file(path, where):
 def read_skill(name, item, base):
     """A skill of the file: a folder with a SKILL.md, one Markdown file, or the words themselves."""
     where = 'Skill "%s"' % name
-    only_keys(item, ["file", "description", "instructions"], where)
+    only_keys(item, ["file", "description", "instructions", "uploaded", "about"], where)
     text_of(name, where + ": its name", SKILL_NAME_MAX, 1)
+    if "uploaded" in item:
+        # Not in the file: one the owner of the app uploads.
+        if item["uploaded"] is not True:
+            raise Wrong('%s: "uploaded" is true, for a skill that is uploaded on the Skills page and is not in this file.' % where)
+        if any(key in item for key in ("file", "description", "instructions")):
+            raise Wrong('%s is "uploaded": what it says is in the app, not in this file.' % where)
+        return {"name": " ".join(name.split()), "uploaded": True, "about": text_of(item.get("about", ""), where + ": about", 400)}
+    if "about" in item:
+        raise Wrong('%s: "about" goes with "uploaded".' % where)
     files = []
     if "file" in item:
         if "instructions" in item:
@@ -606,6 +638,26 @@ class App:
             parsed = None
         return response.getcode(), parsed
 
+    def upload(self, path, name, content, timeout=120):
+        """A file as the body of a request, its name in a header, as the pages of the app send one."""
+        headers = {"accept": "application/json", "user-agent": AGENT, "content-type": "application/octet-stream",
+                   "x-file-name": urllib.parse.quote(name, safe="")}
+        if self.cookie:
+            headers["cookie"] = self.cookie
+        request = urllib.request.Request(self.url + path, data=content, method="POST", headers=headers)
+        try:
+            response = self.opener.open(request, timeout=timeout)
+        except urllib.error.HTTPError as err:
+            response = err
+        except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as err:
+            raise Stop(4, "the app does not answer at %s%s (%s)." % (self.url, path, getattr(err, "reason", err)))
+        try:
+            raw = response.read()
+            parsed = json.loads(raw.decode("utf-8")) if raw else None
+        except (ValueError, socket.timeout, ConnectionError, OSError):
+            parsed = None
+        return response.getcode(), parsed
+
     def follow(self, path, body=None, timeout=1800):
         """A request that is answered with what happens, as it happens (server-sent events), to its end."""
         headers = {"accept": "text/event-stream", "user-agent": AGENT, "content-type": "application/json"}
@@ -668,7 +720,7 @@ def sign_in(app, user, password, source):
         sign_out(app)
         raise Stop(3, '"%s" signs in with a second step (a code from an app). This program has no code and does not ask for one.' % user)
     me = data.get("user") or {}
-    if me.get("role") != "admin":
+    if me.get("role") not in ("admin", "owner"):
         sign_out(app)
         raise Stop(3, '"%s" is not an administrator, and only an administrator can change the workforce.' % user)
     return me
@@ -702,6 +754,9 @@ class State:
         # Skills came with version 1.7: an app before that answers "not found".
         status, data = app.call("GET", "/api/skills")
         self.skills = data.get("skills") if status == 200 and isinstance(data, dict) and isinstance(data.get("skills"), list) else None
+        # The accounts, as an administrator sees them.
+        status, data = app.call("GET", "/api/admin/users")
+        self.accounts = data.get("users") if status == 200 and isinstance(data, dict) and isinstance(data.get("users"), list) else None
         return self
 
     def skill_text(self, skill, with_files):
@@ -795,7 +850,18 @@ def tested_text(item):
 def show_inventory(state, me):
     head("The app")
     row("Address", state.app.url)
-    row("Signed in", '"%s", an administrator%s' % (me.get("username", "?"), "" if not me.get("twoFactorEnabled") else ", with two-step sign-in"))
+    row("Signed in", '"%s", %s%s' % (
+        me.get("username", "?"), "an owner" if me.get("role") == "owner" else "an administrator",
+        "" if not me.get("twoFactorEnabled") else ", with two-step sign-in"))
+    if state.accounts is not None:
+        by_role = []
+        for role in ROLES:
+            names = sorted(a.get("username", "?") + ("" if a.get("status") == "active" else " (switched off)")
+                           for a in state.accounts if a.get("role") == role)
+            if names:
+                by_role.append("%s: %s" % (plural(len(names), {"owner": "owner", "admin": "administrator", "user": "user"}[role]),
+                                           ", ".join(names[:12]) + (", and %d more" % (len(names) - 12) if len(names) > 12 else "")))
+        row("Accounts", "; ".join(by_role) or "none")
     if state.tools:
         row("Agent tools", "run_command %s; web_search %s%s" % (
             "works (a sandbox runner is set up)" if state.tools.get("sandbox") else "does not work: no sandbox runner is set up (SANDBOX_URL)",
@@ -956,6 +1022,116 @@ def keyless(definition, name):
     """What the file says of a provider that this program can add: one that takes no key."""
     described = (definition["providers"].get(name) or {}).get("describes")
     return described if described and described["authType"] == "none" else None
+
+
+def plan_accounts(state, options, plan, me):
+    """The account that was asked for with --account: made, or with --update made as asked."""
+    wanted = options.account
+    if not wanted:
+        return
+    where = 'Account "%s"' % wanted["username"]
+    password = os.environ.get("NEXUS_ACCOUNT_PASSWORD", "")
+    if state.accounts is None:
+        plan.problems.append("%s: this app does not show its accounts to \"%s\"." % (where, me.get("username", "?")))
+        return
+    if me.get("role") != "owner":
+        plan.problems.append(
+            '%s: "%s" is %s of the app, and only an owner manages accounts. From version 1.7 the first administrator '
+            'of an app is its owner: upgrade the app, or sign in as an owner (--user).' % (
+                where, me.get("username", "?"), "an administrator" if me.get("role") == "admin" else "no owner"))
+        return
+    by_name = [a for a in state.accounts if a.get("username") == wanted["username"]]
+    by_email = [a for a in state.accounts if (a.get("email") or "").lower() == wanted["email"]]
+    if by_name and by_email and by_name[0].get("id") != by_email[0].get("id"):
+        plan.problems.append('%s: the app has that name on one account and %s on another ("%s"). Which of the two is meant is not clear.' % (
+            where, wanted["email"], by_email[0].get("username")))
+        return
+    found = (by_name or by_email or [None])[0]
+    if found is None:
+        if len(password) < 10:
+            plan.problems.append("%s is new and needs its first password: NEXUS_ACCOUNT_PASSWORD in the environment, at least 10 characters." % where)
+            return
+
+        def create():
+            api(state.app, "POST", "/api/admin/users", {
+                "username": wanted["username"], "email": wanted["email"], "role": wanted["role"], "password": password})
+
+        plan.changes.append(Change("accounts", "%s <%s>: add it, as %s." % (where, wanted["email"], role_word(wanted["role"])), create))
+        return
+    differs = [key for key in ("username", "email", "role") if (found.get(key) or "") != wanted[key]]
+    if found.get("status") != "active":
+        plan.notes.append("%s is switched off in the app. That is left as it is." % where)
+    sets_password = bool(password) and options.update
+    if not differs and not sets_password:
+        plan.same.append('account "%s" (%s)' % (wanted["username"], role_word(found.get("role"))))
+        if password:
+            plan.notes.append("%s is in the app: its password is left as it is; --update sets the one that was given." % where)
+        return
+    if found.get("id") == me.get("id"):
+        plan.problems.append("%s is the account this signs in as. It changes its own name, email and password under Settings, and nobody changes their own role." % where)
+        return
+    if not options.update:
+        plan.notes.append("%s is in the app and differs from what was asked (%s). It is left as it is; --update changes it%s." % (
+            where, ", ".join(differs), ", and sets the password that was given" if password else ""))
+        return
+    if sets_password and len(password) < 10:
+        plan.problems.append("%s: NEXUS_ACCOUNT_PASSWORD is shorter than 10 characters." % where)
+        return
+
+    def update(found=found):
+        body = dict((key, wanted[key]) for key in differs)
+        if sets_password:
+            body["password"] = password
+        api(state.app, "PATCH", "/api/admin/users/%s" % found["id"], body)
+
+    what = differs + (["password"] if sets_password else [])
+    plan.changes.append(Change("accounts", "%s: change it to what was asked (%s)%s." % (
+        where, ", ".join(what), "; it is signed out everywhere" if sets_password else ""), update))
+
+
+def role_word(role):
+    return {"owner": "an owner", "admin": "an administrator", "user": "a user"}.get(role, "a user")
+
+
+# Skill files that this run has uploaded already: asked for once, done once.
+UPLOADED = set()
+
+
+def plan_uploads(state, options, plan):
+    """The skill files that were named with --upload-skill: each is uploaded as on the Skills page."""
+    for given in options.upload_skill:
+        full = os.path.abspath(given)
+        if full in UPLOADED:
+            continue
+        name = os.path.basename(full)
+        try:
+            size = os.path.getsize(full)
+        except OSError as err:
+            raise Wrong("--upload-skill: %s cannot be read: %s." % (given, err.strerror or err))
+        if size == 0:
+            raise Wrong("--upload-skill: %s is empty." % given)
+        if size > SKILL_UPLOAD_MAX_BYTES:
+            raise Wrong("--upload-skill: %s is larger than %d MB, which is what a skill can be." % (given, SKILL_UPLOAD_MAX_BYTES // (1024 * 1024)))
+        if state.skills is None:
+            plan.problems.append('Skill file "%s": this app has no skills: they came with version 1.7. Upgrade the app first.' % name)
+            continue
+
+        def upload(full=full, name=name):
+            with open(full, "rb") as handle:
+                content = handle.read()
+            status, data = state.app.upload("/api/skills/upload?onConflict=replace", name, content)
+            if status not in (200, 201) or not isinstance(data, dict):
+                raise Stop(1, "the app refused it (%s%s)." % (status, reason_of(data)))
+            UPLOADED.add(full)
+            for skill in data.get("skills") or []:
+                more('%s "%s": %s of instructions%s.' % (
+                    "replaced" if skill.get("replaced") else "added", skill.get("name"),
+                    plural(skill.get("instructionChars") or 0, "character"),
+                    ", %s" % plural(len(skill.get("files") or []), "file") if skill.get("files") else ""), indent=10)
+            if data.get("leftOut"):
+                more("left out of it: %s" % short(", ".join(str(item.get("path") if isinstance(item, dict) else item) for item in data["leftOut"]), 300), indent=10)
+
+        plan.changes.append(Change("skills", 'Skill file "%s" (%s): upload it; a skill of the same name is replaced.' % (name, plural(size, "byte")), upload))
 
 
 def plan_providers(state, definition, options, plan):
@@ -1123,6 +1299,21 @@ def plan_skills(state, definition, options, plan):
     for key, wanted in wanted_all.items():
         where = 'Skill "%s"' % wanted["name"]
         found = [s for s in state.skills if " ".join((s.get("name") or "").split()).lower() == key]
+        if wanted.get("uploaded"):
+            # One of the owner's own: in the app or not, never made from this file.
+            if found:
+                ids[key] = found[0]["id"]
+                plan.same.append('skill "%s" (uploaded)' % wanted["name"])
+                if not found[0].get("enabled", True):
+                    plan.notes.append("%s is switched off on the Skills page: no agent is given it. That is left as it is." % where)
+            else:
+                ids[key] = MISSING
+                users = [a["name"] for a in definition["agents"] if key in (a["skills"] or [])] + \
+                        ['team "%s"' % t["name"] for t in definition["teams"] if key in (t["skills"] or [])]
+                plan.notes.append('%s is one of your own, and it is not in the app%s. Upload it on the Skills page (or with --upload-skill) and run this again: %s.' % (
+                    where, " (%s)" % wanted["about"] if wanted.get("about") else "",
+                    "%s %s made without it until then" % (", ".join(users), "is" if len(users) == 1 else "are") if users else "nothing of the file names it"))
+            continue
         size = "%s of instructions%s" % (
             plural(len(wanted["instructions"]), "character"),
             ", %s" % plural(len(wanted["files"]), "file") if wanted["files"] else "")
@@ -1161,9 +1352,15 @@ def plan_skills(state, definition, options, plan):
     return ids
 
 
-def skill_ids_of(wanted, skill_ids):
-    """The IDs of the skills an agent or a team of the file is to have; None in it for one that is not there yet."""
-    return [skill_ids.get(key) for key in wanted["skills"]]
+def skill_ids_of(wanted, skill_ids, have=None):
+    """
+    The IDs of the skills an agent or a team of the file is to have; None in it
+    for one that is still to be added. A skill of the owner's own that the app
+    does not have is left out, and the skills it was given by hand (`have`)
+    are kept after those of the file.
+    """
+    ids = [skill_ids.get(key) for key in wanted["skills"] if skill_ids.get(key) is not MISSING]
+    return ids + [one for one in have or [] if one not in ids]
 
 
 def plan_agents(state, definition, options, plan, slots, skill_ids):
@@ -1190,7 +1387,7 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             if tool not in tools:
                 left.setdefault(tool, []).append(wanted["name"])
 
-        def body(wanted=wanted, tools=tools):
+        def body(wanted=wanted, tools=tools, have=None):
             made = {
                 "name": wanted["name"], "role": wanted["role"], "instructions": wanted["instructions"],
                 "primaryModelRowId": slots[wanted["primary"]]["id"],
@@ -1201,7 +1398,7 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             # Skills are said only where the file says them: an agent whose
             # skills the file does not name keeps what it was given by hand.
             if wanted["skills"] is not None and skill_ids is not None:
-                made["skillIds"] = skill_ids_of(wanted, skill_ids)
+                made["skillIds"] = skill_ids_of(wanted, skill_ids, have)
             return made
 
         found = one_named(state.agents, wanted["name"])
@@ -1213,13 +1410,14 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             names.add(wanted["name"].lower())
             plan.changes.append(Change("agents", '%s (%s): add it, on %s%s%s.' % (
                 where, wanted["role"], models, "; tools: " + ", ".join(tools) if tools else "",
-                "; skills: " + ", ".join(definition["skills"][k]["name"] for k in wanted["skills"]) if wanted["skills"] else ""), create))
+                "; skills: " + ", ".join(definition["skills"][k]["name"] for k in wanted["skills"] if skill_ids is None or skill_ids.get(k) is not MISSING)
+                if wanted["skills"] and (skill_ids is None or any(skill_ids.get(k) is not MISSING for k in wanted["skills"])) else ""), create))
             continue
         if len(found) > 1:
             plan.notes.append("%s: the app has %d agents of this name. They are left as they are." % (where, len(found)))
             continue
         agent = found[0]
-        now = body()
+        now = body(have=agent.get("skillIds"))
         differs = []
         for key, value in now.items():
             if key == "name":
@@ -1245,7 +1443,7 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             plan.same.append('agent "%s"' % wanted["name"])
         elif options.update:
             def update(agent=agent, body=body):
-                api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body())
+                api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body(have=agent.get("skillIds")))
 
             plan.changes.append(Change("agents", "%s: change it to what the file says (%s)." % (where, ", ".join(shown(differs))), update))
         else:
@@ -1276,7 +1474,7 @@ def plan_teams(state, definition, options, plan, agent_names, skill_ids):
         if stopped:
             continue
 
-        def body(wanted=wanted):
+        def body(wanted=wanted, have=None):
             ids = []
             for member in wanted["agents"]:
                 found = one_named(state.agents, member)
@@ -1285,7 +1483,7 @@ def plan_teams(state, definition, options, plan, agent_names, skill_ids):
                 ids.append(found[0]["id"])
             made = {"name": wanted["name"], "description": wanted["description"], "agentIds": ids}
             if wanted["skills"] is not None and skill_ids is not None:
-                made["skillIds"] = skill_ids_of(wanted, skill_ids)
+                made["skillIds"] = skill_ids_of(wanted, skill_ids, have)
             return made
 
         found = one_named(state.teams, wanted["name"])
@@ -1307,14 +1505,14 @@ def plan_teams(state, definition, options, plan, agent_names, skill_ids):
         if (team.get("description") or "") != wanted["description"]:
             differs.append("description")
         if wanted["skills"] is not None and skill_ids is not None:
-            want_skills = skill_ids_of(wanted, skill_ids)
+            want_skills = skill_ids_of(wanted, skill_ids, team.get("skillIds"))
             if None in want_skills or sorted(team.get("skillIds") or []) != sorted(want_skills):
                 differs.append("skills")
         if not differs:
             plan.same.append('team "%s"' % wanted["name"])
         elif options.update:
             def update(team=team, body=body):
-                api(state.app, "PATCH", "/api/teams/%s" % team["id"], body())
+                api(state.app, "PATCH", "/api/teams/%s" % team["id"], body(have=team.get("skillIds")))
 
             plan.changes.append(Change("teams", "%s: change it to what the file says (%s)." % (where, ", ".join(differs)), update))
         else:
@@ -1383,10 +1581,12 @@ def plan_workflows(state, definition, options, plan, agent_names):
             plan.notes.append("%s is in the app and differs from the file (%s). It is left as it is; --update changes it." % (where, ", ".join(differs)))
 
 
-def make_plan(state, definition, options):
+def make_plan(state, definition, options, me):
     plan = Plan()
+    plan_accounts(state, options, plan, me)
     plan_providers(state, definition, options, plan)
     slots = plan_models(state, definition, options, plan)
+    plan_uploads(state, options, plan)
     skill_ids = plan_skills(state, definition, options, plan)
     agent_names = plan_agents(state, definition, options, plan, slots, skill_ids)
     plan_teams(state, definition, options, plan, agent_names, skill_ids)
@@ -1753,8 +1953,16 @@ def try_project(state, definition, spec, manager, keep, every_agent):
                 row("FAILED", "the tasks were not summed up: %s did not answer. %s" % (manager["label"], short(summary, 400)))
             else:
                 row("ok", 'the project ended as "%s"; summed up by %s, beginning: %s' % (ended, manager["label"], short(summary, 200)))
-            verdict = [line for line in (now.get("reviewNotes") or "").splitlines() if "VERDICT" in line.upper()]
+            notes = now.get("reviewNotes") or ""
+            verdict = [line for line in notes.splitlines() if "VERDICT" in line.upper()]
             row("Review", verdict[-1].strip() if verdict else "there was none: no model of the reviewer answered")
+            if verdict and "PASS" not in verdict[-1].upper():
+                # Why: a reviewer that fails a project says what it missed, and
+                # that is worth more than the word. Nothing is failed for it:
+                # the tasks of this check are small on purpose.
+                reasons = " ".join(line.strip() for line in notes.splitlines() if line.strip() and "VERDICT" not in line.upper())
+                if reasons:
+                    more("the reviewer said: %s" % short(reasons, 1400), indent=15)
         else:
             failed += 1
             row("FAILED", 'the project ended as "%s"%s' % (ended, ": " + short(now["error"], 600) if now.get("error") else ""))
@@ -1813,6 +2021,10 @@ def options_from(argv):
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--update", action="store_true")
     parser.add_argument("--only", default="")
+    parser.add_argument("--account", default="")
+    parser.add_argument("--account-email", default="")
+    parser.add_argument("--account-role", default="")
+    parser.add_argument("--upload-skill", action="append", default=[])
     parser.add_argument("--test", action="store_true")
     parser.add_argument("--test-all", action="store_true")
     parser.add_argument("--only-usable", action="store_true")
@@ -1839,6 +2051,22 @@ def options_from(argv):
         options.parts = names_of([p for p in options.only.split(",") if p.strip()], "--only", PARTS)
         if not options.parts:
             raise Wrong("--only names parts: %s." % ", ".join(PARTS))
+    if options.account_email or options.account_role:
+        if not options.account:
+            raise Wrong("--account-email and --account-role go with --account, the username of the account.")
+    if options.account:
+        name = options.account.strip()
+        if not re.match(r"^[A-Za-z0-9_.-]{3,32}$", name):
+            raise Wrong("--account is a username: 3 to 32 letters, numbers, and . _ -")
+        email = options.account_email.strip().lower()
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email) or len(email) > 254:
+            raise Wrong("--account needs --account-email, the address of the account.")
+        role = (options.account_role or "user").strip().lower()
+        if role not in ROLES:
+            raise Wrong("--account-role is one of: %s." % ", ".join(ROLES))
+        options.account = {"username": name, "email": email, "role": role}
+    else:
+        options.account = None
     return options
 
 
@@ -1874,7 +2102,7 @@ def run(argv):
         if options.inventory_only:
             return 0
 
-        plan = make_plan(state, definition, options)
+        plan = make_plan(state, definition, options, me)
         head("What the file asks for (%s)" % os.path.basename(options.file))
         todo = plan.todo(options.parts)
         for change in plan.changes:
@@ -1916,7 +2144,7 @@ def run(argv):
                 if part not in options.parts:
                     continue
                 state.read()
-                fresh = make_plan(state, definition, options)
+                fresh = make_plan(state, definition, options, me)
                 if fresh.problems:
                     for problem in fresh.problems:
                         say("  PROBLEM: " + problem)
@@ -1937,7 +2165,7 @@ def run(argv):
                     done += 1
                     say("  done    %s" % change.text)
             state.read()
-            after = make_plan(state, definition, options)
+            after = make_plan(state, definition, options, me)
             rest = after.todo(options.parts)
             if rest or after.problems:
                 for change in rest:

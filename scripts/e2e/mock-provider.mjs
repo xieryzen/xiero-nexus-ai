@@ -204,6 +204,8 @@ function embedding(text, dimensions = 24) {
  *   "Tool: knowledge" search the knowledge base
  *   "Tool: memory"    keep a note, then look it up
  *   "Tool: skill"     read a file of a skill, the skill itself, and a file it does not have
+ *   "Tool: output"    save the task's output file with write_file, then say what was done
+ *   "Tool: silent"    save the task's output file with write_file, then say nothing
  *
  * Returns the tool calls of this step, or null to answer in text.
  */
@@ -255,6 +257,13 @@ function nextToolCalls(body) {
     if (done === 1) return call("recall", { query: "client prefers sentences" });
     return null;
   }
+  if (title.startsWith("Tool: output") || title.startsWith("Tool: silent")) {
+    // The file the task was told to save, saved the way it was told to.
+    const system = String(messages.find((m) => m.role === "system")?.content ?? "");
+    const target = (system.match(/Your deliverable is the file (\S+): save it with write_file/) ?? [])[1];
+    if (done === 0 && target) return call("write_file", { path: target, content: "# Written with the tool\n\nBy the agent, in the file.\n" });
+    return null;
+  }
   if (title.startsWith("Tool: skill")) {
     // Written the way a model writes a name: in other letters than the skill has.
     if (done === 0) return call("read_skill", { skill: "BROCHURE layout" });
@@ -270,6 +279,9 @@ function nextToolCalls(body) {
 function toolSummary(body) {
   const results = (body?.messages ?? []).filter((m) => m.role === "tool").map((m) => String(m.content));
   if (results.length === 0) return null;
+  // An agent that saves its file and has nothing to add.
+  const task = String((body?.messages ?? []).find((m) => m.role === "user")?.content ?? "");
+  if (/^Task: Tool: silent/m.test(task)) return "";
   return `DONE after ${results.length} tool results. LAST: ${results[results.length - 1].slice(0, 400)}`;
 }
 
@@ -324,12 +336,20 @@ function chatAnswer(body) {
     return `Here is the prompt:\n\n"A ${kind} of a lighthouse at dusk for '${title}', warm light,\n  slow camera push-in [deps:${deps}]"`;
   }
   if (system.includes("You are the AI Manager. Consolidate")) {
-    return `FINAL DELIVERABLE. mentions-media=${/cannot (be seen|see)/i.test(system + user)}`;
+    // How many files of the workspace it was told of.
+    const listed = (user.split("Files in the project workspace:\n")[1] ?? "").split("\n").filter((line) => /^- .+ \(\d+ characters\)$/.test(line)).length;
+    return `FINAL DELIVERABLE. mentions-media=${/cannot (be seen|see)/i.test(system + user)}${listed ? ` files=${listed}` : ""}`;
   }
   if (system.includes("You are a QA/Security reviewer")) {
-    // A reviewer that was given skills says which, so that a test can see them arrive.
+    // A reviewer that was given skills says which, so that a test can see them arrive,
+    // and so with the files it was shown and the files each task is said to have written.
     const by = [...system.matchAll(/^### Skill: (.*)$/gm)].map((m) => m[1]);
-    return `All tasks meet their criteria.${by.length ? ` [by:${by.join("|")}]` : ""}\nVERDICT: pass`;
+    const files = [...user.matchAll(/^#### File: (.+) \(\d+ characters\)$/gm)].map((m) => m[1]);
+    const wrote = [...user.matchAll(/^Files of this task: (.+)$/gm)].map((m) => m[1]);
+    return (
+      `All tasks meet their criteria.${by.length ? ` [by:${by.join("|")}]` : ""}` +
+      `${files.length ? ` [files:${files.join("|")}]` : ""}${wrote.length ? ` [wrote:${wrote.join(";")}]` : ""}\nVERDICT: pass`
+    );
   }
   if (user.includes("Reply with the single word: ok")) return "ok";
   if (system.includes("Passages from the user's knowledge base follow")) {
@@ -341,6 +361,8 @@ function chatAnswer(body) {
   // what else was put in front of the agent.
   const deps = [...user.matchAll(/### Output of task (\d+)/g)].map((m) => m[1]).join("+") || "none";
   const title = (user.match(/^Task: (.*)$/m) ?? [])[1] ?? "?";
+  // A file handed over the way models hand one over: in a fence, with a word before and after.
+  if (title.startsWith("Fenced:")) return 'Here is the file:\n\n```json\n{"name": "from a fence"}\n```\n\nI could not run it.';
   const skills = [...system.matchAll(/^### Skill: (.*)$/gm)].map((m) => m[1]);
   const extras = [
     system.includes("Notes you kept from earlier work") ? "notes" : "",

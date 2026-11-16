@@ -199,7 +199,10 @@ print(eval(sys.argv[2]))' "${FILE}" "$1"
 AGENTS="$(of_file 'len(d["agents"])')"
 TEAMS="$(of_file 'len(d["teams"])')"
 WORKFLOWS="$(of_file 'len(d["workflows"])')"
-SKILLS="$(of_file 'len(d["skills"])')"
+# The skills that are in the file. One that is "uploaded" is the owner's own, and not in it.
+SKILLS="$(of_file 'sum(1 for s in d["skills"].values() if not s.get("uploaded"))')"
+OWN_SKILL="$(of_file '[k for k, s in d["skills"].items() if s.get("uploaded")][0]')"
+OWN_TEAM="$(of_file '[t["name"] for t in d["teams"] if [k for k, s in d["skills"].items() if s.get("uploaded")][0] in (t.get("skills") or [])][0]')"
 # The agents the try-run gives a task: those of its team.
 TRY_TEAM="$(of_file 'd["tryRun"]["team"]')"
 TRY_AGENTS="$(of_file 'sum(1 for a in d["agents"] if a["name"] in [t for t in d["teams"] if t["name"] == d["tryRun"]["team"]][0]["agents"])')"
@@ -268,7 +271,7 @@ is "an app that does not answer ends with 4" "4" "${CODE}"
 section "What the app has, and what the file would change"
 run -- --user boss --inventory-only
 is "the inventory ends well" "0" "${CODE}"
-check "it says who is signed in" says '"boss", an administrator'
+check "it says who is signed in: the administrator of the first start is the owner" says '"boss", an owner'
 check "it names the providers" line 'Claude \(anthropic\)'
 check "and the models they list that are not in the app" line 'not in the app, image: gemini-mock-flash-image'
 check "and how long a provider is waited for" says "waits up to 60 s for an answer"
@@ -315,7 +318,7 @@ for line in sys.stdin:
     same += skill["instructions"] == body.strip() and skill["description"] == described and skill["enabled"]
 print(same)' "${WORK}")"
 is "an agent has the skills the file gives it, and a team its own" \
-  "$(of_file '"; ".join("%s: %s" % (x["name"], ", ".join(sorted(x["skills"]))) for x in d["agents"] + d["teams"] if x.get("skills"))')" \
+  "$(of_file '"; ".join("%s: %s" % (x["name"], ", ".join(sorted(k for k in x["skills"] if not d["skills"][k].get("uploaded")))) for x in d["agents"] + d["teams"] if [k for k in x.get("skills") or [] if not d["skills"][k].get("uploaded")])')" \
   "$(api GET /api/teams > "${WORK}/teams.json"; api GET /api/agents | python3 -c 'import json, sys
 names = dict((s["id"], s["name"]) for s in json.load(open(sys.argv[1] + "/skills.json"))["skills"])
 order = [x["name"] for x in json.load(open(sys.argv[2]))["agents"] + json.load(open(sys.argv[2]))["teams"]]
@@ -497,6 +500,145 @@ wrong "a skill without words is refused" \
   'd["skills"]["empty"] = {"instructions": "  "}' "is empty"
 is "nothing of those files reached the app" "${SKILLS}" "$(ask /api/skills 'len(d["skills"])')"
 
+section "Skills of your own: named in the file, uploaded by the owner"
+# Signs in and out again; prints the status of the sign-in.
+signs_in() { # USER PASSWORD
+  local head="${WORK}/signs-in.head" status cookie
+  status="$(curl -sS -m 30 -o /dev/null -D "${head}" -w '%{http_code}' -H 'content-type: application/json' \
+    -d "{\"identifier\":\"$1\",\"password\":\"$2\"}" "${APP}/api/auth/login" || true)"
+  cookie="$(tr -d '\r' < "${head}" | sed -n 's/^[Ss]et-[Cc]ookie: \(nexus_session=[^;]*\).*/\1/p' | head -n 1)"
+  [ -z "${cookie}" ] || curl -sS -m 30 -o /dev/null -H "cookie: ${cookie}" -H 'content-type: application/json' -X POST -d '{}' "${APP}/api/auth/logout" || true
+  printf '%s' "${status}"
+}
+team_skills() { # TEAM: the names of its skills, sorted
+  api GET /api/teams | python3 -c 'import json, sys
+teams = json.load(sys.stdin)["teams"]
+names = dict((s["id"], s["name"]) for s in json.load(open(sys.argv[2]))["skills"])
+print(" ".join(sorted(names.get(i, "?") for i in [t for t in teams if t["name"] == sys.argv[1]][0]["skillIds"])))' "$1" "${WORK}/skills.json"
+}
+skills_now() { api GET /api/skills > "${WORK}/skills.json"; }
+FILE_TEAM_SKILLS="$(python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+team = [t for t in d["teams"] if t["name"] == sys.argv[2]][0]
+print(" ".join(sorted(k for k in team["skills"] if not d["skills"][k].get("uploaded"))))' "${FILE}" "${OWN_TEAM}")"
+run -- --user boss --file "${FILE}" --dry-run
+check "a skill of your own that the app does not have is said, with who waits for it" line "Skill \"${OWN_SKILL}\" is one of your own, and it is not in the app.*team \"${OWN_TEAM}\""
+check "  and stands in nobody's way" says "Nothing to do: the app has everything the file asks for."
+skills_now
+is "the team that names it was made without it" "${FILE_TEAM_SKILLS}" "$(team_skills "${OWN_TEAM}")"
+mkdir -p "${WORK}/own"
+printf -- '---\nname: %s\ndescription: The way this house builds.\n---\n\n# The house rules\n\nA rule of the house, kept by everyone.\n' "${OWN_SKILL}" > "${WORK}/own/SKILL.md"
+run -- --user boss --file "${FILE}" --dry-run --upload-skill "${WORK}/own/SKILL.md"
+check "a dry run says that the file would be uploaded" line '\+ Skill file "SKILL.md" \([0-9]+ bytes\): upload it'
+is "  and uploads nothing" "${SKILLS}" "$(ask /api/skills 'len(d["skills"])')"
+run -- --user boss --file "${FILE}" --yes --update --upload-skill "${WORK}/own/SKILL.md"
+is "uploading it ends well" "0" "${CODE}"
+check "the file is uploaded, as on the Skills page" line 'done +Skill file "SKILL.md" \([0-9]+ bytes\): upload it'
+check "  and what the app made of it is said" line "added \"${OWN_SKILL}\": [0-9]+ characters of instructions\\."
+check "the team that names it is given it" line "done +Team \"${OWN_TEAM}\": change it to what the file says \(skills\)"
+skills_now
+is "  with the skills the file gave it before" "$(printf '%s\n' ${FILE_TEAM_SKILLS} "${OWN_SKILL}" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" "$(team_skills "${OWN_TEAM}")"
+is "the app has one skill more than the file" "$((SKILLS + 1))" "$(ask /api/skills 'len(d["skills"])')"
+run -- --user boss --file "${FILE}" --yes --update
+check "a second time there is nothing to do" says "Nothing to do: the app has everything the file asks for."
+check "  and the skill is counted as there" says "skill \"${OWN_SKILL}\" (uploaded)"
+printf '\nAnd one more rule.\n' >> "${WORK}/own/SKILL.md"
+run -- --user boss --file "${FILE}" --yes --upload-skill "${WORK}/own/SKILL.md"
+check "uploaded again, the skill is replaced" says "replaced \"${OWN_SKILL}\""
+is "  and keeps the team it was given to" "1" "$(ask /api/skills "[len(s['teamIds']) for s in d['skills'] if s['name'] == '${OWN_SKILL}'][0] > 0 and 1")"
+# An archive: a folder with a SKILL.md and a file of its own.
+python3 - "${WORK}/own/bundle.skill" << 'PYTHON_END'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("house-checklist/SKILL.md", "---\nname: house-checklist\ndescription: What is checked before anything leaves the house.\n---\n\n# Checklist\n\nRead references/list.md.\n")
+    archive.writestr("house-checklist/references/list.md", "# The list\n\n1. It works.\n")
+    archive.writestr("house-checklist/logo.png", bytes([0x89, 0x50, 0x4E, 0x47, 0, 1, 2, 3]))
+PYTHON_END
+run -- --user boss --file "${FILE}" --yes --upload-skill "${WORK}/own/bundle.skill"
+is "an archive is uploaded too" "0" "${CODE}"
+check "  with its files" line 'added "house-checklist": [0-9]+ characters of instructions, 1 file\.'
+check "  and what is no text is left out, and named" line "left out of it: .*logo\.png"
+# A skill that a team was given by hand stays when the file gives it others.
+HOUSE_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'house-checklist'][0]")"
+TEAM_ID="$(ask /api/teams "[t['id'] for t in d['teams'] if t['name'] == '${OWN_TEAM}'][0]")"
+api PATCH "/api/teams/${TEAM_ID}" "{\"skillIds\":$(api GET /api/teams | python3 -c 'import json, sys
+team = [t for t in json.load(sys.stdin)["teams"] if t["id"] == sys.argv[1]][0]
+print(json.dumps(team["skillIds"] + [sys.argv[2]]))' "${TEAM_ID}" "${HOUSE_ID}")}" > /dev/null
+run -- --user boss --file "${FILE}" --yes --update
+check "a skill a team was given by hand is no difference from the file" says "Nothing to do: the app has everything the file asks for."
+skills_now
+check "  and it keeps it" grep -qw "house-checklist" <<< "$(team_skills "${OWN_TEAM}")"
+api PATCH "/api/teams/${TEAM_ID}" "{\"skillIds\":[\"${HOUSE_ID}\"]}" > /dev/null
+run -- --user boss --file "${FILE}" --yes --update
+check "a team that lost the skills of the file gets them back" line "done +Team \"${OWN_TEAM}\": change it to what the file says \(skills\)"
+skills_now
+is "  and keeps the one it was given by hand" "$(printf '%s\n' ${FILE_TEAM_SKILLS} "${OWN_SKILL}" house-checklist | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')" "$(team_skills "${OWN_TEAM}")"
+run -- --user boss --file "${FILE}" --dry-run --upload-skill "${WORK}/own/no-such-file.md"
+is "a file that is not there is refused" "2" "${CODE}"
+head -c 300 /dev/urandom > "${WORK}/own/noise.bin"
+run -- --user boss --file "${FILE}" --yes --upload-skill "${WORK}/own/noise.bin"
+is "a file that is neither text nor an archive: the app refuses it, and it ends with 1" "1" "${CODE}"
+check "  with what the app said" says "neither text nor a ZIP archive"
+wrong "a skill of your own cannot also be written in the file" \
+  'd["skills"]["both"] = {"uploaded": True, "instructions": "Words."}' 'what it says is in the app, not in this file'
+# Taken out again, so that what follows counts the skills of the file.
+api DELETE "/api/skills/${HOUSE_ID}" > /dev/null
+OWN_ID="$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == '${OWN_SKILL}'][0]")"
+api DELETE "/api/skills/${OWN_ID}" > /dev/null
+is "(the skills of the test are deleted again)" "${SKILLS}" "$(ask /api/skills 'len(d["skills"])')"
+
+section "An account the app is to have"
+run -- --user boss --file "${FILE}" --inventory-only
+check "the accounts are in what the app has, by role" line 'Accounts +1 owner: boss'
+ACCOUNT=(--only accounts --account rina --account-email Rina@Example.test --account-role owner)
+run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-rina" -- --user boss --file "${FILE}" --dry-run "${ACCOUNT[@]}"
+is "the plan ends well" "0" "${CODE}"
+check "it says what it would add" line '\+ Account "rina" <rina@example\.test>: add it, as an owner\.'
+check_not "  and not the password" says "the-first-password-of-rina"
+is "  and adds nothing" "1" "$(ask /api/admin/users 'len(d["users"])')"
+before="$(counts)"
+run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-rina" -- --user boss --file "${FILE}" --yes "${ACCOUNT[@]}"
+is "adding it ends well" "0" "${CODE}"
+check_not "  without the password in what it says" says "the-first-password-of-rina"
+is "the account is there: an owner, switched on, its email in small letters" "owner active rina@example.test" "$(ask /api/admin/users '[" ".join([u["role"], u["status"], u["email"]]) for u in d["users"] if u["username"] == "rina"][0]')"
+is "  it signs in with the password it was given" "200" "$(signs_in rina the-first-password-of-rina)"
+is "  only that part was done: the workforce is as it was" "${before}" "$(counts)"
+run NEXUS_ACCOUNT_PASSWORD="another-password-for-rina" -- --user boss --file "${FILE}" --yes "${ACCOUNT[@]}"
+check "a second time it is as asked" says 'account "rina" (an owner)'
+check "  and its password is left as it is" says "its password is left as it is; --update sets the one that was given"
+is "  the first password still signs in" "200" "$(signs_in rina the-first-password-of-rina)"
+run NEXUS_ACCOUNT_PASSWORD="another-password-for-rina" -- --user boss --file "${FILE}" --yes --update "${ACCOUNT[@]}"
+check "with --update the password that was given is set" line 'done +Account "rina": change it to what was asked \(password\); it is signed out everywhere'
+is "  the old one signs in no more, the new one does" "401 200" "$(signs_in rina the-first-password-of-rina) $(signs_in rina another-password-for-rina)"
+run -- --user boss --file "${FILE}" --yes --only accounts --account rina --account-email rina@example.test --account-role admin
+check "another role than it has is reported" line 'Account "rina" is in the app and differs from what was asked \(role\)'
+is "  and left as it is" "owner" "$(ask /api/admin/users '[u["role"] for u in d["users"] if u["username"] == "rina"][0]')"
+run -- --user boss --file "${FILE}" --yes --update --only accounts --account rina --account-email rina@example.test --account-role admin
+is "with --update it is changed" "admin" "$(ask /api/admin/users '[u["role"] for u in d["users"] if u["username"] == "rina"][0]')"
+run -- --user boss --file "${FILE}" --yes --only accounts --account sari --account-email sari@example.test
+is "a new account without a password is refused" "1" "${CODE}"
+check "  with where the password goes" says "NEXUS_ACCOUNT_PASSWORD in the environment, at least 10 characters"
+run NEXUS_ACCOUNT_PASSWORD="short" -- --user boss --file "${FILE}" --yes --only accounts --account sari --account-email sari@example.test
+is "  and so is one with a password that is too short" "1" "${CODE}"
+run -- --user boss --file "${FILE}" --dry-run --account sari
+is "an account without an email is a wrong option" "2" "${CODE}"
+run -- --user boss --file "${FILE}" --dry-run --account sari --account-email sari@example.test --account-role root
+is "  and so is a role there is not" "2" "${CODE}"
+run NEXUS_ACCOUNT_PASSWORD="a-password-for-the-boss" -- --user boss --file "${FILE}" --yes --update --only accounts --account boss --account-email boss@example.test --account-role owner
+is "the account it signs in as is not changed" "1" "${CODE}"
+check "  with where that is done" says "It changes its own name, email and password under Settings"
+is "  its password still signs in" "200" "$(signs_in boss "${PASS}")"
+# An administrator who is no owner manages no accounts.
+run NEXUS_PASSWORD="another-password-for-rina" NEXUS_ACCOUNT_PASSWORD="a-password-for-sari" -- --user rina --file "${FILE}" --yes --only accounts --account sari --account-email sari@example.test
+is "signed in as an administrator who is no owner, it adds no account" "1" "${CODE}"
+check "  and says who does" says '"rina" is an administrator of the app, and only an owner manages accounts'
+is "  none was added" "2" "$(ask /api/admin/users 'len(d["users"])')"
+run NEXUS_PASSWORD="another-password-for-rina" -- --user rina --file "${FILE}" --dry-run
+is "  the workforce it can still read and compare" "0" "${CODE}"
+RINA_ID="$(ask /api/admin/users '[u["id"] for u in d["users"] if u["username"] == "rina"][0]')"
+api DELETE "/api/admin/users/${RINA_ID}" > /dev/null
+is "(the account of the test is deleted again)" "1" "$(ask /api/admin/users 'len(d["users"])')"
+
 section "Only a part of the file"
 python3 - "${FILE}" "${WORK}/more.json" << 'PYTHON_END'
 import json, sys
@@ -663,7 +805,7 @@ node_run() { # [NAME=VALUE...] -- OPTIONS
 }
 node_run -- --file "${FILE}" --dry-run
 is "the one server that has the app, by itself" "0" "${CODE}"
-check "signed in with the administrator and the password of its .env" says '"boss", an administrator'
+check "signed in with the administrator and the password of its .env" says '"boss", an owner'
 check "at the port Docker passes on" says "http://127.0.0.1:${APP_PORT}"
 check_not "the password is not in what it says" says "${PASS}"
 node_run -- --server 0a11ce00 --file "${FILE}" --inventory-only
@@ -682,6 +824,34 @@ is "a password in .env that is no longer right ends with 3" "3" "${CODE}"
 check "and says why that happens" says "stops being right when it is changed in the app"
 node_run NEXUS_PASSWORD="${PASS}" -- --file "${FILE}" --dry-run
 is "NEXUS_PASSWORD goes before the one in .env" "0" "${CODE}"
+
+section "Sealed for the node: an account's password and a skill of your own"
+NODE_KEY="${WORK}/node-key"
+NODE_PUBLIC="$(bash "${host}/sealed-output.sh" keygen "${NODE_KEY}" | tail -n 1)"
+SEALED_PASSWORD="$(printf '%s' 'a-password-sealed-for-the-node' | bash "${host}/sealed-output.sh" seal-line "${NODE_PUBLIC}")"
+printf -- '---\nname: sealed-house-rules\ndescription: Sent sealed.\n---\n\n# Sealed\n\nOnly the node read this on its way.\n' > "${WORK}/own/sealed.md"
+SEALED_SKILL="$(bash "${host}/sealed-output.sh" seal-line "${NODE_PUBLIC}" < "${WORK}/own/sealed.md")"
+node_run NEXUS_PASSWORD="${PASS}" -- --file "${FILE}" --yes --only accounts,skills --account tono --account-email tono@example.test --account-role admin \
+  --account-password-sealed "${SEALED_PASSWORD}" --skill-sealed "${SEALED_SKILL}"
+is "without the node's key, what was sealed is not opened" "2" "${CODE}"
+check "  and it says how the node gets one" says 'Make one with the action "input-key"'
+node_run NEXUS_PASSWORD="${PASS}" XIERO_INPUT_KEY="${NODE_KEY}/key.pem" -- --file "${FILE}" --yes --only accounts,skills --account tono --account-email tono@example.test --account-role admin \
+  --account-password-sealed "${SEALED_PASSWORD}" --skill-sealed "${SEALED_SKILL}"
+is "with it, the run ends well" "0" "${CODE}"
+check "the account is made" line 'done +Account "tono" <tono@example\.test>: add it, as an administrator\.'
+is "  and signs in with the password that came sealed" "200" "$(signs_in tono a-password-sealed-for-the-node)"
+check "the skill is uploaded" says 'added "sealed-house-rules"'
+is "  with the words that came sealed" "True" "$(ask "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'sealed-house-rules'][0]")" '"Only the node read this on its way." in d["skill"]["instructions"]')"
+check_not "neither the password nor the words are in what it says" grep -qF -e "a-password-sealed-for-the-node" -e "Only the node read this" "${OUT}"
+is "what was opened is gone from the node again" "0" "$(find "${TMPDIR:-/tmp}" -maxdepth 3 -name 'SKILL.md' -newer "${WORK}/own/sealed.md" -exec grep -l 'Only the node read this' {} + 2> /dev/null | wc -l | tr -d ' ')"
+OTHER_PUBLIC="$(bash "${host}/sealed-output.sh" keygen "${WORK}/other-key" | tail -n 1)"
+node_run NEXUS_PASSWORD="${PASS}" XIERO_INPUT_KEY="${NODE_KEY}/key.pem" -- --file "${FILE}" --yes --only accounts --account wati --account-email wati@example.test \
+  --account-password-sealed "$(printf '%s' 'sealed-for-another-node' | bash "${host}/sealed-output.sh" seal-line "${OTHER_PUBLIC}")"
+is "a password sealed for another key is refused" "2" "${CODE}"
+check "  with the reason" says "does not open with the key of this node"
+is "  and no account is made" "0" "$(ask /api/admin/users 'len([u for u in d["users"] if u["username"] == "wati"])')"
+api DELETE "/api/admin/users/$(ask /api/admin/users '[u["id"] for u in d["users"] if u["username"] == "tono"][0]')" > /dev/null
+api DELETE "/api/skills/$(ask /api/skills "[s['id'] for s in d['skills'] if s['name'] == 'sealed-house-rules'][0]")" > /dev/null
 is "its sessions are ended" "${SESSIONS}" "$(db 'select count(*) from sessions')"
 
 ENDED=yes

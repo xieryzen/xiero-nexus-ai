@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { serializeModels } from "@/lib/models";
 import { adapterAbilities, adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
 import { ModelsManager } from "@/components/models/models-manager";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Models" };
@@ -29,7 +30,7 @@ export default function ModelsPage() {
         abilities: adapterAbilities(p.adapter),
         status: p.status,
       }))}
-      isAdmin={user?.role === "admin"}
+      isAdmin={isAdminRole(user?.role)}
     />
   );
 }

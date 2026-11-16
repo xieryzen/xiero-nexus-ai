@@ -157,6 +157,10 @@ echo "stdin=$(wc -c | tr -d ' ')"
 echo "who=$(id -un)"
 echo "beside=$(cd "$(dirname "$0")" && ls | tr '\n' ' ')"
 echo "skill=$(cat "$(dirname "$0")/skills/a-skill/SKILL.md" 2> /dev/null)"
+echo "input_key=[${XIERO_INPUT_KEY:+there}]"
+if [ -n "${SEALED_FOR_TEST:-}" ]; then
+  echo "opened=[$(bash "$(dirname "$0")/sealed-output.sh" open-line "${XIERO_INPUT_KEY:-}" "${SEALED_FOR_TEST}" 2>&1)]"
+fi
 echo "a line for stderr" >&2
 if [ -n "${STAND_IN_SLEEP:-}" ]; then sleep "${STAND_IN_SLEEP}"; fi
 echo "the end"
@@ -172,6 +176,8 @@ echo "# a stand-in" > "${WORK}/scripts/workforce.py"
 echo "{}" > "${WORK}/scripts/workforce.json"
 mkdir -p "${WORK}/scripts/skills/a-skill"
 echo "# A skill of the test" > "${WORK}/scripts/skills/a-skill/SKILL.md"
+# And what opens a password or a skill that was sealed for the node: the real one.
+cp "${here}/../sealed-output.sh" "${WORK}/scripts/sealed-output.sh"
 
 # An ssh that says which process it is, for the test that cuts a connection.
 REAL_SSH="$(command -v ssh)"
@@ -301,6 +307,34 @@ check "  its program, its file and the skills are next to it on the node" said "
 check "  a skill arrives as it was written" said "skill=# A skill of the test"
 DEPLOY_SERVER=0a11ce00 remote workforce -- --update --test || true
 check "workforce: --yes, and what came after \"--\"" args_are --server 0a11ce00 --yes --update --test
+check "  a node without a key for sealed input is not told of one" said "input_key=[]"
+
+begin "Sealed for the node: a password or a skill that passes where others can read"
+code=0
+remote input-key || code=$?
+expect_exit "input-key ends well" 0 "${code}"
+check "  it says that a key was made" said "A key for what is sealed for this node was made"
+public_line="$(grep -A 1 '^Its public half' "${OUT}" | tail -n 1)"
+check "  and prints its public half, in one line" test "${#public_line}" -gt 400
+check_not "  never the private half" said "PRIVATE KEY"
+check "  the private half is on the node, for its user alone" test "$(stat -c %a "${NODE}/input-key/key.pem" 2> /dev/null)" = "600"
+remote input-key || true
+check "asked again, the same key is there" said "${public_line}"
+check_not "  and none is made anew" said "was made"
+sealed_line="$(printf 'a secret, with "quotes" and a . dot' | bash "${here}/../sealed-output.sh" seal-line "${public_line}")"
+check "a secret sealed with it is one word of letters and dots" test "$(printf '%s' "${sealed_line}" | tr -d 'A-Za-z0-9+/=.-' | wc -c | tr -d ' ')" = "0"
+check_not "  and does not hold the secret" grep -q "a secret" <<< "${sealed_line}"
+DEPLOY_SERVER=0a11ce00 DEPLOY_ENV="SEALED_FOR_TEST=${sealed_line}" remote workforce-plan || true
+check "the host script is told where the node's key is" said "input_key=[there]"
+check "  and opens what was sealed for the node" said 'opened=[a secret, with "quotes" and a . dot]'
+check "  what opens it travels with the scripts" said "sealed-output.sh skills workforce.json"
+# Sealed for another key: it does not open, and says so.
+other_line="$(bash "${here}/../sealed-output.sh" keygen "${WORK}/another-key" | tail -n 1)"
+wrong_line="$(printf 'for someone else' | bash "${here}/../sealed-output.sh" seal-line "${other_line}")"
+DEPLOY_SERVER=0a11ce00 DEPLOY_ENV="SEALED_FOR_TEST=${wrong_line}" remote workforce-plan || true
+check "what was sealed for another key does not open" said "opened=[error: this key does not open it: it was sealed for another one.]"
+DEPLOY_SERVER=0a11ce00 DEPLOY_ENV="SEALED_FOR_TEST=not-a-sealed-line" remote workforce-plan || true
+check "  and what is not sealed at all is refused" said "opened=[error: that is not a sealed line"
 DEPLOY_ENV=$'MY_SETTING=a value with spaces\n\nSTAND_IN_EXIT=0' remote plan || true
 check "DEPLOY_ENV reaches the script" said "MY_SETTING=[a value with spaces]"
 check "the script has nothing to read" said "stdin=0"
@@ -336,7 +370,9 @@ check "a log of every run" test -n "$(find "${logs}" -name '*-plan.log' | head -
 check "  with how it ended" test -n "$(find "${logs}" -name '*-plan.log.code' | head -n 1)"
 check "  readable by that user only" test "$(stat -c %a "${logs}")" = "700"
 check_not "the scripts that were sent are gone again" test -n "$(find "${NODE}" -maxdepth 1 -name 'run.*' | head -n 1)"
-check_not "no key and no password is among it" grep -rqF -e "PRIVATE KEY" -e "${PASSWORD}" "${NODE}"
+# The key the node made for itself is its own, and stays; what was signed in with does not.
+check_not "no key and no password that was signed in with is among it" grep -rqF --exclude-dir=input-key -e "PRIVATE KEY" -e "${PASSWORD}" "${NODE}"
+check "  the node's own key is in a folder of that user alone" test "$(stat -c %a "${NODE}/input-key")" = "700"
 for number in $(seq 10 39); do : > "${logs}/20200101-0000${number}-plan.log"; echo 0 > "${logs}/20200101-0000${number}-plan.log.code"; done
 remote plan || true
 check "only the newest 20 logs are kept" test "$(find "${logs}" -name '*.log' | wc -l | tr -d ' ')" = "20"

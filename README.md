@@ -52,7 +52,7 @@ sed -i "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=$(node -e "process.std
 node start.js
 ```
 
-Open the site and create the first account; it becomes the administrator. If
+Open the site and create the first account; it becomes the owner. If
 you will open it over plain `http://` rather than HTTPS, add
 `COOKIE_SECURE=false` to `.env` first (see [Security model](#security-model)).
 
@@ -67,8 +67,9 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 - **Per-user two-factor auth (TOTP)** — optional per account, QR enrolment,
   encrypted secret at rest, single-use recovery codes, login challenge, disable
   flow — all enforced server-side.
-- **Roles (RBAC)** — `admin` / `user`, enforced on every protected endpoint.
-  The first account on a fresh instance becomes admin.
+- **Roles (RBAC)** — `owner` / `admin` / `user`, enforced on every protected
+  endpoint. The first account on a fresh instance is its owner
+  ([Accounts and roles](#accounts-and-roles-v170)).
 - **Provider management** — CRUD provider connections, Base URL + conditional
   auth config, API keys **encrypted at rest** (AES-256-GCM) and never returned
   to the browser (only a masked `••••last4`), rotate/disable, server-side
@@ -111,6 +112,10 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 
 - **Workspaces** — each project has a workspace of text files. Agents can write
   a task's deliverable to a file (the Manager sets `outputFile` in the plan).
+  An agent that can write files saves that file itself and then says in a
+  few lines what it did; the file keeps what the agent saved. An agent
+  without that tool answers with the file, and an answer that holds it in a
+  code fence is saved without the fence and the words around it.
 - **File management** — view/edit/create/delete files through the dashboard;
   paths are validated (no absolute paths, no `..` traversal, safe characters).
 - **Sandboxed execution** — run a build/test command against the workspace. Code
@@ -126,7 +131,11 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 - **QA / Security review** — after a run, a reviewer agent (a QA/Security-role
   agent if present, else the Manager) assesses each deliverable against its
   acceptance criteria, grounded in the latest sandbox execution output when
-  available. Advisory — it annotates the project, it does not block.
+  available. It is shown the files of the workspace as well as what each
+  agent said, with the room shared between them (8,000 characters each,
+  64,000 together) and every cut said, so that a file is judged and not the
+  sentence "I wrote the file". Advisory — it annotates the project, it does
+  not block.
 - **Hard QA gate** — a project can require a passing reviewer verdict; the
   reviewer ends with `VERDICT: pass|concerns|fail`, and a non-pass verdict keeps
   the project in `review` instead of `succeeded`.
@@ -452,6 +461,39 @@ program, damaged ones and ones that announce less than they unpack to; the
 upload, the tool and a project run in the end-to-end checks, against the
 mock. **How well a given model follows a skill was not measured.**
 
+## Accounts and roles (v1.7.0)
+
+| Role | What it does |
+|---|---|
+| **Owner** | Everything an administrator does, and the accounts. |
+| **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and changes none. |
+| **User** | Their own projects, chats, media, knowledge and API keys. |
+
+- **The first account is the owner.** An installation from before 1.7 has no
+  owner: at its first start with 1.7 its first administrator becomes the
+  owner, and the audit log says so (`system.owner.assigned`).
+- **An owner manages the accounts** under **Users & Roles**: makes one with
+  its role and first password, changes a username, an email, a password, a
+  role, switches an account off and on again, switches a lost second factor
+  off, signs an account out everywhere, and deletes it. A new password, a
+  second factor that was switched off, and an account that was switched off
+  sign that account out everywhere. Deleting an account takes its sessions,
+  keys and recovery codes with it; what it made (projects, files, skills)
+  stays, without an owner.
+- **What an owner cannot do:** change their own role or status, or delete
+  themselves. There is always an owner who can sign in.
+- **Everyone changes their own username, email and password** under
+  **Settings**, each time with their current password. A new password signs
+  every other session out.
+- Every change is in the audit log with what changed, by name. A password is
+  never in the log, nor in an answer of the API.
+- `GET /api/admin/users` (administrators), `POST /api/admin/users`, `PATCH`
+  and `DELETE /api/admin/users/{id}` (owners), `PATCH /api/account/me` (one's
+  own account).
+
+Anyone who can reach the site can still register an account of their own,
+as an ordinary user: there is no switch for that yet.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -738,10 +780,10 @@ Migrations are applied **automatically on first boot**. To run them explicitly
 
 ### First run
 
-On first boot, if the users table is empty and `BOOTSTRAP_ADMIN_*` are set, an
-admin account is created from those values. **Log in and change the password
-immediately.** Alternatively, leave bootstrap unset and the first account you
-register through the UI becomes the admin.
+On first boot, if the users table is empty and `BOOTSTRAP_ADMIN_*` are set, the
+owner's account is created from those values. **Log in and change the password
+immediately** (Settings). Alternatively, leave bootstrap unset and the first
+account you register through the UI becomes the owner.
 
 ## Environment variables
 
@@ -821,7 +863,9 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
 - API keys are never serialized to the client — only `configured` + last 4.
 - Sessions: `HttpOnly`, `SameSite=Lax`, and `Secure` (HTTPS-only) in
   production; rotated after login and 2FA, destroyed on logout / 2FA change /
-  account disable.
+  password change / account disable.
+- Accounts are changed by an owner only, and one's own sign-in details only
+  with the current password. No password is logged or returned.
 - Plain HTTP: a browser drops HTTPS-only cookies on an `http://` address, so
   sign-in there is turned off with an explanation rather than failing silently.
   `COOKIE_SECURE=false` is the explicit opt-out for deployments without HTTPS;

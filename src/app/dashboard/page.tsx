@@ -4,6 +4,7 @@ import { getOverviewStats, getRecentAudit } from "@/lib/stats";
 import { formatCompact, formatNumber } from "@/lib/format";
 import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Overview" };
@@ -29,7 +30,7 @@ function StatTile({
 export default function OverviewPage() {
   const user = getCurrentUser();
   const stats = getOverviewStats();
-  const recent = user?.role === "admin" ? getRecentAudit(10) : [];
+  const recent = isAdminRole(user?.role) ? getRecentAudit(10) : [];
 
   return (
     <div>
@@ -80,7 +81,7 @@ export default function OverviewPage() {
         />
       </div>
 
-      {user?.role === "admin" && (
+      {isAdminRole(user?.role) && (
         <div className="mt-6">
           <Card title="Recent activity" description="Latest administrative events">
             {recent.length === 0 ? (

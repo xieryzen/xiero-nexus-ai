@@ -3,13 +3,14 @@ import { getCurrentUser } from "@/lib/auth";
 import { getRecentAudit } from "@/lib/stats";
 import { DateTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Audit Log" };
 
 export default function AuditPage() {
   const user = getCurrentUser();
-  if (user?.role !== "admin") redirect("/dashboard");
+  if (!isAdminRole(user?.role)) redirect("/dashboard");
 
   const events = getRecentAudit(200);
 

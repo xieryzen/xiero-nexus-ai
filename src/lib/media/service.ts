@@ -45,6 +45,7 @@ import {
   saveMediaResponse,
   type StoredFile,
 } from "./store";
+import { isAdminRole } from "@/lib/roles";
 
 /**
  * Image, video and speech generation through the gateway.
@@ -837,7 +838,7 @@ export async function waitForVideo(
 export function loadOwnedAsset(assetId: string, user: User): MediaAsset {
   const asset = loadAsset(assetId);
   if (!asset) throw Errors.notFound("Media not found");
-  if (asset.userId !== user.id && user.role !== "admin") throw Errors.forbidden();
+  if (asset.userId !== user.id && !isAdminRole(user.role)) throw Errors.forbidden();
   return asset;
 }
 

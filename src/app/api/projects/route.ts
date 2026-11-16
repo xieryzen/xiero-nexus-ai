@@ -12,13 +12,14 @@ import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { getClientMeta } from "@/lib/request";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { projectCreateSchema } from "@/lib/validation";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async () => {
   const user = requireUser();
   const rows =
-    user.role === "admin"
+    isAdminRole(user.role)
       ? db.select().from(projects).orderBy(desc(projects.updatedAt)).all()
       : db.select().from(projects).where(eq(projects.createdBy, user.id)).orderBy(desc(projects.updatedAt)).all();
   return json({ projects: rows.map((p) => serializeProject(p)) });

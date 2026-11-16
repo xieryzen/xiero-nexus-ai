@@ -1,8 +1,9 @@
 {
   "about": [
     "The workforce of the server this repository is deployed to. Read by scripts/host/workforce.py (Deploy workflow: workforce-plan, workforce); the format is in scripts/host/README.md.",
-    "Fifteen teams, each for one kind of work and each with a workflow: software, short reels, product videos, brochures and catalogues, online stores, landing pages, Minecraft plugins, Bedrock add-ons, Minecraft server setups, custom Minecraft features, Pterodactyl installations, Discord bots, social media carousels, SEO articles, and proposals. A team's description names its workflow.",
+    "Sixteen teams, each for one kind of work and each with a workflow: software, short reels, product videos, brochures and catalogues, online stores, landing pages, Minecraft plugins, Bedrock add-ons, Minecraft server setups, custom Minecraft features, Pterodactyl installations, Discord bots, social media carousels, SEO articles, proposals, and work on Xiero Nexus AI itself. A team's description names its workflow.",
     "Skills are in skills/ next to this file, a folder with a SKILL.md each: the way each kind of work is done here. The program puts them into the app and gives them to the agents and teams named below; an agent reads its own skills and its team's with every task. Edit a SKILL.md and run the workforce action with --update to change a skill; one that was changed on the Skills page is overwritten by that.",
+    "Three skills are the owner's own and are not in this repository: xiero-premium-web-studio, xiero-nexus-ai and xiero-minecraft-forge (\"uploaded\": true below). They are uploaded on the Skills page, or sealed for the node with the workforce action; the teams that name them get them when the app has them, and are made without them until then. A skill that a team or an agent was given by hand on its page is kept: this file adds skills and takes none away.",
     "The agents write documents and files into a project's workspace. They do not compile, start a game, or touch a customer's server: the server has no sandbox runner. Every workflow therefore ends with a test list, a checklist or a review for a person, and says what was not run.",
     "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints, LLM7 and Pollinations take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
     "What costs nothing is limited: Kilo Gateway to 200 requests an hour from one address by its documentation (when it was counted on this server, to about a hundred), OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
@@ -197,6 +198,18 @@
     },
     "code-review-checklist": {
       "file": "skills/code-review-checklist"
+    },
+    "xiero-premium-web-studio": {
+      "uploaded": true,
+      "about": "the owner's standard for premium websites: art direction, accounts with optional 2FA, the credit \"Designed by Xiero\""
+    },
+    "xiero-nexus-ai": {
+      "uploaded": true,
+      "about": "the owner's guide for work on Xiero Nexus AI itself"
+    },
+    "xiero-minecraft-forge": {
+      "uploaded": true,
+      "about": "the owner's standard for Minecraft work"
     }
   },
   "agents": [
@@ -1040,6 +1053,24 @@
       ]
     },
     {
+      "name": "Xiero Nexus AI",
+      "description": "Work on Xiero Nexus AI itself, by the project's own guide: the people of the Software Team with the skill \"xiero-nexus-ai\". Use it with the workflow \"Software delivery\", or let the AI Manager plan the tasks.",
+      "agents": [
+        "Manager",
+        "CEO",
+        "Designer",
+        "Frontend",
+        "Backend",
+        "QA",
+        "Security Engineer",
+        "Tester",
+        "DevOps"
+      ],
+      "skills": [
+        "xiero-nexus-ai"
+      ]
+    },
+    {
       "name": "Short Reels Team",
       "description": "Makes short vertical videos: script, pictures, voice-over, final cut, cover and caption. Use it with the workflow \"Short Reels\"; the project needs an image model and a speech model.",
       "agents": [
@@ -1100,6 +1131,7 @@
         "QA"
       ],
       "skills": [
+        "xiero-premium-web-studio",
         "ecommerce-store",
         "anti-ai-slop-design"
       ]
@@ -1117,6 +1149,7 @@
         "QA"
       ],
       "skills": [
+        "xiero-premium-web-studio",
         "anti-ai-slop-design",
         "anti-ai-slop-copy"
       ]
@@ -1174,6 +1207,7 @@
         "Technical Writer"
       ],
       "skills": [
+        "xiero-minecraft-forge",
         "minecraft-premium-product"
       ]
     },

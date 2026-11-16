@@ -40,7 +40,8 @@ export const users = sqliteTable(
     username: text("username").notNull(),
     email: text("email").notNull(), // stored normalized (lowercase, trimmed)
     passwordHash: text("password_hash").notNull(),
-    role: text("role", { enum: ["admin", "user"] })
+    // owner: an administrator who also manages the accounts (src/lib/roles.ts).
+    role: text("role", { enum: ["owner", "admin", "user"] })
       .notNull()
       .default("user"),
     status: text("status", { enum: ["active", "disabled"] })

@@ -8,6 +8,7 @@ import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
 import { memoryCreateSchema } from "@/lib/validation";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export const GET = handle(async (_req, { params }) => {
   const agent = loadAgent(params.id!);
   return json({
     memoryEnabled: agent.memoryEnabled,
-    memories: listMemories(agent.id, user.role === "admin" ? undefined : user.id),
+    memories: listMemories(agent.id, isAdminRole(user.role) ? undefined : user.id),
   });
 });
 
@@ -47,7 +48,7 @@ export const DELETE = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
   const agent = loadAgent(params.id!);
-  const removed = clearMemories(agent.id, user.role === "admin" ? undefined : user.id);
+  const removed = clearMemories(agent.id, isAdminRole(user.role) ? undefined : user.id);
   audit({
     actorUserId: user.id,
     action: "agent.memory.clear",

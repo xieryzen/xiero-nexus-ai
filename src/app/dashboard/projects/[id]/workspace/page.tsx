@@ -10,6 +10,7 @@ import { getRemote, serializeRemote } from "@/lib/git";
 import { PageHeader } from "@/components/ui";
 import { WorkspaceClient } from "@/components/workspace/workspace-client";
 import { GitPanel } from "@/components/workspace/git-panel";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Workspace" };
@@ -18,7 +19,7 @@ export default function WorkspacePage({ params }: { params: { id: string } }) {
   const user = requirePageUser();
   const project = db.select().from(projects).where(eq(projects.id, params.id)).get();
   if (!project) notFound();
-  if (project.createdBy !== user.id && user.role !== "admin") redirect("/dashboard/projects");
+  if (project.createdBy !== user.id && !isAdminRole(user.role)) redirect("/dashboard/projects");
 
   const ws = ensureWorkspace(project.id, user.id);
   const executor = getExecutor();

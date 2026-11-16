@@ -4,6 +4,7 @@ import { Errors } from "@/lib/errors";
 import { serializeAsset } from "@/lib/media/dto";
 import { listAssets } from "@/lib/media/service";
 import { loadOwnedProject } from "@/lib/project-access";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export const GET = handle(async (req) => {
   if (kindParam && !kind) throw Errors.badRequest("kind must be image, video or audio");
 
   const all = query.get("scope") === "all";
-  if (all && user.role !== "admin") throw Errors.forbidden();
+  if (all && !isAdminRole(user.role)) throw Errors.forbidden();
 
   const projectId = query.get("projectId") ?? undefined;
   if (projectId) loadOwnedProject(projectId, user); // throws unless owner or admin

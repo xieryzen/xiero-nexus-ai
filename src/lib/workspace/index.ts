@@ -14,6 +14,7 @@ import {
 } from "@/db/schema";
 import { Errors } from "@/lib/errors";
 import { validateWorkspacePath } from "./paths";
+import { isAdminRole } from "@/lib/roles";
 
 export const FILE_MAX_BYTES = 256 * 1024;
 
@@ -34,10 +35,10 @@ export function loadOwnedWorkspace(workspaceId: string, user: User): Workspace {
   if (!ws) throw Errors.notFound("Workspace not found");
   if (ws.projectId) {
     const project = db.select().from(projects).where(eq(projects.id, ws.projectId)).get();
-    if (project && project.createdBy !== user.id && user.role !== "admin") {
+    if (project && project.createdBy !== user.id && !isAdminRole(user.role)) {
       throw Errors.forbidden();
     }
-  } else if (user.role !== "admin") {
+  } else if (!isAdminRole(user.role)) {
     throw Errors.forbidden();
   }
   return ws;

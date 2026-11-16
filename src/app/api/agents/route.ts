@@ -13,6 +13,7 @@ import { getClientMeta } from "@/lib/request";
 import { agentSkillMap, setAgentSkills } from "@/lib/skills/service";
 import { serializeAgent, serializeAgents } from "@/lib/workforce";
 import { agentCreateSchema } from "@/lib/validation";
+import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,7 @@ export const GET = handle(async () => {
       collections: agentCollectionMap(),
       skills: agentSkillMap(),
       // An administrator sees how many notes there are; everyone else, their own.
-      memories: memoryCounts(user.role === "admin" ? undefined : user.id),
+      memories: memoryCounts(isAdminRole(user.role) ? undefined : user.id),
     }),
   });
 });

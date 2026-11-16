@@ -24,6 +24,13 @@
 #   workforce     adds that to the app, signed in as its administrator
 #                 (workforce.sh --yes).
 #   last-log      what the last run on the node said and how it ended.
+#   input-key     the public key of this node, for what is sealed for it: a
+#                 password or a skill that has to pass through a place others
+#                 can read. The key pair is made at the first call and stays
+#                 on the node (~/xiero-nexus-remote/input-key). Seal with
+#                 `sealed-output.sh seal-line <that line> < file`, and give
+#                 the line to workforce.sh (--account-password-sealed,
+#                 --skill-sealed).
 #
 # Anything after "--" is given to the host script as it is:
 #
@@ -72,6 +79,8 @@ SCRIPTS="${DEPLOY_SCRIPTS:-${here}}"
 SENT=(pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh
   workforce.sh workforce.py workforce.json)
 if [ -d "${SCRIPTS}/skills" ]; then SENT+=(skills); fi
+# What opens a password or a skill that was sealed for the node.
+if [ -f "${SCRIPTS}/sealed-output.sh" ]; then SENT+=(sealed-output.sh); fi
 REMOTE_DIR="${DEPLOY_REMOTE_DIR:-}"
 SUDO_MODE="${DEPLOY_SUDO:-auto}"
 KEEP_LOGS=20
@@ -83,7 +92,7 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -109,12 +118,12 @@ case "${ACTION}" in
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
   site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
   workforce-plan | workforce) REMOTE_SCRIPT="workforce.sh" ;;
-  last-log) REMOTE_SCRIPT="" ;;
+  last-log | input-key) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log, input-key." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -318,6 +327,32 @@ if [ "${action}" = "last-log" ]; then
   ended 0
 fi
 
+# The key of this node for what is sealed for it. Its private half never
+# leaves the node; the public half is no secret.
+input_key="${dir}/input-key/key.pem"
+if [ "${action}" = "input-key" ]; then
+  command -v openssl > /dev/null 2>&1 || {
+    echo "error: this needs openssl, which is not installed on the node."
+    ended 1
+  }
+  if [ ! -s "${input_key}" ]; then
+    mkdir -p "${dir}/input-key" && chmod 700 "${dir}/input-key"
+    if ! openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "${input_key}" 2> /dev/null; then
+      rm -f "${input_key}"
+      echo "error: the key could not be made on the node."
+      ended 1
+    fi
+    chmod 600 "${input_key}"
+    echo "A key for what is sealed for this node was made: ${input_key}"
+  else
+    echo "The key for what is sealed for this node: ${input_key}"
+  fi
+  echo "Its public half, to seal with (sealed-output.sh seal-line):"
+  openssl pkey -in "${input_key}" -pubout 2> /dev/null | openssl base64 -A
+  echo
+  ended 0
+fi
+
 as_root=()
 if [ "$(id -u)" -ne 0 ] && [ "${sudo_mode}" = "auto" ]; then
   if ! sudo -n true 2> /dev/null; then
@@ -365,6 +400,8 @@ rm -rf "$(dirname "$0")"
 DETACHED
 if [ "${action}" = "disk-report" ]; then apart=yes; else apart=no; fi
 
+# The host script is told where the node's key is, when the node has one.
+if [ -s "${input_key}" ]; then env_lines+=("XIERO_INPUT_KEY=${input_key}"); fi
 run_this=(${as_root[@]+"${as_root[@]}"} env ${env_lines[@]+"${env_lines[@]}"} bash "${run}/${script}" ${args[@]+"${args[@]}"})
 # In a session of its own: the end of this connection does not end it.
 if command -v setsid > /dev/null 2>&1; then

@@ -62,6 +62,10 @@ function check(name, condition, detail) {
     console.log(`  FAIL ${name}${shown ? `  →  ${shown}` : ""}`);
   }
 }
+function eq(name, actual, expected) {
+  const same = JSON.stringify(actual) === JSON.stringify(expected);
+  check(name, same, same ? undefined : `got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // A reader in another time zone, with another language, than the server: what
@@ -567,6 +571,48 @@ try {
       return plain(shown) === plain(local);
     });
   check("dates are shown in the reader's time zone, not the server's", localOk, joined.slice(0, 2));
+
+  // ─── Accounts ──────────────────────────────────────────────────────────
+  begin("Browser: accounts");
+  check("the one who signed in first is shown as the owner", await page.$eval("header", (h) => h.innerText.includes("Owner")), null);
+  check("an owner has a way to make an account", await clickText("New account", { tag: "button" }), null);
+  await fill("#new-username", "browser.user");
+  await fill("#new-email", "Browser.User@example.com");
+  await fill("#new-password", "a-password-from-the-browser");
+  await page.select("#new-role", "admin");
+  await snap("account-form");
+  await page.click("#create-account");
+  check("an account made on the page is said and listed", await waitText('The account "browser.user" was made'), null);
+  const accountRow = 'tr[data-user="browser.user"]';
+  await page.waitForSelector(accountRow);
+  eq("  with the role it was given, and its email in small letters", [await page.$eval(`${accountRow} select`, (s) => s.value), await page.$eval(accountRow, (r) => r.innerText.includes("browser.user@example.com"))], ["admin", true]);
+  await page.select(`${accountRow} select`, "user");
+  check("its role is changed in the list", await waitText('"browser.user" is user now'), null);
+  await clickText("Manage", { within: accountRow, tag: "button" });
+  const manage = 'tr[data-manage="browser.user"]';
+  await page.waitForSelector(manage);
+  await fill(`${manage} input[id^="username-"]`, "browser.renamed");
+  await clickText("Save the name and the email", { within: manage, tag: "button" });
+  check("its name is changed", await waitText("The username and the email were saved"), null);
+  const renamed = 'tr[data-manage="browser.renamed"]';
+  await page.waitForSelector(renamed);
+  await fill(`${renamed} input[id^="password-"]`, "another-password-from-the-browser");
+  await snap("account-manage");
+  await clickText("Set the password", { within: renamed, tag: "button" });
+  check("its password is set, and the page says that it was signed out", await waitText('"browser.renamed" has a new password and was signed out everywhere'), null);
+  const signIn = (password) =>
+    fetch(`${APP}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identifier: "browser.renamed", password }) }).then((res) => res.status);
+  eq("  the new password signs in under the new name, the first one no more", [await signIn("another-password-from-the-browser"), await signIn("a-password-from-the-browser")], [200, 401]);
+  await clickText("Delete the account", { within: renamed, tag: "button" });
+  await clickText("Delete", { within: renamed, tag: "button" });
+  check("the account is deleted after being asked once more", (await waitText('The account "browser.renamed" was deleted')) && !(await page.$('tr[data-user="browser.renamed"]')), null);
+  await open("/dashboard/settings");
+  check("Settings has the forms for one's own username, email and password", Boolean(await page.$("#account-username")) && Boolean(await page.$("#password-new")) && (await page.$eval("#account-save", (b) => b.disabled)), null);
+  await fill("#account-email", "admin+changed@example.com");
+  await fill("#account-current", "not-the-password");
+  await page.click("#account-save");
+  check("  a change without the right password is refused, and said", await waitText("Password is incorrect"), null);
+  await snap("settings-account");
 
   begin("Browser: errors");
   check("no page logged an error", pageErrors.length === 0, pageErrors.slice(0, 8));

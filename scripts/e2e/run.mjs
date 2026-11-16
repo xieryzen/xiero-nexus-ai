@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   KEEP=1                                        keep the temporary folder
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
@@ -326,6 +326,12 @@ async function stopAndStartAgain() {
   const left = lastRun(project.id);
   check("the run is left as in progress, handed back for the next start to take", left?.status === "running" && left.heartbeatAt === null, left);
 
+  // An installation from before there were owners has none: its accounts
+  // are administrators and users. Made so by hand, while nothing runs.
+  const before = new Database(appEnv.DATABASE_PATH, { timeout: 5000 });
+  const owners = before.prepare("UPDATE users SET role = 'admin' WHERE role = 'owner'").run().changes;
+  before.close();
+
   // The same database, a new process.
   running.splice(running.indexOf(stopped), 1);
   app = startApp();
@@ -347,6 +353,14 @@ async function stopAndStartAgain() {
   check("  every task of the project is done, and the session is still good", after?.project?.status === "succeeded" && after.project.tasks?.every((t) => t.status === "succeeded"), [after?.project?.status, after?.project?.tasks?.map((t) => t.status), after?.error]);
   const videos = (await (await fetch(`${mockUrl}/__log`)).json().catch(() => [])).filter((l) => l.method === "POST" && /\/videos$/.test(l.path)).length;
   check("  the video that was being generated is not ordered a second time", videos === 1, videos);
+
+  const whoAmI = await (await fetch(`${appUrl}/api/account/me`, { headers: { cookie } })).json().catch(() => null);
+  const afterStart = new Database(appEnv.DATABASE_PATH, { readonly: true, timeout: 5000 });
+  const roles = afterStart.prepare("SELECT role, count(*) AS n FROM users GROUP BY role ORDER BY role").all();
+  const assigned = afterStart.prepare("SELECT metadata FROM audit_logs WHERE action = 'system.owner.assigned'").all();
+  afterStart.close();
+  check("an installation without an owner: its first administrator is the owner after the start", owners === 1 && whoAmI?.user?.username === "admin" && whoAmI.user.role === "owner", { owners, user: whoAmI?.user });
+  check("  nobody else is, and the audit log says so", roles.find((r) => r.role === "owner")?.n === 1 && assigned.length === 1 && /"username":"admin"/.test(assigned[0]?.metadata ?? ""), { roles, assigned });
 
   console.log(`\n${passed} passed, ${failed} failed (stopping and starting again)`);
   if (process.env.GITHUB_ACTIONS === "true") {

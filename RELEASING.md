@@ -280,8 +280,17 @@ server.
 ### From 1.6 to 1.7
 
 - Nothing has to be configured. At its first start 1.7 adds four tables to
-  the database, for skills; going back to 1.6 needs no backup of `data/` to
-  be put back, the tables are left alone.
+  the database, for skills.
+- 1.7 has a third role, the owner, who manages the accounts. At that first
+  start the first administrator of the installation becomes its owner (the
+  audit log says which account). Administrators no longer change roles or
+  switch accounts off: the owner does.
+- **Going back to 1.6 means putting the backup of `data/` back**, as
+  `pterodactyl-upgrade.sh --restore` does: 1.6 does not know the role
+  "owner", and would treat that account as an ordinary user.
+- `scripts/host/workforce.py` of 1.6 does not sign in to a 1.7 app with the
+  owner's account (it asks for an administrator by that word): use the
+  scripts of the same version as the app.
 
 ### Roll back
 

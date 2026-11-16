@@ -356,9 +356,15 @@ It adds what is missing and leaves the rest:
   is compared word for word: a `SKILL.md` that was edited here differs from
   the one in the app until `--update` puts it there, and a skill that was
   edited on the Skills page is overwritten by that. An agent or a team gets
-  exactly the skills the file names for it; one for which the file names
-  none keeps what it was given by hand. Skills came with version 1.7: on an
-  older app the program says so and changes no agent.
+  the skills the file names for it, and keeps the ones it was given by hand
+  on its page: the file adds skills and takes none away. Skills came with
+  version 1.7: on an older app the program says so and changes no agent.
+- **A skill of your own** need not be in the file, or in a repository
+  others can read. `"my-skill": {"uploaded": true}` names one that you
+  upload on the Skills page, or with `--upload-skill <file>` (a `SKILL.md`,
+  a `.skill` or a `.zip`, as on that page; it replaces a skill of the same
+  name). Agents and teams that name it get it when the app has it, and are
+  made without it until then: the program says who waits for it.
 - A provider that takes no key (`"authType": "none"`) is added when the app
   does not have it, with the address of the file. One that takes a key is not
   added: the program has no keys, and says that the provider is to be added
@@ -370,6 +376,22 @@ It adds what is missing and leaves the rest:
 - Nothing is ever deleted. What the file does not name is not touched.
 - A tool the server cannot run (`run_command` without a sandbox runner,
   `web_search` without a search service) is left out of an agent, and said.
+
+**An account** the app is to have:
+
+```bash
+NEXUS_ACCOUNT_PASSWORD=... sudo -E bash workforce.sh --server 1a2b3c4d --yes --only accounts \
+  --account dewi --account-email dewi@example.com --account-role owner
+```
+
+It is made when no account has that username or that email, with the role
+given (`owner`, `admin` or `user`). One that is there is left as it is and
+what differs is said; with `--update` its role, name and email are made as
+asked, and its password too when one is given, which signs it out
+everywhere. The password comes in the environment, never on the command
+line, and is in nothing the program prints. Only an owner manages accounts:
+the program has to sign in as one (from version 1.7 the administrator of the
+first start is the owner). It does not change the account it signs in as.
 
 `--test` asks each chat model of the file for one word, and `--test-all`
 every chat model in the app; `--test-media` has the image model make one
@@ -472,7 +494,9 @@ NEXUS_PASSWORD=... python3 scripts/host/workforce.py --url https://nexus.example
   the words themselves as `description` and `instructions`. The name is the
   one in the `SKILL.md`'s front matter, which this program reads as one line
   for each key (`name: ...`, `description: ...`). The other text files of
-  the folder come with the skill, each up to 256 KB.
+  the folder come with the skill, each up to 256 KB. `"uploaded": true`
+  (with an optional `about`) names a skill of your own that is in the app
+  and not in the file.
 - **`agents`**: `name`, `role`, `primary` and, optionally, `fallback` (model
   names from above), `instructions` (text, or a list of lines), `tools`,
   `maxSteps` (1 to 40), `memory`, `temperature`, `skills` (names from above).
@@ -506,15 +530,16 @@ image and speech models set.
 | Team | Agents | Workflow | What it makes | Skills of the team |
 | --- | --- | --- | --- | --- |
 | Software Team | Manager, CEO, Designer, Frontend, Backend, QA, Security Engineer, Tester, DevOps | Software delivery | 10 steps: 10 written | (its agents' own) |
+| Xiero Nexus AI | the same nine | Software delivery | 10 steps: 10 written | *xiero-nexus-ai* |
 | Short Reels Team | Short Reels, Designer, Copywriter, QA | Short Reels | 12 steps: 2 written, 5 pictures, 4 voice-overs, 1 joined video | short-reels, product-image-prompts, anti-ai-slop-copy |
 | Video Product | Video Director, Designer, Copywriter, QA | Video Product | 12 steps: 2 written, 5 pictures, 4 voice-overs, 1 joined video | product-video, product-image-prompts, anti-ai-slop-copy |
 | Brosur & Katalog | Art Director, Copywriter, Designer, Print Designer, QA | Brosur & Katalog | 8 steps: 5 written, 3 pictures | brochure-catalog, anti-ai-slop-design, anti-ai-slop-copy |
-| Website E-commerce | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, Backend, SEO Specialist, Security Engineer, QA | Website E-commerce | 11 steps: 11 written | ecommerce-store, anti-ai-slop-design |
-| Landing Page | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, SEO Specialist, QA | Landing Page | 7 steps: 6 written, 1 pictures | anti-ai-slop-design, anti-ai-slop-copy |
+| Website E-commerce | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, Backend, SEO Specialist, Security Engineer, QA | Website E-commerce | 11 steps: 11 written | *xiero-premium-web-studio*, ecommerce-store, anti-ai-slop-design |
+| Landing Page | Commerce Strategist, Art Director, Copywriter, Designer, Frontend, SEO Specialist, QA | Landing Page | 7 steps: 6 written, 1 pictures | *xiero-premium-web-studio*, anti-ai-slop-design, anti-ai-slop-copy |
 | Plugin Minecraft Premium | Minecraft Game Designer, Minecraft Plugin Developer, Minecraft QA, Technical Writer | Plugin Minecraft Premium | 10 steps: 10 written | minecraft-paper-plugin, minecraft-premium-product |
 | Addon Minecraft Premium | Minecraft Game Designer, Minecraft Addon Developer, Minecraft QA, Technical Writer | Addon Minecraft Premium | 9 steps: 9 written | minecraft-bedrock-addon, minecraft-premium-product |
 | Setup Server Minecraft | Minecraft Server Admin, Minecraft QA, Technical Writer | Setup Server Minecraft | 8 steps: 8 written | minecraft-server-setup, linux-server-hardening |
-| Developer Minecraft | Minecraft Game Designer, Minecraft Plugin Developer, Minecraft Addon Developer, Minecraft Server Admin, Minecraft QA, Technical Writer | Fitur Minecraft Custom | 7 steps: 7 written | minecraft-premium-product |
+| Developer Minecraft | Minecraft Game Designer, Minecraft Plugin Developer, Minecraft Addon Developer, Minecraft Server Admin, Minecraft QA, Technical Writer | Fitur Minecraft Custom | 7 steps: 7 written | *xiero-minecraft-forge*, minecraft-premium-product |
 | Install Panel + Wings Pterodactyl | Pterodactyl Engineer, DevOps, Security Engineer, Technical Writer, QA | Install Panel + Wings Pterodactyl | 8 steps: 8 written | pterodactyl-panel-wings, linux-server-hardening |
 | Bot Discord | Discord Bot Developer, Tester, Technical Writer | Bot Discord | 5 steps: 5 written | discord-bot |
 | Konten Media Sosial | Social Media Strategist, Designer, Copywriter, QA | Konten Carousel | 8 steps: 3 written, 5 pictures | social-media-content, anti-ai-slop-copy, product-image-prompts |
@@ -532,6 +557,12 @@ The skills are in [`skills/`](skills), one folder each. They say how the work
 is done, what to check against the official documentation instead of
 memory, and what must never be invented. They were written for this file and
 are **untried as skills**: no project was judged with and without them.
+
+The three in *italics* are the owner's own and are not in this repository:
+they are uploaded to the app (the Skills page, or sealed for the node, see
+[Sealed for the node](#sealed-for-the-node)), and the team has them once
+they are there. In a task the team's skills come after the agent's own, in
+the order of the table: the owner's standard first.
 
 ### Providers that cost nothing
 
@@ -692,9 +723,9 @@ The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
 `install-plan`, `install`, `site-plan`, `site`, `workforce-plan`, `workforce`,
-`disk-report` or `last-log`. For the last two before those, the workflow runs
-the `workforce.json` of the branch it is started on; more options, such as
-`--update` or `--test`, go in **options**.
+`disk-report`, `last-log` or `input-key`. For `workforce-plan` and
+`workforce`, the workflow runs the `workforce.json` of the branch it is
+started on; more options, such as `--update` or `--test`, go in **options**.
 
 It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 
@@ -726,6 +757,31 @@ what a node says about itself is nobody else's business. So:
   ```
 
   `key.pem` is the private key. Keep it outside the repository.
+
+#### Sealed for the node
+
+What goes the other way, from you to the node, passes the same public place:
+the options of a run can be read by others. A password for an account, or a
+skill of your own that is not to be published, is therefore sealed for the
+node first, and only the node opens it:
+
+```bash
+# 1. Once: the node makes a key pair and prints the public half (action "input-key").
+#    The private half stays on the node, in ~/xiero-nexus-remote/input-key.
+# 2. Seal with that line. What comes out is one word of letters and dots.
+printf '%s' 'the password' | bash scripts/host/sealed-output.sh seal-line '<the line>'
+bash scripts/host/sealed-output.sh seal-line '<the line>' < my-skill/SKILL.md
+# 3. Give it in the options of the action "workforce":
+#    --only accounts --account dewi --account-email dewi@example.com --account-role owner --account-password-sealed <word>
+#    --only skills,teams --update --skill-sealed <word>
+```
+
+`workforce.sh` opens it on the node, hands the password to `workforce.py`
+in its environment and the skill as a file of its own that is deleted when
+the program ends. Neither is printed, by the runner or by the node. All
+options of a run together may be about 65,000 characters: a skill of some
+ten thousand words fits; a larger one, or one with many files, is uploaded
+on the Skills page.
 
 Anyone who may push to the repository can start this workflow and so act as
 root on the node. Give that right to people you would give the password to. A

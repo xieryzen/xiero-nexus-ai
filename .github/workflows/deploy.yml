@@ -22,6 +22,9 @@ name: Deploy to a Pterodactyl node
 #   workforce     adds that to the app, signed in as its administrator. What
 #                 is there already is left as it is.
 #   last-log      what the last run on the node said and how it ended
+#   input-key     the public key of the node, for a password or a skill that
+#                 is sealed for it and given in "options" (scripts/host/README.md,
+#                 "Sealed for the node")
 #
 # Secrets (Settings, Secrets and variables, Actions):
 #
@@ -54,7 +57,7 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log]
+        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log, input-key]
         default: plan
         required: true
       server:
