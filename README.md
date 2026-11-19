@@ -262,6 +262,9 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
     in the sandbox runner. Needs `SANDBOX_URL`; the command allowlist applies.
   - *Servers over SSH* (v1.8): run commands on the servers a project names;
     see [Servers over SSH](#servers-over-ssh-v180).
+  - *Browser* (v1.8): open web pages, read them, click and type, and sign in
+    with the site accounts a project names. Needs `BROWSER_URL`; see
+    [The browser](#the-browser-v180).
   - *Web and APIs*: read a web page as text, call an HTTP API, and search the
     web. Search needs `SEARCH_PROVIDER` (Brave, Tavily, or your own SearXNG).
 
@@ -467,7 +470,7 @@ mock. **How well a given model follows a skill was not measured.**
 
 | Role | What it does |
 |---|---|
-| **Owner** | Everything an administrator does, the accounts, how many tokens each account may use, and the [servers](#servers-over-ssh-v180) agents work on. |
+| **Owner** | Everything an administrator does, the accounts, how many tokens each account may use, the [servers](#servers-over-ssh-v180) agents work on, and the [site accounts](#the-browser-v180) they sign in with. |
 | **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and their tokens, and changes none: no role, no token limit. |
 | **User** | Their own projects, chats, media, knowledge and API keys. Sees no provider and no model, and chooses none ([below](#what-a-user-is-shown-v180)). |
 
@@ -582,12 +585,13 @@ for administrators and owners.
 
 | | A user | An administrator, an owner |
 |---|---|---|
-| Menu | Overview, AI Manager, Agents & Teams, Workflows, Chat, Creative Studio, Knowledge, Usage, Settings | the same, and Providers, Models, Servers, Skills, Audit, Observability, Users & Roles |
+| Menu | Overview, AI Manager, Agents & Teams, Workflows, Chat, Creative Studio, Knowledge, Usage, Settings | the same, and Providers, Models, Servers, Browser, Skills, Audit, Observability, Users & Roles |
 | Providers and models | not shown: no name, no list, no price | everything |
 | Which model does the work | the app chooses | they choose |
 | Agents, teams, workflows | who they are and what they are for | also what they are told, their models, tools and skills |
 | Skills | not shown | everything |
 | Servers | not shown; no project of a user works on one | an owner registers them; an administrator sees the ones opened to administrators |
+| Browser | not shown; no agent of a user's project works in one | their agents work in it; an owner saves the site accounts, an administrator sees the ones opened to administrators |
 | Usage | their tokens and requests | everyone's, with providers, models and costs |
 | When something fails | that it did not work, and what to do | what the provider answered |
 
@@ -731,6 +735,123 @@ needs `sh`, as every Linux, BSD and macOS has; the check when a machine is
 registered says so when it does not. It was tested against an SSH server on
 the machine of the tests, with a password and with a key, **not against a
 server of yours**.
+
+## The browser (v1.8.0)
+
+Agents can work on web sites the way a person does: open a page, read it,
+click, type, choose from a list, and sign in with an account you saved. They
+do it in a real Chromium that runs **apart from the app**, the browser
+service ([scripts/host/browser](scripts/host/browser/README.md)).
+
+**What a site checks of a person is left to a person.** The app does not
+solve a CAPTCHA and does not get around one, and it does not make the
+browser look like something it is not: a site puts those checks there to
+turn automated visitors away. What the app does instead:
+
+- **The agent stops, and you take the page over.** When a sign-in form has a
+  CAPTCHA, when a site asks for a code it sent to your phone, when a page is
+  nothing but "verify that you are human", or when the agent itself sees
+  that a person is needed, the task waits. You are told (the bell, and your
+  webhook when you have one), you open the page in the app, see it as it
+  is, click and type on it there, and hand it back. The agent goes on from
+  where you left it. A page waits 15 minutes (`BROWSER_WAIT_MINUTES`); then
+  the agent is told that nobody came, finishes with what it has, and says
+  what is waiting.
+- **The session is kept, so you are not asked often.** What a sign-in leaves
+  behind (the site's cookies) is kept, encrypted, with the account. The next
+  run, of this project or another one, is let in without signing in again:
+  no form, no CAPTCHA, no code, until the site ends the session.
+- **Sign in by hand, once.** On the **Browser** page an owner opens the site
+  of an account in the same browser: the app fills in the form, you do what
+  the site asks of a person, and keep the session. Agents then find the site
+  signed in.
+
+How signing in works:
+
+- **Only an owner saves a site account** (Browser page): a name, the address
+  of the page where one signs in, the user name and the password. The
+  password is kept encrypted and never shown again.
+- **The app types the password; an agent is never shown it.** An agent says
+  "sign in with `shop-admin`", and the app finds the form, fills it in and
+  sends it. The password is typed only on the account's own site (the host
+  of its address and what is under it), never on a plain-http page of a
+  site that was saved with https. No answer of the tool holds it: if a page
+  shows it (a "show password" button, an error that repeats it), the agent
+  reads `[hidden]` in its place. An agent presses no key that copies or
+  pastes.
+- **A project names its site accounts**, up to 5, in the project form or on
+  its page; and an agent has to be given the tool **Work in a browser** on
+  the Agents page. The project's page says which of its agents can sign in,
+  and the AI Manager is told the same when it plans.
+- **Whose projects.** Agents work in the browser in the projects of owners
+  and administrators. An owner's projects may sign in with any account; an
+  administrator's with the ones the owner opened to administrators; a
+  user's projects get no browser. A project that names site accounts is
+  run, changed, scheduled and approved only by an account whose own
+  projects may use them.
+- **What an agent can do on a site** is whatever the account can. Save an
+  account with the rights the work needs, and say in its notes what to
+  leave alone: agents are told.
+
+What an agent is given:
+
+- One action per call: `open`, `read`, `click`, `type`, `select`, `press`,
+  `back`, `sign_in`, `ask_person`. Every call answers with the page as text:
+  its address, its title, what it says, and everything that can be acted on
+  with a number (`[4: button "Sign in"]`). The model is sent the page as it
+  is now once: older answers keep what was done, not what the page showed.
+- A frame of the same site, and what a page keeps in a part of its own, are
+  read and used; a frame from another site is not, which is where a CAPTCHA
+  lives. A tab the site opens is followed. A question the page asks in a
+  box is answered Cancel unless the agent says otherwise with the action.
+- A task that starts over (its model failed, or the app was restarted) is
+  told what it already did in the browser, and that a form that was sent
+  stays sent.
+- **Every action is written down** (Browser page): the page, what was
+  clicked, typed and chosen, every sign-in, and every time a person took a
+  page over, with the project, task, agent and account. What is typed into
+  a password field, by the app or by an agent, is never written down.
+
+Where pages may go:
+
+- The app opens only `http://` and `https://` addresses, never a file or a
+  page of the browser, and never an address on a private network; the hosts
+  agents may reach are the ones of `AGENT_HTTP_ALLOWED_HOSTS`, as for the
+  other web tools.
+- **The browser service refuses private networks for everything a page
+  loads**: a redirect, a picture, a request of the page's own scripts. It
+  connects to the address it looked at, so a name cannot lead somewhere
+  else in between. The Browser page says whether the service it is
+  connected to does this.
+- The service takes requests only with its token, which is part of
+  `BROWSER_URL` and is shown nowhere.
+
+Setting it up: `BROWSER_URL` in `.env` names the service. On a Pterodactyl
+node, the Deploy workflow's action `browser` (or
+`scripts/host/browser-service.sh` on the node) builds the image, starts the
+container on the server's network with a limit on memory and nothing
+published, and writes `BROWSER_URL`; by hand it is one `docker run`
+([README of the service](scripts/host/browser/README.md)). Without a
+browser service agents are not handed the tool, and the Agents page says
+so.
+
+`GET /api/browser` (the service and the pages that wait),
+`GET` and `POST /api/browser/accounts`, `PATCH` and
+`DELETE /api/browser/accounts/{id}`, `POST` and
+`DELETE /api/browser/accounts/{id}/session` (sign in by hand; drop the
+session), `GET /api/browser/live/{id}` with `/screen` and `/input` (a page
+that waits), `GET /api/browser/actions` (the log). A project takes
+`siteAccountIds`.
+
+Not there: solving or passing a CAPTCHA, by the app or by a service;
+anything that hides that the browser is automated; uploads and downloads of
+files; pictures of a page for the model (agents read pages as text); what is
+inside a frame of another site; sessions of sites that keep the sign-in in
+the page's storage instead of cookies (they sign in again each run); a
+browser for the projects of users. It was tested against a site the tests
+start on their own machine, with a real Chromium, **not against the sites
+you will use it on**: how a site's form is recognised differs from site to
+site, and where the app does not find a form, signing in by hand is the way.
 
 ## Provider adapters
 
@@ -983,7 +1104,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
-| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged) | 🚧 release candidate: the first four parts of 1.8 |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | 🚧 release candidate: all five parts of 1.8 |
 
 ---
 
@@ -1051,6 +1172,9 @@ account you register through the UI becomes the owner.
 | `MODEL_HEALTH_RETRY_SECONDS` | no | Before a model that worked is left out for "too many requests", "busy" or no answer, it is asked once more after this many seconds: default 20, at most 300. |
 | `DEFAULT_TOKEN_LIMIT` | no | How many tokens a new account may use in all: default 10000000. An owner changes the limit of an account under Users & Roles; an owner is not limited. |
 | `SSH_KEEPALIVE_SECONDS` | no | How often an open connection to a server says that it is still there: default 15, between 1 and 300. Lower it for a network that forgets a quiet connection sooner. |
+| `BROWSER_URL` | no | Where the browser service is, with its token: `http://host:9223/?token=…`. **Unset = no browser** (agents are not handed the tool "Work in a browser"). See `scripts/host/browser/`. |
+| `BROWSER_WAIT_MINUTES` | no | How long a page waits for a person who has to pass a CAPTCHA or enter a code: default 15, between 1 and 240. |
+| `BROWSER_MAX_PAGES` | no | How many pages all agents together may have open in the browser: default 8, between 1 and 50. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
@@ -1156,6 +1280,15 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
   changed and scheduled only by an account whose own projects may use them.
   Every command and every connection is logged, and the log outlives the
   project and the machine.
+- The browser: it runs apart from the app, behind a token, and refuses
+  private networks for everything a page loads. Only an owner saves a site
+  account; its password is stored encrypted, typed by the app on the
+  account's own site only, and kept out of everything an agent reads, also
+  when a page shows it. The session a sign-in leaves is stored encrypted.
+  Each run has a browser of its own inside the service (its own cookies),
+  closed when the run has ended. A page that waits for a person is shown to
+  the account the run works for and to owners, to nobody else. No CAPTCHA
+  is solved or passed by the app. Every action is logged.
 - Security headers set globally; audit log excludes secrets.
 
 **Known limitations (be honest about these):**
@@ -1195,6 +1328,22 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
 - The host key of a machine is trusted from the moment an owner accepts it.
   The app shows the fingerprint and how to compare it; it cannot know by
   itself that the first answer came from the right machine.
+- **An agent in the browser can do on a site what the account can**, and it
+  reads pages other people wrote: a page can try to talk the model into
+  doing something else with the account it is signed in with. The app keeps
+  the password from the agent and writes down what the agent does; it does
+  not judge an action before it is taken. What limits an agent is the
+  account you save (one with the rights the work needs), the accounts a
+  project names, and which agents have the tool.
+- How the app finds a sign-in form, and how it sees that a page asks for a
+  person, are rules of thumb: a form it does not recognise is not filled
+  in, and a check it does not recognise is seen by the agent or not at all.
+  Either way the page can be handed to a person. Sites that turn automated
+  browsers away will turn this one away too.
+- The browser service is a Chromium without its own sandbox (a container
+  does not give it the rights for one): the container is the boundary. The
+  runs that are in the browser at one time share that Chromium, each with
+  its own cookies. Keep the image up to date (`--rebuild`).
 
 ## Scripts
 
@@ -1258,16 +1407,21 @@ passage ranking for the knowledge base, the timeline, subtitles and ffmpeg
 command line of a joined video, the API's request and response format,
 servers over SSH (who may use one, host keys and their fingerprints, the
 line a command is sent as and the one that ends it, both run in a real
-shell, what a command printed, what an agent is told), and the release
-tooling (channels, version ordering, release selection, checksums).
+shell, what a command printed, what an agent is told), the browser (which
+host is a site's, where a password may be typed, which cookies are a
+site's session, what asks for a person, what an agent reads of a page and
+what is kept out of it; the gate of the browser service: private addresses
+however they are written, where a page may go, its proxy with real
+connections, the token), and the release tooling (channels, version
+ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, the end-to-end checks
 below, and the tests of the [host scripts](scripts/host#tests). It then builds
 each release bundle and starts it: the bundle must refuse to run without its
 key, serve pages on a panel-assigned port, sign in (SQLite + migrations), keep
 the session, read a PDF into the knowledge base, sign in to a machine over SSH
-and run a command there, have its background worker running, and stop within
-seconds when told to. Last, the bundle of v1.4.0 is
+and run a command there, connect to a browser service, have its background
+worker running, and stop within seconds when told to. Last, the bundle of v1.4.0 is
 upgraded to the new one on a made-up Pterodactyl host.
 
 The provider/model/gateway/streaming paths **and** the full plan → delegate →
@@ -1308,7 +1462,16 @@ open while a firewall of the test cuts every connection that says nothing
 for three seconds; a connection that is cut and opened again; a command
 whose time is up and a run that is stopped, with nothing left running; a
 machine that shows another host key, takes another password, or does not
-answer; and who may register, see, use and run what. At the end the server
+answer; and who may register, see, use and run what. And the browser,
+with a real Chromium behind the gate of the browser service and a site the
+tests start themselves ([`scripts/e2e/mock-site.mjs`](scripts/e2e/mock-site.mjs)):
+an agent that reads a page and acts on it; signing in with a saved account,
+with the password in nothing the model is sent and nothing that is kept;
+the session that lets the next run in; a CAPTCHA on a form, a code after
+the password and a page that is nothing but a check, each handed to a
+person whom the tests play (a click on the page's picture, in a frame of
+another site that no agent reaches); a page nobody takes over; private
+addresses and files that are not opened; and who may. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with
@@ -1321,6 +1484,12 @@ the joined files are decoded again, and their picture and sound counted. It
 was run with ffmpeg 4.2 and 9.0; CI uses the ffmpeg package of its runner,
 and with `E2E_REQUIRE_FFMPEG=1` stops when there is none instead of
 checking less.
+
+The browser part needs a Chromium: the one `E2E_CHROME` names, else the one
+of `E2E_BROWSER`, else one that is installed. Without any, it checks what the
+app says when there is no browser; `E2E_REQUIRE_CHROME=1` makes that an
+error. CI runs it twice: with the runner's Chrome, and against the browser
+service in its container, built from `scripts/host/browser`.
 
 `E2E_BROWSER=<folder with puppeteer-core and @sparticuz/chromium>` also
 opens every dashboard page in a headless browser and clicks through the new

@@ -5,6 +5,82 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.8.0-rc.5] - 2026-11-19
+
+The fifth candidate for 1.8: agents work in a web browser, sign in with the
+accounts you saved, and leave to you what a site checks of a person.
+
+### Added
+
+- **A browser for agents.** An agent that has the new tool **Work in a
+  browser** opens web pages, reads them, clicks, types, chooses from lists,
+  and reads each page as text with everything it can act on numbered. It
+  works in a real Chromium that runs apart from the app (the browser
+  service, `BROWSER_URL`), in the projects of owners and administrators.
+- **Signing in with a saved account.** On the new **Browser** page an owner
+  saves site accounts: the page where one signs in, the user name and the
+  password. A project names the accounts it works with (up to 5). The app
+  finds the form, types the password and sends it; an agent is never shown
+  the password, also not when a page shows it, and it is typed only on the
+  account's own site.
+- **A CAPTCHA or a code is a person's.** The app does not solve one and
+  does not get around one. When a sign-in form has a CAPTCHA, when a site
+  asks for a code it sent, when a page is nothing but a check, or when the
+  agent asks, the task waits: you are told, open the page in the app, act on
+  it there (a click on the picture is a click on the page, what you type is
+  typed there), and hand it back. The agent goes on from where you left it.
+  A page waits 15 minutes (`BROWSER_WAIT_MINUTES`); then the agent is told
+  that nobody came.
+- **The session is kept.** What a sign-in leaves behind is stored,
+  encrypted, with the account: the next run, of any project that names it,
+  is let in without signing in again. An owner can **sign in by hand** on
+  the Browser page, ahead of the agents, and drop a session.
+- **Every action is logged**: the page, what was clicked, typed and chosen,
+  every sign-in, and every time a person took a page over, with the project,
+  task, agent and account. What goes into a password field is never
+  written down. The Browser page shows the log.
+- **The browser service** (`scripts/host/browser`): a Chromium behind a
+  gate that lets in only who has its token, and refuses private networks
+  for everything a page loads. `scripts/host/browser-service.sh` sets it up
+  next to a Pterodactyl server (a container on the server's network, with a
+  limit on memory, nothing published); the Deploy workflow has the actions
+  `browser-plan` and `browser`.
+- The AI Manager is told which agents can work in a browser and which site
+  accounts a project has; the project's page says which of its agents can
+  sign in, and warns when none can or when there is no browser service.
+- A task that starts over is told what it already did in the browser, and
+  that a form that was sent stays sent.
+- `GET /api/browser`, `GET` and `POST /api/browser/accounts`, `PATCH` and
+  `DELETE /api/browser/accounts/{id}`, `POST` and
+  `DELETE /api/browser/accounts/{id}/session`, `GET /api/browser/live/{id}`
+  with `/screen` and `/input`, `GET /api/browser/actions`;
+  `siteAccountIds` on a project.
+- CI drives a real Chrome through the gate in the end-to-end checks, builds
+  the image of the browser service and runs the same checks against it in
+  its container.
+
+### Changed
+
+- A model that works through many steps with one tool that shows the same
+  thing each time (a page in a browser) is sent the newest answer whole and
+  the older ones in a line: what it reads does not grow with every step.
+- `pterodactyl-upgrade.sh` shows a setting that signs in somewhere (a key, a
+  token, a token inside an address) without what signs in.
+- A release bundle holds `ws`, which the app speaks to the browser service
+  with.
+
+### Not there
+
+- Solving or passing a CAPTCHA, and anything that hides that the browser is
+  automated: a site puts those checks there to turn automated visitors
+  away.
+- Uploads and downloads of files, pictures of a page for the model, what is
+  inside a frame of another site, sessions of sites that keep the sign-in in
+  the page's storage instead of cookies, and a browser for the projects of
+  users.
+- Tested against a site the tests start on their own machine, with a real
+  Chromium: not against the sites it will be used on.
+
 ## [1.8.0-rc.4] - 2026-11-19
 
 The fourth candidate for 1.8: agents work on your servers over SSH, on one

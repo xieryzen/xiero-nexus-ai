@@ -340,9 +340,30 @@ server.
 - The password or key of a server is encrypted with `SECRET_ENCRYPTION_KEY`,
   like the keys of the providers: with another key in `.env` they cannot be
   read, and the servers have to be registered again.
+- **The browser is off until there is a browser service.** Agents work in a
+  Chromium that runs apart from the app; `BROWSER_URL` in `.env` says where
+  it is. On a Pterodactyl node the Deploy workflow's action `browser-plan`
+  shows what setting it up would do, and `browser` does it: a container
+  next to the server, built on the node, with a limit on memory and nothing
+  published, and `BROWSER_URL` written into the server's `.env`
+  (`scripts/host/README.md`, "The browser"). Elsewhere it is one
+  `docker run` (`scripts/host/browser/README.md`). Run the action again with
+  `--rebuild` every few weeks: that is how its Chromium gets its updates.
+- To have agents sign in to a site: an owner saves the account on the
+  **Browser** page, ticks **Work in a browser** on the agents that should
+  have the tool, and names the account in a project. Where a site asks for
+  a CAPTCHA or a code, the task waits for you; **Sign in by hand** on the
+  Browser page lets you do that once, ahead of the agents, and keeps the
+  session. Save an account with the rights the work needs, and no more: on
+  the site an agent can do whatever that account can.
+- The password of a site account and the session that is kept for it are
+  encrypted with `SECRET_ENCRYPTION_KEY`, like the keys of the providers
+  and of the servers.
 - Going back to 1.7 needs nothing: 1.7 does not read the new columns and
-  tables. An agent that was given the tool "Work on servers" keeps the name
-  of the tool in its row; 1.7 does not know it and leaves it out.
+  tables. An agent that was given the tool "Work on servers" or "Work in a
+  browser" keeps the name of the tool in its row; 1.7 does not know it and
+  leaves it out. The browser service keeps running until it is taken away
+  (`browser-service.sh --remove`); nothing uses it then.
 
 ### Roll back
 
