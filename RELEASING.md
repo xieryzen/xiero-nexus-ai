@@ -328,7 +328,21 @@ server.
   wrote yourself is yours to change. An installation that was set up from
   `scripts/host/workforce.json` gets the new descriptions with the workforce
   action and `--only teams,workflows --update`.
-- Going back to 1.7 needs nothing: 1.7 does not read the new columns.
+- **Servers over SSH are off until you register one.** Nothing changes for
+  an installation that registers none. To have agents work on a server: an
+  owner registers it on the **Servers** page (compare the fingerprint that
+  is shown with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the
+  machine), ticks **Work on servers** on the agents that should have the
+  tool, and names the server in a project. Register an account with the
+  rights the work needs, and no more: an agent can run any command that
+  account can. `SSH_KEEPALIVE_SECONDS` in `.env` sets how often an open
+  connection says that it is still there (default 15).
+- The password or key of a server is encrypted with `SECRET_ENCRYPTION_KEY`,
+  like the keys of the providers: with another key in `.env` they cannot be
+  read, and the servers have to be registered again.
+- Going back to 1.7 needs nothing: 1.7 does not read the new columns and
+  tables. An agent that was given the tool "Work on servers" keeps the name
+  of the tool in its row; 1.7 does not know it and leaves it out.
 
 ### Roll back
 

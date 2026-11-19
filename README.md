@@ -260,6 +260,8 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
     project's workspace (the files the Workspace page shows; at most 400).
   - *Code execution*: run a command, such as tests or a build, on those files
     in the sandbox runner. Needs `SANDBOX_URL`; the command allowlist applies.
+  - *Servers over SSH* (v1.8): run commands on the servers a project names;
+    see [Servers over SSH](#servers-over-ssh-v180).
   - *Web and APIs*: read a web page as text, call an HTTP API, and search the
     web. Search needs `SEARCH_PROVIDER` (Brave, Tavily, or your own SearXNG).
 
@@ -465,7 +467,7 @@ mock. **How well a given model follows a skill was not measured.**
 
 | Role | What it does |
 |---|---|
-| **Owner** | Everything an administrator does, the accounts, and how many tokens each account may use. |
+| **Owner** | Everything an administrator does, the accounts, how many tokens each account may use, and the [servers](#servers-over-ssh-v180) agents work on. |
 | **Administrator** | Providers, models, agents, teams, workflows, skills, the audit log, and everyone's projects, media and usage. Sees the accounts and their tokens, and changes none: no role, no token limit. |
 | **User** | Their own projects, chats, media, knowledge and API keys. Sees no provider and no model, and chooses none ([below](#what-a-user-is-shown-v180)). |
 
@@ -580,11 +582,12 @@ for administrators and owners.
 
 | | A user | An administrator, an owner |
 |---|---|---|
-| Menu | Overview, AI Manager, Agents & Teams, Workflows, Chat, Creative Studio, Knowledge, Usage, Settings | the same, and Providers, Models, Skills, Audit, Observability, Users & Roles |
+| Menu | Overview, AI Manager, Agents & Teams, Workflows, Chat, Creative Studio, Knowledge, Usage, Settings | the same, and Providers, Models, Servers, Skills, Audit, Observability, Users & Roles |
 | Providers and models | not shown: no name, no list, no price | everything |
 | Which model does the work | the app chooses | they choose |
 | Agents, teams, workflows | who they are and what they are for | also what they are told, their models, tools and skills |
 | Skills | not shown | everything |
+| Servers | not shown; no project of a user works on one | an owner registers them; an administrator sees the ones opened to administrators |
 | Usage | their tokens and requests | everyone's, with providers, models and costs |
 | When something fails | that it did not work, and what to do | what the provider answered |
 
@@ -638,6 +641,96 @@ Not hidden:
   workflow, and not which model does it. (The Reel template used to end a
   workflow's description with what a project needs; it no longer does, and
   a user reads an older one without that sentence.)
+
+## Servers over SSH (v1.8.0)
+
+Agents can work on your servers: install, configure, look at logs, restart a
+service. They do it over SSH, on the machines an owner registered and
+nowhere else, and everything they run is written down.
+
+- **One connection, kept open until the work is done.** A run opens one
+  connection to a server with its first command and keeps it: through every
+  task that follows, through the minutes in which a model thinks and nothing
+  is sent, through a command that says nothing for half an hour. Every 15
+  seconds the connection says that it is still there
+  (`SSH_KEEPALIVE_SECONDS`), so that no firewall or router in between forgets
+  it. When the run has ended, however it ended, the connection is closed.
+- **A connection that is lost is opened again.** If the network fails or the
+  server restarts, the next command connects again (three tries, 2 and 5
+  seconds apart), and the agent is told what happened to the command that
+  was running: that it is not known whether it finished.
+- **Only machines an owner registered** (**Servers** page). The app reads the
+  machine's host key first, without signing in, and shows its fingerprint to
+  compare (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the machine
+  prints the same line). Registering accepts that key: from then on the app
+  signs in only to a machine that shows it, and sends nothing to one that
+  shows another. Before anything is saved the app signs in once and runs one
+  harmless command. A password or a private key (with its passphrase) is
+  kept encrypted and is never shown again.
+- **A project names its servers**, up to 5, in the project form or on its
+  page; and an agent has to be given the tool **Work on servers** on the
+  Agents page. An agent without the tool, or in a project that names no
+  server, cannot reach one. An agent names a server by its name: it has no
+  way to give an address. The project's page says which of its agents can
+  work there, and warns when none can. The AI Manager is told which servers
+  the project has and which agents can work on them, and gives those tasks
+  to them.
+- **Every command is written down**: the command, how it ended (exit code,
+  time was up, connection lost, run stopped, not started and why), what it
+  printed (the end of it), how long it took, and the project, task, agent and
+  account it was for. So is every connection: opened, lost, opened again,
+  closed. The Servers page shows the log, by machine; the newest 5,000
+  entries per machine are kept, and they stay when the project or the
+  machine is deleted.
+- **Whose projects may work on a server.** An owner's always. An
+  administrator's when the owner opened the machine to administrators. A
+  user's never, and a user is not shown that there are servers. Whoever tells
+  the agents of a project what to do can have anything done on its servers,
+  so a project is run, changed, scheduled and approved only by an account
+  whose own projects may use every server it names; an administrator who may
+  not can still read it.
+- **What an agent can do there** is whatever the registered account can.
+  Register an account with the rights the work needs, and no more; the notes
+  of a machine ("Runs the panel: leave /var/www alone") are told to the
+  agents.
+
+How a command is run:
+
+- Each command gets a new shell in the account's home directory: bash where
+  the machine has one, else sh. A `cd` or a variable does not carry over to
+  the next command; `cd /path && …` in one command does.
+- Nobody is at a keyboard. There is no terminal, the input is empty, and
+  `DEBIAN_FRONTEND=noninteractive` is set: a program that asks a question
+  gets no answer, so the agent is told to pass `-y`.
+- A command may take 300 seconds, or what the agent asks for, up to an hour
+  (`timeout_seconds`). When the time is up, or the run is stopped, the
+  command and everything it started are ended on the machine (asked to end,
+  and ended two seconds later if they are still there). For longer work the
+  agent is told to start it with `nohup` in the background and look at it
+  with later calls.
+- The agent reads the exit code and what was printed: the first 2,000 and
+  the last 5,000 characters of the output, and 800 and 2,200 of the errors,
+  without the colour codes and progress bars of a terminal.
+- A task that starts over (its model failed, or the app was restarted) is
+  told which commands it has already run, and that they are not undone.
+- Four commands of a run work on one machine at a time; more wait their
+  turn. A machine that opens fewer sessions on a connection (`MaxSessions`
+  of sshd) gets as many as it opens. Where it opens only one, a command
+  whose time is up is ended through its own channel, which sshd passes on
+  from version 7.9, and the agent is told to look whether it still runs.
+
+`GET /api/servers` (administrators: the machines their projects may use),
+`POST /api/servers/host-key`, `POST /api/servers`, `PATCH` and
+`DELETE /api/servers/{id}`, `POST /api/servers/{id}/test` (owners),
+`GET /api/servers/commands` (the log). A project takes `serverIds`.
+
+Not there: file transfer (an agent writes a file with a here-document, up to
+16,000 characters a command), port forwarding, a terminal for programs that
+need one, and signing in through another machine (a jump host). The machine
+needs `sh`, as every Linux, BSD and macOS has; the check when a machine is
+registered says so when it does not. It was tested against an SSH server on
+the machine of the tests, with a password and with a key, **not against a
+server of yours**.
 
 ## Provider adapters
 
@@ -890,7 +983,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
-| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses) | 🚧 release candidate: the first three parts of 1.8 |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged) | 🚧 release candidate: the first four parts of 1.8 |
 
 ---
 
@@ -899,7 +992,8 @@ links in the answers to be right.
 - **Next.js 14** (App Router) + **TypeScript** + **Tailwind CSS**
 - **Drizzle ORM** + **better-sqlite3** (SQLite — single file, no external DB)
 - **otplib** (TOTP) + **qrcode**, **zod** (validation), **unpdf** (reading
-  PDF text)
+  PDF text), **ssh2** (the connections to servers; without its optional
+  compiled parts)
 - Node's built-in `crypto` for AES-256-GCM and scrypt (no native crypto addons)
 - **ffmpeg**, optional and not included: only joining clips needs it
 
@@ -942,7 +1036,7 @@ account you register through the UI becomes the owner.
 
 | Variable | Required | Description |
 |---|---|---|
-| `SECRET_ENCRYPTION_KEY` | **yes (prod)** | base64 of 32 bytes; encrypts provider keys & TOTP secrets at rest. Keep it out of the DB and out of git, and keep it across upgrades. |
+| `SECRET_ENCRYPTION_KEY` | **yes (prod)** | base64 of 32 bytes; encrypts provider keys, TOTP secrets and what signs in to servers at rest. Keep it out of the DB and out of git, and keep it across upgrades. |
 | `COOKIE_SECURE` | no | Session cookies are HTTPS-only in production. Set `false` to allow sign-in over plain HTTP. |
 | `APP_URL` | no | Public address of the site. Links in webhook messages and the file links the API returns are built from it. It also says that the site is served over HTTPS when the proxy in front does not pass `X-Forwarded-Proto`. |
 | `PORT` | no | Listen port (default 3000). Release bundles also accept a panel's `SERVER_PORT`. |
@@ -956,6 +1050,7 @@ account you register through the UI becomes the owner.
 | `MODEL_HEALTH_INTERVAL_MINUTES` | no | How often the app checks that a chat model still answers, in minutes: default 360, between 5 and 10080; `0` = no automatic check. A model that fails is left out of the model lists until a check passes. |
 | `MODEL_HEALTH_RETRY_SECONDS` | no | Before a model that worked is left out for "too many requests", "busy" or no answer, it is asked once more after this many seconds: default 20, at most 300. |
 | `DEFAULT_TOKEN_LIMIT` | no | How many tokens a new account may use in all: default 10000000. An owner changes the limit of an account under Users & Roles; an owner is not limited. |
+| `SSH_KEEPALIVE_SECONDS` | no | How often an open connection to a server says that it is still there: default 15, between 1 and 300. Lower it for a network that forgets a quiet connection sooner. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
@@ -1053,6 +1148,14 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
 - Knowledge: an uploaded file is read as text, by what its own bytes say it
   is, and nothing in it is run. A private collection is not disclosed to
   other users, not even that it exists.
+- Servers over SSH: only an owner registers a machine, and an agent reaches
+  only the machines its project names, by name. The password or private key
+  is stored encrypted and never returned. The machine's host key is read and
+  shown before anything is sent to it, and pinned: a machine that shows
+  another key is not signed in to. A project that names servers is run,
+  changed and scheduled only by an account whose own projects may use them.
+  Every command and every connection is logged, and the log outlives the
+  project and the machine.
 - Security headers set globally; audit log excludes secrets.
 
 **Known limitations (be honest about these):**
@@ -1080,6 +1183,18 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
   and *Run commands* away from agents that read the open web, and use
   `AGENT_HTTP_ALLOWED_HOSTS` where you can.
 - Agent memory and the knowledge base are stored unencrypted in the database.
+- **An agent on a server can do what the registered account can**, and it
+  decides by itself which commands to run. The app does not look at a
+  command before it is sent, and cannot tell a harmful one from a useful
+  one: `rm -rf` is both. What limits an agent is the account you register
+  (not root, where the work does not need it), the servers a project names,
+  and which agents have the tool. Keep that tool away from agents that read
+  the open web. A command is logged as it was written, with a password in
+  it if the agent wrote one there, and what it printed is kept in the log
+  unencrypted.
+- The host key of a machine is trusted from the moment an owner accepts it.
+  The app shows the fingerprint and how to compare it; it cannot know by
+  itself that the first answer came from the right machine.
 
 ## Scripts
 
@@ -1140,16 +1255,19 @@ expressions and time zones, the agent's tool loop, skills (the ZIP reader
 with archives that lie about their size or leave their folder, front matter,
 what an upload is read as, what an agent is told), document reading and
 passage ranking for the knowledge base, the timeline, subtitles and ffmpeg
-command line of a joined video, the API's request and response format, and
-the release tooling (channels, version ordering, release selection,
-checksums).
+command line of a joined video, the API's request and response format,
+servers over SSH (who may use one, host keys and their fingerprints, the
+line a command is sent as and the one that ends it, both run in a real
+shell, what a command printed, what an agent is told), and the release
+tooling (channels, version ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, the end-to-end checks
 below, and the tests of the [host scripts](scripts/host#tests). It then builds
 each release bundle and starts it: the bundle must refuse to run without its
 key, serve pages on a panel-assigned port, sign in (SQLite + migrations), keep
-the session, read a PDF into the knowledge base, have its background worker
-running, and stop within seconds when told to. Last, the bundle of v1.4.0 is
+the session, read a PDF into the knowledge base, sign in to a machine over SSH
+and run a command there, have its background worker running, and stop within
+seconds when told to. Last, the bundle of v1.4.0 is
 upgraded to the new one on a made-up Pterodactyl host.
 
 The provider/model/gateway/streaming paths **and** the full plan → delegate →
@@ -1182,7 +1300,15 @@ clips with a voice-over and subtitles; runs that go on without a page, are
 started by a schedule and are picked up after a restart; notifications and
 signed webhooks; and the API with its keys and limits. From v1.6.0: the
 record of every attempt, an agent that keeps its tools when its model is
-limited, and a review by the reviewer's second model. At the end the server
+limited, and a review by the reviewer's second model. From v1.8.0: servers
+over SSH, against a real SSH server on the machine of the tests
+([`scripts/e2e/mock-ssh.mjs`](scripts/e2e/mock-ssh.mjs)) that runs what it is
+told with `sh` in a folder of its own: one connection for a whole run, kept
+open while a firewall of the test cuts every connection that says nothing
+for three seconds; a connection that is cut and opened again; a command
+whose time is up and a run that is stopped, with nothing left running; a
+machine that shows another host key, takes another password, or does not
+answer; and who may register, see, use and run what. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with
