@@ -1191,6 +1191,105 @@ export const serverCommands = sqliteTable(
   }),
 );
 
+/**
+ * An account on a web site that agents may sign in with, in the browser
+ * they work in (src/lib/browser). An owner saves it; a project names the
+ * ones it works with. The app fills in the password; an agent never reads
+ * it. The session a sign-in left (the site's cookies) is kept with the
+ * account, so that the next run is let in without signing in again.
+ */
+export const siteAccounts = sqliteTable(
+  "site_accounts",
+  {
+    id: id(),
+    // How a project and an agent name it: lower-case letters, digits, ".", "_", "-".
+    name: text("name").notNull(),
+    // The page where one signs in. The site is its host, with everything under it.
+    siteUrl: text("site_url").notNull(),
+    username: text("username").notNull(),
+    // AES-256-GCM ciphertext of the password. Never leaves the server.
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    // The same of the site's cookies as the last sign-in left them (JSON).
+    sessionCiphertext: text("session_ciphertext"),
+    sessionSavedAt: integer("session_saved_at", { mode: "timestamp_ms" }),
+    sessionCookies: integer("session_cookies").notNull().default(0),
+    access: text("access", { enum: SERVER_ACCESS }).notNull().default("owners"),
+    status: text("status", { enum: ["enabled", "disabled"] })
+      .notNull()
+      .default("enabled"),
+    // What the owner says about it: agents are told (what it is for, what to leave alone).
+    notes: text("notes"),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    // What stood in the way of the last sign-in, when something did.
+    lastProblem: text("last_problem"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ byName: uniqueIndex("site_accounts_name_unique").on(t.name) }),
+);
+
+/** The site accounts a project works with. */
+export const projectSiteAccounts = sqliteTable(
+  "project_site_accounts",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => siteAccounts.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    unique: uniqueIndex("project_site_accounts_unique").on(t.projectId, t.accountId),
+    byAccount: index("project_site_accounts_account_idx").on(t.accountId),
+  }),
+);
+
+export const BROWSER_ACTION_STATES = ["ok", "failed", "refused", "waited", "timeout", "cancelled"] as const;
+
+/**
+ * What agents did in the browser: every page they opened and everything
+ * they clicked, typed and chose, every sign-in, and every time a page was
+ * handed to a person. A row stays when its project or its account is
+ * deleted. What was typed into a password field is never in it.
+ */
+export const browserActions = sqliteTable(
+  "browser_actions",
+  {
+    id: id(),
+    // open, click, type, select, press, back: an agent's; sign_in; person: a page handed to a person; session: an owner's sign-in by hand.
+    kind: text("kind").notNull(),
+    accountId: text("account_id").references(() => siteAccounts.id, { onDelete: "set null" }),
+    accountName: text("account_name"),
+    projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    projectTitle: text("project_title"),
+    runId: text("run_id"),
+    // No reference: the tasks of a project are replaced by its next run.
+    taskId: text("task_id"),
+    taskTitle: text("task_title"),
+    agentName: text("agent_name"),
+    // The account the work was done for (the project's), or the owner who signed in by hand.
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    // The address of the page, without what follows "?".
+    url: text("url"),
+    // What was acted on, and with what: the button, the field and the text.
+    detail: text("detail"),
+    status: text("status", { enum: BROWSER_ACTION_STATES }).notNull(),
+    // What was said about how it ended.
+    note: text("note"),
+    durationMs: integer("duration_ms"),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    byTime: index("browser_actions_time_idx").on(t.createdAt),
+    byTask: index("browser_actions_task_idx").on(t.taskId),
+    byRun: index("browser_actions_run_idx").on(t.runId),
+    byAccount: index("browser_actions_account_idx").on(t.accountId, t.createdAt),
+  }),
+);
+
 // Convenience exported types
 export type User = typeof users.$inferSelect;
 export type Provider = typeof providers.$inferSelect;
@@ -1224,5 +1323,7 @@ export type Skill = typeof skills.$inferSelect;
 export type SkillFile = typeof skillFiles.$inferSelect;
 export type Server = typeof servers.$inferSelect;
 export type ServerCommand = typeof serverCommands.$inferSelect;
+export type SiteAccount = typeof siteAccounts.$inferSelect;
+export type BrowserAction = typeof browserActions.$inferSelect;
 
 export const _sqlKeepalive = sql``;

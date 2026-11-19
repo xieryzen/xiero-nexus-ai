@@ -10,6 +10,7 @@ not part of a release bundle and the app never runs them.
 | [`pterodactyl-upgrade.sh`](pterodactyl-upgrade.sh) | Upgrade the app on one server to a new release, with a backup, and go back by itself if the new version does not come up. |
 | [`nginx-site.sh`](nginx-site.sh) | Give the app its public address: a site in the node's nginx with a certificate from Let's Encrypt, without touching the other sites. |
 | [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: providers that take no key, models, agents, teams and workflows. |
+| [`browser-service.sh`](browser-service.sh), [`browser/`](browser) | The browser agents work in: a Chromium in a container of its own next to the server, behind a token, and `BROWSER_URL` in the server's `.env`. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
 | [`over-ssh.sh`](over-ssh.sh) | Run one of them on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
@@ -32,6 +33,12 @@ Get them on the node:
 ```bash
 for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh node-check.sh workforce.sh workforce.py workforce.json; do
   curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/${name}"
+done
+# The browser service: its script, and what its image is built from.
+curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/browser-service.sh"
+mkdir -p browser
+for name in Dockerfile gate.mjs policy.json; do
+  curl -fsSL -o "browser/${name}" "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/browser/${name}"
 done
 ```
 
@@ -390,10 +397,12 @@ It adds what is missing and leaves the rest:
 - Nothing is ever deleted. What the file does not name is not touched.
 - A tool the server cannot run (`run_command` without a sandbox runner,
   `web_search` without a search service) is left out of an agent, and said.
-- The tool an agent works on servers with (`run_on_server`, from 1.8) is
-  given by an owner on the agent's page. An agent that has it keeps it,
-  also with `--update`: the file can add that tool and never takes it away.
-  Which server an agent works on is not in the file: a project names it.
+- The tools an agent works on servers and in a browser with
+  (`run_on_server`, `use_browser`, from 1.8) are given by an owner on the
+  agent's page. An agent that has one keeps it, also with `--update`: the
+  file can add such a tool and never takes it away. Which server an agent
+  works on, and which site account it signs in with, is not in the file: a
+  project names them.
 
 **An account** the app is to have:
 
@@ -625,6 +634,63 @@ this was taken from are
 [awesome-free-ai-coding](https://github.com/mvalentsev/awesome-free-ai-coding),
 read on 2026-11-15.
 
+## The browser: `browser-service.sh`
+
+From version 1.8 agents can work in a web browser: open sites, read them,
+and sign in with accounts an owner saved (the README of the app, "The
+browser"). The browser is a Chromium that runs **apart from the app**; this
+script sets it up next to a Pterodactyl server.
+
+```bash
+sudo bash browser-service.sh --server 0a11ce00 --dry-run   # the plan; changes nothing
+sudo bash browser-service.sh --server 0a11ce00
+```
+
+What it does, in this order:
+
+1. finds the server, and the Docker network its container is on;
+2. shows the plan and asks;
+3. builds the image on this machine from [`browser/`](browser): Debian's
+   Chromium behind the gate (`gate.mjs`), nothing else;
+4. starts it as a container **on the server's network**, at an address of its
+   own near the end of that network (it stays the same when the container is
+   made anew), with 1 GB of memory and 1.5 processors at most, no rights of
+   root, a read-only file system, and **nothing published** to the machine
+   or to the outside;
+5. checks that Chromium runs in it, that it lets nobody in without its
+   token, and that the server's container reaches it. When one of these
+   fails, it stops there, and the server is not touched;
+6. writes `BROWSER_URL` into the server's `.env` and starts the server again.
+   That part is done by `pterodactyl-upgrade.sh` (the installed version put
+   in place again, or `--version`): with its backup, and back to how it was
+   when the app does not come up.
+
+The token that lets the app in is made on the node and kept in
+`/root/xiero-nexus-browser/<server>/`, which only root reads. It is never
+printed, and `pterodactyl-upgrade.sh` shows a setting that holds one without
+it.
+
+- `--rebuild` builds the image anew from the newest packages. **That is how
+  this Chromium gets its security updates**: run it every few weeks.
+- `--remove` takes the container away and empties `BROWSER_URL`.
+- `--memory`, `--cpus` change what the browser may take of the machine;
+  `--allow-private a.example,10.0.0.5` lets pages reach a site of your own
+  on a private network (they reach none otherwise).
+- `--container-only` leaves the server alone and writes the line for its
+  `.env` to a file only root reads.
+
+The other servers of the node are on the same Docker network, so their
+containers can reach the service's port. They get nothing from it without
+the token. Pages the browser opens cannot reach them either: the gate
+refuses every address on a private network.
+
+It was tested on a made-up host with stand-ins for Docker and for the
+upgrade script ([`test/browser.sh`](test/browser.sh)); the image is built
+and run with a real Docker in CI ([`test/browser-container.sh`](test/browser-container.sh)),
+where the end-to-end checks of the browser run against it. **On a real
+Pterodactyl node it had not run when this was written**: do the dry run
+first.
+
 ## Tidying up: `disk-report.sh`
 
 ```bash
@@ -707,6 +773,11 @@ bash scripts/host/over-ssh.sh site
 # The workforce of workforce.json:
 bash scripts/host/over-ssh.sh workforce-plan            # changes nothing
 bash scripts/host/over-ssh.sh workforce -- --test
+
+# The browser agents work in:
+bash scripts/host/over-ssh.sh browser-plan              # changes nothing
+bash scripts/host/over-ssh.sh browser
+bash scripts/host/over-ssh.sh browser -- --rebuild      # a newer Chromium
 ```
 
 `check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
@@ -746,7 +817,7 @@ The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
 `install-plan`, `install`, `site-plan`, `site`, `workforce-plan`, `workforce`,
-`disk-report`, `last-log` or `input-key`. For `workforce-plan` and
+`browser-plan`, `browser`, `disk-report`, `last-log` or `input-key`. For `workforce-plan` and
 `workforce`, the workflow runs the `workforce.json` of the branch it is
 started on; more options, such as `--update` or `--test`, go in **options**.
 
@@ -844,6 +915,15 @@ bash scripts/host/test/site.sh
 # with the mock providers of the end-to-end tests, puts the committed
 # workforce.json into it, and runs both of its workflows in a project.
 bash scripts/host/test/workforce.sh
+
+# The browser service on a made-up host (a few seconds): stand-ins for docker
+# and for pterodactyl-upgrade.sh.
+bash scripts/host/test/browser.sh
+
+# The browser service in its container (a few minutes, after "npm run
+# build"; needs Docker): builds the image, starts it with its limits, and
+# runs the end-to-end checks of the browser against it.
+bash scripts/host/test/browser-container.sh
 ```
 
 `test/fake-wings.mjs` stands in for Wings and for the server's container: it

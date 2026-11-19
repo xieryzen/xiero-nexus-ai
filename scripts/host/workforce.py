@@ -126,13 +126,15 @@ CAPABILITIES = [
     "image_generation", "video_generation", "speech_generation", "embeddings", "streaming",
 ]
 NON_CHAT = ["image_generation", "video_generation", "speech_generation", "embeddings"]
-# The tool an agent works on servers with (from version 1.8). An owner gives
-# it on the agent's page to the agents that are to have it: an agent that has
-# it keeps it, whether or not the file names it.
+# The tools an agent works on servers and in a browser with (from version
+# 1.8). An owner gives them on the agent's page to the agents that are to have
+# them: an agent that has one keeps it, whether or not the file names it.
 SERVER_TOOL = "run_on_server"
+BROWSER_TOOL = "use_browser"
+GIVEN_BY_HAND = [SERVER_TOOL, BROWSER_TOOL]
 TOOLS = [
     "list_files", "read_file", "write_file", "edit_file", "delete_file",
-    "run_command", "fetch_url", "http_request", "web_search", SERVER_TOOL,
+    "run_command", "fetch_url", "http_request", "web_search", SERVER_TOOL, BROWSER_TOOL,
 ]
 KINDS = ["text", "image", "video", "audio", "render"]
 ADAPTERS = ["openai-compatible", "anthropic", "gemini", "custom-http"]
@@ -1680,10 +1682,10 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
                 left.setdefault(tool, []).append(wanted["name"])
 
         def body(wanted=wanted, tools=tools, have=None, have_tools=None):
-            # Working on servers is given by hand, on the agent's page: an
-            # agent that has that tool keeps it. The file adds it and does not
-            # take it away.
-            kept = [SERVER_TOOL] if SERVER_TOOL in (have_tools or []) and SERVER_TOOL not in tools else []
+            # Working on servers and in a browser is given by hand, on the
+            # agent's page: an agent that has such a tool keeps it. The file
+            # adds it and does not take it away.
+            kept = [tool for tool in GIVEN_BY_HAND if tool in (have_tools or []) and tool not in tools]
             made = {
                 "name": wanted["name"], "role": wanted["role"], "instructions": wanted["instructions"],
                 "primaryModelRowId": slots[wanted["primary"]]["id"],
@@ -1749,6 +1751,7 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             "a sandbox runner (SANDBOX_URL)" if tool == "run_command"
             else "a search service (SEARCH_PROVIDER)" if tool == "web_search"
             else "version 1.8 of the app" if tool == SERVER_TOOL
+            else "a browser service (BROWSER_URL), and version 1.8 of the app" if tool == BROWSER_TOOL
             else "something this server lacks"
         )
         plan.notes.append("%s needs %s, which this server does not have: left out for %s." % (tool, need, ", ".join(who)))

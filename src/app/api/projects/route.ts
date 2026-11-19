@@ -15,6 +15,7 @@ import { projectCreateSchema } from "@/lib/validation";
 import { isAdminRole, seesSetup } from "@/lib/roles";
 import { projectFor } from "@/lib/for-viewer";
 import { appChoice } from "@/lib/model-choice";
+import { checkedAccountIds, setProjectAccounts } from "@/lib/browser/accounts";
 import { checkedServerIds, setProjectServers } from "@/lib/ssh/servers";
 
 export const dynamic = "force-dynamic";
@@ -132,6 +133,7 @@ export const POST = handle(async (req) => {
 
   // The machines its agents may work on: ones the projects of this account may use.
   const serverIds = checkedServerIds(user, body.serverIds);
+  const siteAccountIds = checkedAccountIds(user, body.siteAccountIds);
 
   const project = db
     .insert(projects)
@@ -157,13 +159,18 @@ export const POST = handle(async (req) => {
     .get();
 
   if (serverIds.length > 0) setProjectServers(project.id, serverIds);
+  if (siteAccountIds.length > 0) setProjectAccounts(project.id, siteAccountIds);
 
   audit({
     actorUserId: user.id,
     action: "project.create",
     targetType: "project",
     targetId: project.id,
-    metadata: { title: project.title, ...(serverIds.length > 0 ? { servers: serverIds.length } : {}) },
+    metadata: {
+      title: project.title,
+      ...(serverIds.length > 0 ? { servers: serverIds.length } : {}),
+      ...(siteAccountIds.length > 0 ? { siteAccounts: siteAccountIds.length } : {}),
+    },
     ip,
     userAgent,
   });

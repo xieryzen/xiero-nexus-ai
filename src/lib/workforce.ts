@@ -13,6 +13,7 @@ import {
   type Workflow,
 } from "@/db/schema";
 import { parseToolNames } from "./agent/catalog";
+import { accountNamesByProject } from "./browser/accounts";
 import { serverNamesByProject } from "./ssh/servers";
 import { parseMediaOptions, type MediaOptions, type TaskKind } from "./creative/prompt";
 
@@ -155,6 +156,8 @@ export function serializeProject(p: Project, opts: { withTasks?: boolean } = {})
     memory: p.memory,
     // The machines its agents may work on over SSH, by name.
     servers: serverNamesByProject([p.id]).get(p.id) ?? [],
+    // The site accounts its agents may sign in with, by name.
+    siteAccounts: accountNamesByProject([p.id]).get(p.id) ?? [],
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     startedAt: p.startedAt,

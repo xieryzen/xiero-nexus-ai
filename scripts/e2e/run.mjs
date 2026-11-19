@@ -14,10 +14,21 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers,browser
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
 //                                                 to over SSH (4012, 4013)
+//   E2E_SITE_PORT, E2E_GATE_PORT                  ports of the site agents browse
+//                                                 and of the browser service
+//                                                 (4014, 4015)
+//   E2E_CHROME=<program>                          the Chromium the browser
+//                                                 service starts. Without it:
+//                                                 the one of E2E_BROWSER, or
+//                                                 one that is installed here
+//   E2E_REQUIRE_CHROME=1                          stop when there is none
+//   E2E_BROWSER_URL=<address>                     a browser service that runs
+//                                                 already, in place of one
+//                                                 started here (as BROWSER_URL)
 //   KEEP=1                                        keep the temporary folder
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
 //   E2E_REQUIRE_FFMPEG=1                          stop when there is no usable
@@ -37,7 +48,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
@@ -50,6 +61,9 @@ const ports = {
   // The machine agents sign in to over SSH (mock-ssh.mjs), and what the checks steer it with.
   ssh: Number(process.env.E2E_SSH_PORT ?? 4012),
   sshcontrol: Number(process.env.E2E_SSHCONTROL_PORT ?? 4013),
+  // The site agents browse and sign in to (mock-site.mjs), and the browser service they do it with.
+  site: Number(process.env.E2E_SITE_PORT ?? 4014),
+  gate: Number(process.env.E2E_GATE_PORT ?? 4015),
 };
 
 function fail(message) {
@@ -115,6 +129,8 @@ async function ready(proc, url, seconds = 60) {
 if (!existsSync(join(root, ".next", "BUILD_ID"))) fail("there is no build to test. Run `npm run build` first.");
 for (const [name, port] of Object.entries(ports)) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail(`the ${name} port is not a port number.`);
+  // A browser service that runs already has its own port.
+  if (name === "gate" && process.env.E2E_BROWSER_URL?.trim()) continue;
   if (!(await portIsFree(port))) {
     fail(`port ${port} is in use. Choose another with E2E_${name.toUpperCase()}_PORT=<port>.`);
   }
@@ -178,6 +194,73 @@ running.push(mock);
 const sshMock = start("mock ssh server", [join(here, "mock-ssh.mjs"), String(ports.ssh), String(ports.sshcontrol)], process.env);
 running.push(sshMock);
 
+// A site to browse and sign in to, and the browser service agents do it
+// with: the gate of scripts/host/browser in front of a real Chromium. The
+// Chromium is the one E2E_CHROME names, else the one of @sparticuz/chromium
+// in the folder of E2E_BROWSER, else one that is installed here. Without
+// any, the browser is not checked (and that is said); E2E_REQUIRE_CHROME=1
+// makes that an error.
+const site = start("mock site", [join(here, "mock-site.mjs"), String(ports.site)], process.env);
+running.push(site);
+const siteUrl = `http://${HOST}:${ports.site}`;
+
+async function findChromium() {
+  const named = process.env.E2E_CHROME?.trim();
+  if (named) return { bin: named, headless: process.env.E2E_CHROME_HEADLESS?.trim() || "new", env: {} };
+  const modules = process.env.E2E_BROWSER?.trim();
+  if (modules) {
+    try {
+      // The Chromium build is chosen by the Lambda runtime it is told about.
+      process.env.AWS_LAMBDA_JS_RUNTIME ??= `nodejs${process.versions.node.split(".")[0]}.x`;
+      const resolveFrom = createRequire(join(modules, "package.json"));
+      const mod = await import(pathToFileURL(resolveFrom.resolve("@sparticuz/chromium")).href);
+      const chromium = mod.default ?? mod;
+      const bin = await chromium.executablePath();
+      // It brings its own libraries and fonts, and says where they are in the environment.
+      return { bin, headless: "shell", env: { LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH ?? "", FONTCONFIG_PATH: process.env.FONTCONFIG_PATH ?? "" } };
+    } catch {
+      // Not installed there: one of this machine, if there is one.
+    }
+  }
+  const { findChrome } = await import(pathToFileURL(join(root, "scripts", "host", "browser", "gate.mjs")).href);
+  const bin = findChrome({ PATH: process.env.PATH });
+  return bin ? { bin, headless: "new", env: {} } : null;
+}
+// E2E_BROWSER_URL names a browser service that runs already, as BROWSER_URL
+// does for the app: the checks then run against that one (the service in
+// its container, in CI). It has to let pages reach this machine.
+const external = process.env.E2E_BROWSER_URL?.trim() ? new URL(process.env.E2E_BROWSER_URL.trim()) : null;
+const chromium = external ? null : await findChromium();
+if (!chromium && !external && process.env.E2E_REQUIRE_CHROME === "1") {
+  console.error("test:e2e: E2E_REQUIRE_CHROME is set, and no Chromium was found. Name one in E2E_CHROME.");
+  await finish(1);
+}
+console.log(
+  external
+    ? `test:e2e: the browser agents work in is checked with the service at ${external.host}.`
+    : chromium
+      ? `test:e2e: the browser agents work in is checked with ${chromium.bin}.`
+      : "test:e2e: no Chromium here: the browser agents work in is checked without one (what the app says when there is none).",
+);
+const gateToken = external ? (external.searchParams.get("token") ?? "") : randomBytes(24).toString("hex");
+const gateUrl = external ? external.origin : `http://${HOST}:${ports.gate}`;
+const gate = chromium
+  ? start("browser service", [join(root, "scripts", "host", "browser", "gate.mjs")], {
+      ...process.env,
+      ...chromium.env,
+      PORT: String(ports.gate),
+      HOST,
+      BROWSER_TOKEN: gateToken,
+      CHROME_BIN: chromium.bin,
+      CHROME_HEADLESS: chromium.headless,
+      // Chromium's own sandbox needs rights a test machine or a container does not give.
+      CHROME_NO_SANDBOX: "1",
+      // The site of the checks is on this machine, under both of its names.
+      ALLOW_PRIVATE_HOSTS: `${HOST},localhost`,
+    })
+  : null;
+if (gate) running.push(gate);
+
 // Everything the app reads is set here, so that a developer's own .env
 // (which Next.js loads too, without replacing what is already set) has no say.
 const appEnv = {
@@ -224,6 +307,13 @@ const appEnv = {
   // An open connection to a machine says every second that it is still
   // there, so that the checks can cut one that says nothing for a few.
   SSH_KEEPALIVE_SECONDS: "1",
+  // The browser service, when there is a Chromium to check with.
+  BROWSER_URL: external ? external.toString() : gate ? `${gateUrl}/?token=${gateToken}` : "",
+  BROWSER_MAX_PAGES: "",
+  BROWSER_WAIT_MINUTES: "",
+  // A page that waits for a person waits this many seconds here, not minutes:
+  // the checks play the person at once, and look at what happens when nobody comes.
+  BROWSER_WAIT_SECONDS: "20",
 };
 const startApp = () =>
   start("app", [join(root, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(ports.app), "-H", HOST], appEnv);
@@ -236,6 +326,8 @@ const sshControlUrl = `http://${HOST}:${ports.sshcontrol}`;
 for (const [proc, url] of [
   [mock, `${mockUrl}/__log`],
   [sshMock, `${sshControlUrl}/__state`],
+  [site, `${siteUrl}/__state`],
+  ...(gate ? [[gate, `${gateUrl}/healthz`]] : []),
   [app, `${appUrl}/login`],
 ]) {
   if (!(await ready(proc, url))) {
@@ -251,6 +343,10 @@ const checkEnv = {
   E2E_CDN_URL: `http://${HOST}:${ports.cdn}`,
   E2E_SSH_PORT: String(ports.ssh),
   E2E_SSH_CONTROL_URL: sshControlUrl,
+  E2E_SITE_URL: siteUrl,
+  // Empty when there is no Chromium: the checks then look at what the app says without a browser.
+  E2E_GATE_URL: gate || external ? gateUrl : "",
+  E2E_GATE_TOKEN: gate || external ? gateToken : "",
   E2E_MEDIA_DIR: join(folder, "media"),
   // Some checks change the database directly: to make a schedule due now,
   // and to leave a run the way a stopped server would.

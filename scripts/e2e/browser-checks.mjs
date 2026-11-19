@@ -517,7 +517,7 @@ try {
   // ─── A phone ───────────────────────────────────────────────────────────────
   begin("Browser: on a phone");
   await page.setViewport({ width: 390, height: 780, isMobile: true, hasTouch: true });
-  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", "/dashboard/servers", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
+  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", "/dashboard/servers", "/dashboard/browser", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
     await open(path);
     const overflow = await sideways();
     check(`${path.replace(/[0-9a-f-]{36}/, "<id>")} does not scroll sideways`, overflow <= 1, `${overflow}px`);
@@ -541,6 +541,7 @@ try {
     "/dashboard/providers",
     "/dashboard/models",
     "/dashboard/servers",
+    "/dashboard/browser",
     "/dashboard/usage",
     "/dashboard/observability",
     "/dashboard/audit",
@@ -683,8 +684,8 @@ try {
   check("a user signs in", viewerMade.status === 201 && page.url().endsWith("/dashboard"), [viewerMade.status, page.url()]);
   const menu = await page.$$eval("nav a[href^='/dashboard']", (links) => [...new Set(links.map((a) => a.getAttribute("href")))]);
   check(
-    "the menu of a user has no Providers, Models, Servers, Skills, Users, Audit and Observability",
-    ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
+    "the menu of a user has no Providers, Models, Servers, Browser, Skills, Users, Audit and Observability",
+    ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/browser", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
       ["/dashboard/projects", "/dashboard/chat", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
     menu,
   );
@@ -694,6 +695,10 @@ try {
   check("the Models page sends a user back to the overview", page.url().endsWith("/dashboard"), page.url());
   await open("/dashboard/servers");
   check("  and so does the Servers page", page.url().endsWith("/dashboard"), page.url());
+  await open("/dashboard/browser");
+  check("  and the Browser page", page.url().endsWith("/dashboard"), page.url());
+  await open("/dashboard/browser/live/00000000-0000-4000-8000-000000000000");
+  check("  and a page of the browser that waits for a person", page.url().endsWith("/dashboard"), page.url());
 
   await open("/dashboard/chat");
   check("Chat has no model to choose", (await page.$("main select")) === null && (await page.$("textarea[placeholder^='Message']")) !== null, null);
@@ -924,6 +929,174 @@ try {
   check("  what was done on it stays in the log", (await logRows()).some((row) => row.includes("browser-box") && row.includes("echo reached")), (await logRows()).slice(0, 3));
   eq("  the project that named it has the other machine left", ((await api("/api/projects")).data?.projects ?? []).find((p) => p.title === "Browser ops")?.servers?.map((s) => s.name), ["vps-1"]);
   check("the Servers page holds nothing wider than the screen", (await sideways()) <= 0, await sideways());
+
+  // ─── The browser agents work in ───────────────────────────────────────────
+  begin("Browser: the browser agents work in");
+  const SITE = process.env.E2E_SITE_URL ?? "http://127.0.0.1:4014";
+  const siteState = async (path = "/__state") => (await fetch(`${SITE}${path}`)).json();
+  const account = (name) => `[data-account="${name}"]`;
+  const inAccount = (name) => page.$eval(account(name), (el) => el.closest("section")?.innerText ?? "").catch(() => "");
+  const clickInAccount = (name, label) =>
+    page.evaluate(
+      (selector, wanted) => {
+        const root = document.querySelector(selector)?.closest("section");
+        const button = [...(root?.querySelectorAll("button") ?? [])].find((b) => (b.innerText.trim() === wanted || b.getAttribute("aria-label") === wanted) && !b.disabled);
+        button?.scrollIntoView({ block: "center" });
+        button?.click();
+        return Boolean(button);
+      },
+      account(name),
+      label,
+    );
+  /** Click a point of the page that is shown in the live view, as a person does: on the picture. */
+  const clickOnPicture = async (x, y) => {
+    const box = await page.$eval('[data-testid="live-screen"]', (img) => {
+      img.scrollIntoView({ block: "center" });
+      const r = img.getBoundingClientRect();
+      return { left: r.left, top: r.top, width: r.width, height: r.height };
+    });
+    await page.mouse.click(box.left + (x / 1280) * box.width, box.top + (y / 800) * box.height);
+  };
+  const waitFor = async (read, done, tries = 40) => {
+    let value;
+    for (let i = 0; i < tries; i++) {
+      value = await read();
+      if (done(value)) return value;
+      await sleep(250);
+    }
+    return value;
+  };
+
+  if (!process.env.E2E_GATE_URL) {
+    await open("/dashboard/browser");
+    check("without a browser service the page says what is missing", await has("No browser service is set up on this server"), null);
+  } else {
+    check("the owner's menu has Browser", (await page.$('a[href="/dashboard/browser"]')) !== null, null);
+    await siteState("/__reset");
+    await open("/dashboard/browser");
+    const service = await page.$eval('[data-testid="browser-service"]', (el) => el.innerText);
+    check("the page says how the browser service is: that it answers, what it is, and that pages cannot reach private networks", service.includes("answers") && /Chrom/.test(service) && service.includes("Pages cannot reach private networks") && service.includes("It tells sites what it is"), service);
+    check("  and nothing that signs in to it", !(await text()).includes(process.env.E2E_GATE_TOKEN ?? "no-token") && !/token=/.test(await text()), null);
+    const shopText = await inAccount("shop");
+    check("the accounts that are saved: who signs in where, whose projects may use it, and whether a session is kept", shopText.includes("budi on 127.0.0.1") && shopText.includes(`${SITE}/login`) && shopText.includes("Owners only") && shopText.includes("session kept") && shopText.includes("The example shop."), shopText.slice(0, 300));
+    check("  and no password", !(await text()).includes("rahasia-budi-123"), null);
+    check("it says what is a person's, and that a session is kept", (await has("is yours to do")) && (await has("The app does not solve one and does not get around one")) && (await has("The session a sign-in left is kept with the account")) && (await has("the app types the password")), null);
+    const browserLog = () => page.$$eval('[data-testid="browser-log"] li', (rows) => rows.map((li) => li.innerText.replace(/\s+/g, " ")));
+    check("the log lists what the runs before did, with the project, the task and the agent", (await browserLog()).some((row) => row.includes("signed in") && row.includes("by Surfer") && row.includes("for admin")) && (await browserLog()).some((row) => row.includes("a person")), (await browserLog()).slice(0, 4));
+    await snap("browser");
+
+    await clickText(/New account/);
+    await page.waitForSelector("#ba-name");
+    await fill("#ba-name", "browser-shop");
+    await fill("#ba-url", `${SITE}/captcha-login`);
+    await fill("#ba-user", "sari");
+    await fill("#ba-password", "sari-pass-456");
+    await fill("#ba-notes", "The mock of the checks.");
+    await snap("browser-account-form");
+    await clickText(/Save account/);
+    check("an owner saves an account", await waitText('"browser-shop" is saved.'), (await text()).slice(0, 300));
+    const madeText = await inAccount("browser-shop");
+    check("  it is in the list, switched on, for owners only, without a session", madeText.includes("sari on 127.0.0.1") && madeText.includes("on") && madeText.includes("Owners only") && madeText.includes("no session kept") && madeText.includes("The mock of the checks.") && madeText.includes("no project names it"), madeText.slice(0, 300));
+    check("  the password is not on the page", !(await text()).includes("sari-pass-456") && (await page.$("#ba-password")) === null, null);
+
+    // The owner signs in by hand: the app fills in the form, the owner ticks the box and sends it.
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }).catch(() => undefined), clickInAccount("browser-shop", "Sign in by hand")]);
+    check("Sign in by hand opens the site on a page of its own", /\/dashboard\/browser\/live\/[0-9a-f-]{36}$/.test(page.url()), page.url());
+    await page.waitForSelector('[data-testid="live-screen"]', { timeout: 20_000 }).catch(() => undefined);
+    check("  the app says what it did and what is left for the owner", await waitText("The app filled in the form. The site asks for a CAPTCHA (reCAPTCHA): do that here, send the form, and keep the session when you are in."), (await text()).slice(0, 500));
+    check("  the page is shown as a picture, with where it is", (await page.$('[data-testid="live-screen"]')) !== null && (await waitFor(() => page.$eval('[data-testid="live-url"]', (el) => el.innerText).catch(() => ""), (url) => url.includes("/captcha-login"))).includes(`${SITE}/captcha-login`), null);
+    await sleep(1200);
+    await snap("browser-live-owner");
+    await clickOnPicture(66, 326);
+    const ticked = await waitFor(siteState, (s) => s.passed.includes("captcha"));
+    eq("a click on the picture is a click on the page: the box of the CAPTCHA is ticked", ticked.passed, ["captcha"]);
+    await clickOnPicture(100, 420);
+    const signedIn = await waitFor(siteState, (s) => s.signIns.length === 1);
+    eq("  and the form is sent: signed in", signedIn.signIns, [{ user: "sari", from: "/captcha-login" }]);
+    check("  the picture follows: the page behind the form", (await waitFor(() => page.$eval('[data-testid="live-url"]', (el) => el.innerText).catch(() => ""), (url) => url.endsWith("/account"))).endsWith("/account"), null);
+    await clickText(/Keep the session/);
+    check("the owner keeps the session", await waitText("The session is kept with the account: the next run is let in without signing in again."), (await text()).slice(0, 300));
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }).catch(() => undefined), clickText(/Back to the Browser page/)]);
+    await page.waitForSelector(account("browser-shop"));
+    check("  the account says so", (await waitFor(() => inAccount("browser-shop"), (t) => t.includes("session kept") && !t.includes("no session kept"))).includes("1 cookie"), (await inAccount("browser-shop")).slice(0, 300));
+
+    // A project that signs in with it, from the form to a page that waits for a person.
+    const surfer = ((await api("/api/agents")).data?.agents ?? []).find((a) => a.name === "Surfer");
+    const waitingFlow = (await api("/api/workflows", { method: "POST", body: JSON.stringify({ name: "Browser: waiting", steps: [{ title: "Tool: browser waiting", objective: `BROWSER: ${JSON.stringify({ action: "sign_in", account: "browser-shop" })}\nBROWSER: ${JSON.stringify({ action: "ask_person", reason: "Look whether the note is right." })}`, role: "Surfer" }] }) })).data?.workflow?.id;
+    await open("/dashboard/projects");
+    if (!(await page.$("#p-title"))) await clickText(/New project/);
+    await page.waitForSelector("#p-title");
+    const accountChoices = await page.$$eval("#p-accounts li", (items) => items.map((li) => li.innerText.replace(/\s+/g, " ")));
+    check("a new project of the owner can name site accounts", accountChoices.some((c) => c.startsWith("browser-shop") && c.includes("sari on 127.0.0.1")) && accountChoices.some((c) => c.startsWith("shop ")), accountChoices);
+    check("  and says what naming one means", (await page.$eval("#p-accounts", (el) => el.innerText)).includes("an agent is never shown it"), null);
+    await fill("#p-title", "Browser web");
+    await fill("#p-goal", "Look at the account.");
+    const waitingOption = await page.$$eval("#p-wf option", (options) => options.find((o) => o.textContent === "Browser: waiting")?.value);
+    if (waitingOption) await page.select("#p-wf", waitingOption);
+    await page.click("#p-account-browser-shop");
+    await snap("project-form-accounts");
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }), clickText(/Create project/)]);
+    check("  it is made", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && Boolean(waitingOption) && Boolean(surfer), [page.url(), waitingOption]);
+    const projectUrl = page.url();
+    const tickedAccounts = await page.$$eval("#project-accounts input[type=checkbox]", (boxes) => boxes.filter((b) => b.checked).map((b) => b.id));
+    eq("  its page shows which accounts it signs in with", tickedAccounts, ["pa-account-browser-shop"]);
+    eq("  and which of its agents can", await page.$eval('[data-testid="account-agents"]', (el) => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "not shown"), "Agents that can sign in with them: Surfer.");
+    await siteState("/__reset?sessions=keep");
+    await clickText(/^\s*Run\s*$/);
+    await page.waitForSelector('[data-testid="task-waits"]', { timeout: 60_000 }).catch(() => undefined);
+    const waits = await page.$eval('[data-testid="task-waits"]', (el) => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+    check("a task that waits for a person says so on the project's page, with where the page is", waits.includes("Waiting for a person on 127.0.0.1: Look whether the note is right.") && waits.includes("Open the page"), waits);
+    check("  the agent was let in with the session the owner kept: the site saw no sign-in", (await siteState()).signIns.length === 0 && (await siteState()).pages.some((p) => p.path === "/account" && p.user === "sari"), (await siteState()).signIns);
+    await snap("project-waits");
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }).catch(() => undefined), clickText(/Open the page/, { tag: "a" })]);
+    await page.waitForSelector('[data-testid="live-screen"]', { timeout: 20_000 }).catch(() => undefined);
+    const reason = await page.$eval('[data-testid="live-reason"]', (el) => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+    check("the page that waits says what for, and for which project, task and agent", reason.includes("Look whether the note is right.") && reason.includes("Browser web") && reason.includes("Tool: browser waiting") && reason.includes("by Surfer"), reason);
+    // The person adds a note themselves: a click into the field, then the keyboard.
+    await sleep(1200);
+    await page.type('[data-testid="live-text"]', "Typed by a person");
+    await snap("browser-live-run");
+    // The field "New note" is the only field of the page: the Tab key gets there from the top.
+    await page.evaluate(() => document.querySelector('[data-testid="live-screen"]')?.parentElement?.focus());
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await sleep(600);
+    await clickText(/Type it/);
+    await sleep(600);
+    await page.evaluate(() => document.querySelector('[data-testid="live-screen"]')?.parentElement?.focus());
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Enter");
+    const noted = await waitFor(siteState, (s) => s.notes.length >= 1, 30);
+    eq("what the person types is typed on the page", noted.notes, [{ user: "sari", text: "Typed by a person" }]);
+    await clickText(/Hand back to the agent/);
+    check("the person hands the page back", await waitText("The page is handed back: the agent goes on from where you left it."), (await text()).slice(0, 300));
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }).catch(() => undefined), clickText(/Back to the project/)]);
+    await page.waitForFunction((url) => location.href === url, { timeout: 10_000 }, projectUrl).catch(() => undefined);
+    check("  and the run goes on to its end", (await waitText("Final deliverable", 60_000)) && page.url() === projectUrl, (await text()).slice(0, 300));
+    await snap("project-accounts");
+
+    await open("/dashboard/browser");
+    const mine = (await browserLog()).filter((row) => row.includes("Browser web"));
+    check("the Browser page has what that run did: let in with the session, and a page a person took over", mine.some((row) => row.includes("signed in") && row.includes("browser-shop")) && mine.some((row) => row.includes("a person") && row.includes("handed back") && row.includes("Look whether the note is right.")), mine);
+    check("  and what the owner did by hand", (await browserLog()).some((row) => row.includes("by hand") && row.includes("session kept") && row.includes("browser-shop")), null);
+    check("  what the person typed is in none of it", !(await text()).includes("Typed by a person"), null);
+    check("  the account says that a project names it", (await inAccount("browser-shop")).includes("1 project names it"), (await inAccount("browser-shop")).slice(0, 300));
+    await snap("browser-log");
+
+    await open("/dashboard/agents");
+    await clickText(/Add agent/);
+    await waitText(/BROWSER|Browser/);
+    check("the agent form offers the tool, and says in whose projects an agent is handed it", (await has("Work in a browser")) && (await has("A CAPTCHA or a code is left to a person")) && (await has("Only in the projects of owners and administrators")), null);
+
+    await open("/dashboard/browser");
+    await clickInAccount("browser-shop", "Drop session");
+    check("the owner drops a session", await waitText('The session of "browser-shop" was dropped.'), null);
+    await clickInAccount("browser-shop", "Remove browser-shop");
+    check("the owner removes an account", await waitText('"browser-shop" was removed.'), null);
+    check("  it is gone from the list, and what was done with it stays in the log", (await page.$(account("browser-shop"))) === null && (await page.$(account("shop"))) !== null && (await browserLog()).some((row) => row.includes("browser-shop")), null);
+    check("the Browser page holds nothing wider than the screen", (await sideways()) <= 0, await sideways());
+  }
 
   // ─── Model checks ─────────────────────────────────────────────────────────
   // Last, since Check all now asks every model of these checks, also the ones made to fail.

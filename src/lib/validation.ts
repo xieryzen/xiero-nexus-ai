@@ -22,6 +22,7 @@ import {
 } from "@/lib/creative/prompt";
 import { API_SCOPES, MAX_PROJECT_TASKS } from "@/lib/limits";
 import { SERVERS_PER_PROJECT, SERVER_ACCESS, SERVER_NAME_MAX, SERVER_NOTES_MAX } from "@/lib/ssh/rules";
+import { ACCOUNTS_PER_PROJECT } from "@/lib/browser/rules";
 import { MAX_RENDER_CLIPS, MAX_STILL_SECONDS } from "@/lib/media/render-plan";
 import {
   SKILL_DESCRIPTION_MAX,
@@ -290,7 +291,53 @@ export const projectCreateSchema = z.object({
   memory: z.boolean().optional(),
   // The machines the project's agents may work on over SSH (v1.8).
   serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
+  // The site accounts its agents may sign in with, in the browser (v1.8).
+  siteAccountIds: z.array(z.string().min(1)).max(ACCOUNTS_PER_PROJECT).optional(),
 });
+
+// ─── The browser: site accounts, and what a person does on a page ────────────
+
+const siteAccountFields = {
+  name: z.string().trim().min(1).max(40),
+  siteUrl: z.string().trim().min(1).max(2000),
+  username: z.string().trim().min(1).max(200),
+  password: z.string().min(1).max(500),
+  access: z.enum(SERVER_ACCESS),
+  notes: z.string().trim().max(SERVER_NOTES_MAX).nullable(),
+};
+
+export const siteAccountCreateSchema = z.object({
+  name: siteAccountFields.name,
+  siteUrl: siteAccountFields.siteUrl,
+  username: siteAccountFields.username,
+  password: siteAccountFields.password,
+  access: siteAccountFields.access.optional(),
+  notes: siteAccountFields.notes.optional(),
+});
+
+export const siteAccountUpdateSchema = z
+  .object({
+    name: siteAccountFields.name.optional(),
+    siteUrl: siteAccountFields.siteUrl.optional(),
+    username: siteAccountFields.username.optional(),
+    password: siteAccountFields.password.optional(),
+    access: siteAccountFields.access.optional(),
+    status: z.enum(["enabled", "disabled"]).optional(),
+    notes: siteAccountFields.notes.optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, "Nothing to change");
+
+/** What a person did to a page they took over: where they clicked, what they typed. */
+export const liveInputSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("click"), x: z.number().finite(), y: z.number().finite(), double: z.boolean().optional() }),
+  z.object({ type: z.literal("scroll"), x: z.number().finite(), y: z.number().finite(), dy: z.number().finite() }),
+  z.object({ type: z.literal("key"), key: z.string().min(1).max(20), code: z.string().max(20).optional(), shift: z.boolean().optional() }),
+  z.object({ type: z.literal("text"), text: z.string().min(1).max(2000) }),
+  z.object({ type: z.literal("back") }),
+  z.object({ type: z.literal("reload") }),
+]);
+
+export const liveSettleSchema = z.object({ outcome: z.enum(["continue", "give_up", "save", "discard"]) });
 
 export const projectUpdateSchema = z
   .object({
@@ -298,6 +345,7 @@ export const projectUpdateSchema = z
     goal: z.string().trim().min(1).max(8000).optional(),
     memory: z.boolean().optional(),
     serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
+    siteAccountIds: z.array(z.string().min(1)).max(ACCOUNTS_PER_PROJECT).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Nothing to change");
 

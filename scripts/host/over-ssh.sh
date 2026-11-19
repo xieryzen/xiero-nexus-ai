@@ -23,6 +23,12 @@
 #                 (workforce.sh --dry-run). Changes nothing.
 #   workforce     adds that to the app, signed in as its administrator
 #                 (workforce.sh --yes).
+#   browser-plan  what setting up the browser agents work in would do
+#                 (browser-service.sh --dry-run). Changes nothing.
+#   browser       the browser service next to the server: a Chromium in a
+#                 container of its own on the server's network, and
+#                 BROWSER_URL in the server's .env (browser-service.sh --yes).
+#                 With "-- --remove" it is taken away again.
 #   last-log      what the last run on the node said and how it ended.
 #   input-key     the public key of this node, for what is sealed for it: a
 #                 password or a skill that has to pass through a place others
@@ -79,6 +85,8 @@ SCRIPTS="${DEPLOY_SCRIPTS:-${here}}"
 SENT=(pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh
   workforce.sh workforce.py workforce.json)
 if [ -d "${SCRIPTS}/skills" ]; then SENT+=(skills); fi
+# The browser service: the script that sets it up, and what its image is built from.
+if [ -f "${SCRIPTS}/browser-service.sh" ] && [ -d "${SCRIPTS}/browser" ]; then SENT+=(browser-service.sh browser); fi
 # What opens a password or a skill that was sealed for the node.
 if [ -f "${SCRIPTS}/sealed-output.sh" ]; then SENT+=(sealed-output.sh); fi
 REMOTE_DIR="${DEPLOY_REMOTE_DIR:-}"
@@ -118,12 +126,13 @@ case "${ACTION}" in
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
   site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
   workforce-plan | workforce) REMOTE_SCRIPT="workforce.sh" ;;
+  browser-plan | browser) REMOTE_SCRIPT="browser-service.sh" ;;
   last-log | input-key) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, last-log, input-key." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -157,6 +166,12 @@ case "${ACTION}" in
   workforce-plan | workforce)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
     if [ "${ACTION}" = "workforce-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  browser-plan | browser)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    # The version of the app that is put in place while the server is restarted: without one, the installed one again.
+    if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
+    if [ "${ACTION}" = "browser-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
     ;;
 esac
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})

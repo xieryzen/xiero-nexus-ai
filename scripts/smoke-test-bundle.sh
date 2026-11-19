@@ -4,8 +4,9 @@
 # (which exercises the native SQLite binding and the migrations), keeps the
 # session, stores its data inside the bundle folder, reads a PDF into the
 # knowledge base (a package that is only loaded while the server runs), signs
-# in to a machine over SSH (another such package), has its background worker
-# going, and stops when it is told to.
+# in to a machine over SSH (another such package), connects to a browser
+# service (a third), has its background worker going, and stops when it is
+# told to.
 #
 #   bash scripts/smoke-test-bundle.sh [path/to/bundle.zip]
 set -euo pipefail
@@ -29,10 +30,12 @@ PORT="${SMOKE_PORT:-3210}"
 WORK="$(mktemp -d)"
 PID=""
 SSH_PID=""
+BROWSER_PID=""
 
 cleanup() {
   if [ -n "${PID}" ]; then kill "${PID}" 2>/dev/null || true; fi
   if [ -n "${SSH_PID}" ]; then kill "${SSH_PID}" 2>/dev/null || true; fi
+  if [ -n "${BROWSER_PID}" ]; then kill "${BROWSER_PID}" 2>/dev/null || true; fi
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -71,6 +74,9 @@ sed -e "s|^SECRET_ENCRYPTION_KEY=.*|SECRET_ENCRYPTION_KEY=${KEY}|" \
     "${APP}/.env.example" > "${APP}/.env"
 # A PORT left in .env must not beat the port the panel assigns.
 echo "PORT=$((PORT + 1))" >> "${APP}/.env"
+# A browser service, for step 7: it is started there, at this address.
+BROWSER_PORT="$((PORT + 4))"
+echo "BROWSER_URL=http://127.0.0.1:${BROWSER_PORT}/?token=smoke-token-0123456789" >> "${APP}/.env"
 
 # 3. Start from the parent folder with only the panel's port variable set.
 env -u PORT SERVER_PORT="${PORT}" BIND_HOST=127.0.0.1 node xiero-nexus-ai/start.js > "${WORK}/server.log" 2>&1 &
@@ -172,11 +178,54 @@ if find "${APP}/node_modules" -name '*.node' ! -name 'better_sqlite3.node' | gre
 fi
 echo "ok: a machine is signed in to over SSH and runs a command, with nothing compiled besides SQLite"
 
-# 7. Subtitles need the font that comes with the bundle.
+# 7. The app speaks to a browser service over a WebSocket. What it does that
+#    with is loaded while the server runs, so it has to be in the bundle. The
+#    service here is a stand-in that answers the first questions a browser is
+#    asked; a real Chromium is driven in the end-to-end checks.
+before="$(curl -s "${session[@]}" "${BASE}/api/browser?fresh=1")"
+if [ "$(echo "${before}" | field status.configured)" != "true" ] || [ "$(echo "${before}" | field status.reachable)" != "false" ]; then
+  fail "a browser service that is not there was not reported as such: ${before}"
+fi
+(cd "${REPO}" && node -e '
+  const http = require("http");
+  const { WebSocketServer } = require("ws");
+  const port = Number(process.argv[1]);
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, "http://x");
+    if (url.searchParams.get("token") !== "smoke-token-0123456789") { res.writeHead(401); return res.end("{}"); }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ Browser: "SmokeBrowser/1.0", webSocketDebuggerUrl: "ws://127.0.0.1:" + port + "/devtools/browser/smoke", gate: { version: 1, egress: "filtered", allowPrivate: [] } }));
+  });
+  const sockets = new WebSocketServer({ server });
+  sockets.on("connection", (socket, req) => {
+    if (!String(req.url).includes("token=smoke-token-0123456789")) return socket.close();
+    socket.on("message", (data) => {
+      const message = JSON.parse(String(data));
+      socket.send(JSON.stringify({ id: message.id, result: message.method === "Browser.getVersion" ? { product: "SmokeBrowser/1.0", userAgent: "SmokeBrowser" } : {} }));
+    });
+  });
+  server.listen(port, "127.0.0.1");
+' "${BROWSER_PORT}") > "${WORK}/browser.log" 2>&1 &
+BROWSER_PID=$!
+service=""
+for _ in $(seq 1 20); do
+  service="$(curl -s "${session[@]}" "${BASE}/api/browser?fresh=1")"
+  if [ "$(echo "${service}" | field status.reachable)" = "true" ]; then break; fi
+  sleep 1
+done
+if [ "$(echo "${service}" | field status.reachable)" != "true" ] || [ "$(echo "${service}" | field status.product)" != "SmokeBrowser/1.0" ] || [ "$(echo "${service}" | field status.filtered)" != "true" ]; then
+  fail "the browser service was not reached: ${service} $(cat "${WORK}/browser.log")"
+fi
+if echo "${service}" | grep -q "smoke-token"; then fail "the token of the browser service is in what the app shows of it: ${service}"; fi
+kill "${BROWSER_PID}" 2>/dev/null || true
+BROWSER_PID=""
+echo "ok: a browser service is connected to over a WebSocket, and its token is not shown"
+
+# 8. Subtitles need the font that comes with the bundle.
 [ -f "${APP}/assets/fonts/NotoSans-Bold.ttf" ] || fail "the subtitle font is missing from the bundle"
 echo "ok: the subtitle font is in the bundle"
 
-# 8. The background worker runs inside the server: no second process to start.
+# 9. The background worker runs inside the server: no second process to start.
 worker_state() {
   curl -s "${session[@]}" "${BASE}/dashboard/observability" \
     | grep -o 'data-status="Background worker" data-state="[^"]*"' | head -n 1 | sed -E 's/.*data-state="([^"]*)"/\1/'
@@ -190,7 +239,7 @@ done
 [ "${state}" = "Running" ] || fail "the status page says the background worker is \"${state:-not reported}\", not Running"
 echo "ok: the background worker is running"
 
-# 9. Told to stop (a panel's Stop button sends Ctrl+C), it ends within seconds,
+# 10. Told to stop (a panel's Stop button sends Ctrl+C), it ends within seconds,
 #    also while a request is still open: here one whose body never arrives.
 exec 9<> "/dev/tcp/127.0.0.1/${PORT}"
 printf 'POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 400\r\n\r\n{' >&9

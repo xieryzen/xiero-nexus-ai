@@ -15,7 +15,7 @@ import {
 import { Errors } from "@/lib/errors";
 import { validateWorkspacePath } from "./paths";
 import { isAdminRole } from "@/lib/roles";
-import { assertMayOperate } from "@/lib/ssh/servers";
+import { assertMayOperate } from "@/lib/project-access";
 
 export const FILE_MAX_BYTES = 256 * 1024;
 

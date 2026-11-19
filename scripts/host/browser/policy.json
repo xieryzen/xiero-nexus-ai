@@ -1,0 +1,12 @@
+{
+  "URLBlocklist": ["file://*"],
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "MetricsReportingEnabled": false,
+  "DefaultGeolocationSetting": 2,
+  "DefaultNotificationsSetting": 2,
+  "BackgroundModeEnabled": false
+}

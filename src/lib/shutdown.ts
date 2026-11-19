@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projectRuns } from "@/db/schema";
 import { runtime } from "./runtime";
+import { closeAllBrowsers } from "./browser/sessions";
 import { closeAllSessions } from "./ssh/sessions";
 
 /**
@@ -80,6 +81,8 @@ export function stopOnSignal(): void {
     } catch {
       // They end with the process all the same.
     }
+    // The pages agents have open in the browser: what is signed in is kept, and the browser closes the rest.
+    void closeAllBrowsers().catch(() => undefined);
     setTimeout(() => process.exit(0), STOP_GRACE_MS);
   };
   process.on("SIGINT", () => begin("SIGINT"));

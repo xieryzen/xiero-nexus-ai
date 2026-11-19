@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/time";
 import { Alert, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { StateBadge } from "./status-badge";
+import { AccountChoice, type AccountOption } from "./project-accounts";
 import { ServerChoice, type ServerOption } from "./project-servers";
 
 interface Option {
@@ -39,6 +40,7 @@ export function CommandCenter({
   teams,
   workflows,
   servers = [],
+  siteAccounts = [],
   chooses = true,
 }: {
   initialProjects: ProjectDTO[];
@@ -59,6 +61,8 @@ export function CommandCenter({
   workflows: WorkflowOption[];
   /** The servers the projects of this account may work on over SSH. Empty for an account that may use none. */
   servers?: ServerOption[];
+  /** The site accounts the projects of this account may sign in with. Empty for an account that may use none. */
+  siteAccounts?: AccountOption[];
 }) {
   const router = useRouter();
   const [projects] = useState(initialProjects);
@@ -79,6 +83,7 @@ export function CommandCenter({
   const [speechModelRowId, setSpeechModel] = useState("");
   const [memory, setMemory] = useState(false);
   const [serverIds, setServerIds] = useState<string[]>([]);
+  const [siteAccountIds, setSiteAccountIds] = useState<string[]>([]);
   const [maxMedia, setMaxMedia] = useState(String(DEFAULT_MAX_MEDIA));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -152,6 +157,7 @@ export function CommandCenter({
           maxMedia: Number(maxMedia),
           memory,
           ...(serverIds.length > 0 ? { serverIds } : {}),
+          ...(siteAccountIds.length > 0 ? { siteAccountIds } : {}),
         }),
       });
       router.push(`/dashboard/projects/${res.project.id}`);
@@ -271,6 +277,13 @@ export function CommandCenter({
                 <div className="space-y-1.5" id="p-servers">
                   <p className="label">Servers</p>
                   <ServerChoice options={servers} chosen={serverIds} onChange={setServerIds} />
+                </div>
+              )}
+
+              {siteAccounts.length > 0 && (
+                <div className="space-y-1.5" id="p-accounts">
+                  <p className="label">Site accounts</p>
+                  <AccountChoice options={siteAccounts} chosen={siteAccountIds} onChange={setSiteAccountIds} />
                 </div>
               )}
 

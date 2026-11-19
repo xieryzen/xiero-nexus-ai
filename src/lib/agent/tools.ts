@@ -8,6 +8,9 @@ import { safeFetch } from "../http-client";
 import { formatHits, searchKnowledge } from "../knowledge/service";
 import { readBodyCapped } from "../media/http";
 import { SKILLS_PROMPT_TOTAL_CHARS, SKILL_PROMPT_CHARS } from "../skills/prompt";
+import { BROWSER_TOOL } from "../browser/rules";
+import { browserConfigured } from "../browser/service";
+import { browserTool, type BrowserToolContext } from "../browser/tool";
 import { SERVER_TOOL } from "../ssh/rules";
 import { serverTool, type ServerToolContext } from "../ssh/tool";
 import { readSkillFile, type WorkSkill } from "../skills/service";
@@ -58,6 +61,12 @@ export interface ToolContext {
    * tool run_on_server. Without machines the agent is not handed the tool.
    */
   servers?: Omit<ServerToolContext, "projectId" | "userId" | "taskId" | "agentName">;
+  /**
+   * The run the task belongs to and the site accounts it may sign in with,
+   * for the tool use_browser. Without this the agent is not handed the tool:
+   * it is there for the projects of accounts that may work in the browser.
+   */
+  browser?: Omit<BrowserToolContext, "projectId" | "userId" | "taskId" | "agentName">;
 }
 
 // ─── Server configuration ────────────────────────────────────────────────────
@@ -86,16 +95,19 @@ export interface ToolStatus {
   sandbox: boolean;
   /** The search service's name, or null when none is configured. */
   search: string | null;
+  /** A browser service is configured (BROWSER_URL). */
+  browser: boolean;
 }
 
 export function toolStatus(): ToolStatus {
-  return { sandbox: getExecutor().enabled, search: searchConfig()?.label ?? null };
+  return { sandbox: getExecutor().enabled, search: searchConfig()?.label ?? null, browser: browserConfigured() };
 }
 
 /** Whether a tool can work on this server as it is configured. */
 export function toolAvailable(name: ToolName, status: ToolStatus = toolStatus()): boolean {
   if (name === "run_command") return status.sandbox;
   if (name === "web_search") return status.search !== null;
+  if (name === BROWSER_TOOL) return status.browser;
   return true;
 }
 
@@ -629,6 +641,19 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
         tools.push(
           serverTool({
             ...ctx.servers,
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            taskId: ctx.taskId,
+            agentName: ctx.agent.name,
+          }),
+        );
+      }
+    } else if (name === BROWSER_TOOL) {
+      // Only in the projects of accounts that may work in the browser.
+      if (ctx.browser) {
+        tools.push(
+          browserTool({
+            ...ctx.browser,
             projectId: ctx.projectId,
             userId: ctx.userId,
             taskId: ctx.taskId,

@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers,browser
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";

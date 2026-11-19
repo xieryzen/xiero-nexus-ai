@@ -10,6 +10,8 @@ import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { CommandCenter } from "@/components/projects/command-center";
 import { isAdminRole, seesSetup } from "@/lib/roles";
+import { accountsFor } from "@/lib/browser/accounts";
+import { siteHost } from "@/lib/browser/rules";
 import { serversFor } from "@/lib/ssh/servers";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +74,8 @@ export default async function ProjectsPage() {
       workflows={workflowOptions}
       // The machines the projects of this account may work on: none for a user.
       servers={serversFor(user).map((s) => ({ id: s.id, label: s.name, where: `${s.username}@${s.host}:${s.port}`, off: s.status !== "enabled" }))}
+      // The same for the site accounts its agents may sign in with.
+      siteAccounts={accountsFor(user).map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, off: a.status !== "enabled" }))}
     />
   );
 }

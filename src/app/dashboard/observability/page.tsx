@@ -128,6 +128,16 @@ export default async function ObservabilityPage() {
             }
           />
           <Item
+            label="Browser"
+            tone={tools.browser ? "ok" : "neutral"}
+            value={tools.browser ? "Configured" : "Not configured"}
+            note={
+              tools.browser
+                ? "Agents with the “Work in a browser” tool open pages in the browser service. The Browser page says how it is."
+                : "Set BROWSER_URL to a browser service (scripts/host/browser). Until then agents do not get the “Work in a browser” tool."
+            }
+          />
+          <Item
             label="Addresses agents may reach"
             tone="neutral"
             value={tools.hostsRestricted ? "Only the listed hosts" : "Any public address"}

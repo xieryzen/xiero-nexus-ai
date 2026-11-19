@@ -230,7 +230,8 @@ check_not "nothing is left in the server's files" leftovers
 begin "The upgrade"
 before_env="$(grep -v '^APP_URL=' "${APP_DIR}/.env")"
 code=0
-upgrade --server "${UUID:0:8}" --zip "${NEW_ZIP}" --yes --app-url https://nexus.example.com --set RUN_CONCURRENCY=2 || code=$?
+upgrade --server "${UUID:0:8}" --zip "${NEW_ZIP}" --yes --app-url https://nexus.example.com --set RUN_CONCURRENCY=2 \
+  --set "BROWSER_URL=http://172.18.255.250:9223/?token=a-token-that-must-stay-hidden" --set SEARCH_API_KEY=a-key-that-must-stay-hidden || code=$?
 expect_exit "it ends well" 0 "${code}"
 check "the new version is installed" test "$(installed)" = "${NEW_VERSION}"
 check "it runs and passes its health check" healthy
@@ -242,7 +243,11 @@ check "a file of the server's owner in the same folder is kept" grep -q "notes o
 check "the address of the site is set in .env" grep -qx 'APP_URL=https://nexus.example.com' "${APP_DIR}/.env"
 check "  once" test "$(grep -c '^APP_URL=' "${APP_DIR}/.env")" = "1"
 check "  a new setting is added" grep -qx 'RUN_CONCURRENCY=2' "${APP_DIR}/.env"
-check "  everything else in .env is as it was" test "$(grep -v -e '^APP_URL=' -e '^RUN_CONCURRENCY=' "${APP_DIR}/.env")" = "${before_env}"
+check "  one that signs in somewhere is written as it was given" grep -qx 'BROWSER_URL=http://172.18.255.250:9223/?token=a-token-that-must-stay-hidden' "${APP_DIR}/.env"
+check "    and shown without what signs in" says "Setting     BROWSER_URL=http://172.18.255.250:9223/?token=(not shown)"
+check "    a key is not shown at all" says "Setting     SEARCH_API_KEY=(not shown)"
+check_not "    neither is in the output" says "must-stay-hidden"
+check "  everything else in .env is as it was" test "$(grep -v -e '^APP_URL=' -e '^RUN_CONCURRENCY=' -e '^BROWSER_URL=' -e '^SEARCH_API_KEY=' "${APP_DIR}/.env")" = "${before_env}"
 check "  and it keeps its permissions" test "$(stat -c '%a' "${APP_DIR}/.env")" = "600"
 backup="$(newest_backup)"
 check "the backup has the old program files" test "$(field version "${backup}/code/VERSION")" = "${OLD_VERSION}"

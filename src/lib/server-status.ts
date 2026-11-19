@@ -33,7 +33,7 @@ export interface ServerStatus {
     schedulesEnabled: number;
   };
   ffmpeg: { available: boolean; version: string | null; h264: boolean; subtitles: boolean };
-  tools: { sandbox: boolean; search: string | null; hostsRestricted: boolean };
+  tools: { sandbox: boolean; search: string | null; browser: boolean; hostsRestricted: boolean };
 }
 
 function n(row: { n: number } | undefined): number {
@@ -76,6 +76,6 @@ export async function serverStatus(): Promise<ServerStatus> {
       schedulesEnabled: n(db.select({ n: count() }).from(schedules).where(eq(schedules.enabled, true)).get()),
     },
     ffmpeg: { available: ffmpeg.available, version: ffmpeg.version, h264: ffmpeg.h264, subtitles: ffmpeg.subtitles },
-    tools: { sandbox: tools.sandbox, search: tools.search, hostsRestricted: agentAllowedHosts().length > 0 },
+    tools: { sandbox: tools.sandbox, search: tools.search, browser: tools.browser, hostsRestricted: agentAllowedHosts().length > 0 },
   };
 }
