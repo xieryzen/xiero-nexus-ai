@@ -412,6 +412,36 @@ if wait_until 20 grep -qF "Running" "${ERR}"; then
   check "last-log afterwards: how it ended" said "ended with code 0"
   check "  and what it said" said "the end"
   check "  what it left to tidy up is tidied up" wait_until 10 tidied_up
+  # Another run comes in between: the one before it can still be read.
+  sleep 1
+  DEPLOY_ENV="MY_SETTING=in between" remote plan || true
+  code=0
+  remote last-log -- --list || code=$?
+  expect_exit "last-log --list" 0 "${code}"
+  check "  names the runs that are kept" test "$(grep -cE -- '-(plan|upgrade) +ended with code 0' "${OUT}")" = "2"
+  check "  the last one first" grep -qE -- '-plan +ended with code 0 +the last' "${OUT}"
+  check "  and how the one before it is asked for" grep -qE -- '-upgrade +ended with code 0 +--back 1' "${OUT}"
+  check_not "  it shows nothing of what they said" said "MY_SETTING"
+  remote last-log || true
+  check "last-log is the run that came in between" said "-plan, which ended with code 0"
+  check "  with what that one said" said "MY_SETTING=[in between]"
+  code=0
+  remote last-log -- --back 1 || code=$?
+  expect_exit "last-log --back 1" 0 "${code}"
+  check "  is the run before the last, and says so" said "The run 1 before the last:"
+  check "  with what that one said" said "MY_SETTING=[]"
+  check_not "  and nothing of the last" said "in between"
+  code=0
+  remote last-log -- --back 2 || code=$?
+  expect_exit "further back than there are runs: 1" 1 "${code}"
+  check "  says how many are kept" said "2 are kept on this node"
+  code=0
+  remote last-log -- --back one || code=$?
+  expect_exit "--back without a number: 90" 90 "${code}"
+  code=0
+  remote last-log -- --first || code=$?
+  expect_exit "an option last-log does not have: 90" 90 "${code}"
+  check "  says which it has" said "last-log takes --list and --back"
 else
   kill "${background}" 2> /dev/null || true
   bad "the run did not start" "$(tail -n 3 "${ERR}")"

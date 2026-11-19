@@ -799,7 +799,10 @@ Options for the host script go after `--`, for example
   what it said and how it ended.
 - **What each run said is kept on the node**, in `~/xiero-nexus-remote/logs`
   of the user that signed in, readable by that user only. The newest 20 are
-  kept.
+  kept. `last-log -- --list` names them and says how each ended;
+  `last-log -- --back 1` shows the run before the last, `--back 2` the one
+  before that: for a run whose output was not kept where it was started,
+  after other runs came in between.
 - **The node's host key.** Give it as `DEPLOY_HOST_KEY` (`ssh-ed25519 AAAA…`)
   and nobody else can answer in the node's place. Without it, the key the
   node shows is accepted and printed with its fingerprint, to be compared on
