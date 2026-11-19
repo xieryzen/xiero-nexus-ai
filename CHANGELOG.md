@@ -13,9 +13,9 @@ bundle: the Deploy workflow runs the ones of the branch it is started on.
 ### Fixed
 
 - `browser-service.sh` could not build the image on a node whose Docker
-  default network does not reach Debian's package servers while the node
-  itself does (a firewall that passes on only what Wings set up): the build
-  ended after eleven minutes with "Unable to locate package chromium". The
+  default network does not reach Debian's package servers, while the node
+  itself and the containers on the server's network do: the build ended
+  after eleven minutes with "Unable to locate package chromium". The
   script now asks first, with the image the build starts from, and builds on
   the machine's own network where only that gets there;
   `--build-network host` or `default` says it outright. A list of packages
@@ -24,6 +24,10 @@ bundle: the Deploy workflow runs the ones of the branch it is started on.
 - `browser-service.sh` said of a service that works that it "did not take
   its own token": it read the first 200 characters of the answer, and a real
   Chromium says more than that about itself before the gate's part.
+- `over-ssh.sh --help` ended in the middle of the settings, before
+  `DEPLOY_ENV` and the script's own exit codes: it printed the description
+  at the top of the script up to a line number, and the description had
+  grown past it. It prints the description to its end now.
 
 ### Added
 

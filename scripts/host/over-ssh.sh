@@ -103,7 +103,8 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; }
+# The description at the top of this file, to its end however long it gets.
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"

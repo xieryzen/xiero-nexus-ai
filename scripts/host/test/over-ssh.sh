@@ -254,6 +254,27 @@ code=0
 DEPLOY_HOST="${LOGIN}@127.0.0.1:${PORT}" DEPLOY_PORT="" DEPLOY_USER="" remote plan || code=$?
 expect_exit "user@host:port in DEPLOY_HOST is understood" 0 "${code}"
 
+begin "Its help"
+# The help is the description at the top of the script. It ended at a line
+# number once, and the description had grown past it.
+bash "${script}" --help > "${WORK}/help.txt" 2>&1 || true
+last_of_description="$(awk 'NR > 1 && !/^#/ { exit } { line = $0 } END { sub(/^# ?/, "", line); print line }' "${script}")"
+check "--help goes to the end of the description at the top of the script" test "$(tail -n 1 "${WORK}/help.txt")" = "${last_of_description}"
+check "  to its own exit codes" grep -qF -- "93 the user on the node may not run it." "${WORK}/help.txt"
+check_not "  and not into the script" grep -qE -- '^set -euo pipefail|^usage\(\)' "${WORK}/help.txt"
+actions="$(bash "${script}" no-such-action 2>&1 | sed -n 's/.*There are: //p' | tr -d ',.' || true)"
+check "an action that does not exist is answered with the ones there are" test "$(printf '%s\n' "${actions}" | wc -w)" -ge 14
+unnamed=""
+for action in ${actions}; do
+  grep -qE -- "^  ${action} " "${WORK}/help.txt" || unnamed="${unnamed} ${action}"
+done
+check "  and --help says what each of them does" test -z "${unnamed}"
+unnamed=""
+for setting in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PASSWORD DEPLOY_SSH_KEY DEPLOY_HOST_KEY DEPLOY_SERVER DEPLOY_APP_URL DEPLOY_VERSION DEPLOY_OUTPUT DEPLOY_ENV; do
+  grep -qE -- "^  ${setting} " "${WORK}/help.txt" || unnamed="${unnamed} ${setting}"
+done
+check "  and every setting" test -z "${unnamed}"
+
 begin "Settings that are wrong"
 code=0
 DEPLOY_HOST="" remote plan || code=$?

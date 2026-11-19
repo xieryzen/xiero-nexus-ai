@@ -380,10 +380,10 @@ trap 'rm -f "${build_log}"' EXIT
 
 # The build installs Debian's packages from inside a container, on Docker's
 # default network. On some machines that network does not get to the outside
-# while the machine itself does: a firewall that passes on only what Wings
-# set up. So it is asked first, with the image the build starts from. Where
-# the default network does not get there and the machine's own does, the
-# image is built on the machine's own.
+# while the machine itself does (seen on a node; a firewall that passes on
+# only what Wings set up would do that). So it is asked first, with the image
+# the build starts from. Where the default network does not get there and
+# the machine's own does, the image is built on the machine's own.
 BASE="$(sed -n 's/^FROM[[:space:]]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p' "${SOURCE}/Dockerfile" | head -n 1)"
 reaches_packages() { # NETWORK: whether a container on it gets to Debian's package servers
   docker run --rm --network "$1" "${BASE}" timeout 15 bash -c 'exec 3<> /dev/tcp/deb.debian.org/80' > /dev/null 2>&1

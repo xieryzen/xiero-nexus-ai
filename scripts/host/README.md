@@ -654,9 +654,10 @@ What it does, in this order:
    Chromium behind the gate (`gate.mjs`), nothing else. A build installs
    Debian's packages from inside a container on Docker's default network.
    On some machines that network does not get to the outside while the
-   machine itself does (a firewall that passes on only what Wings set up):
-   the script asks first, and builds on the machine's own network where only
-   that gets there (`--build-network host` or `default` says it outright);
+   machine itself does (a firewall that passes on only what Wings set up
+   would do that): the script asks first, and builds on the machine's own
+   network where only that gets there (`--build-network host` or `default`
+   says it outright);
 4. starts it as a container **on the server's network**, at an address of its
    own near the end of that network (it stays the same when the container is
    made anew), with 1 GB of memory and 1.5 processors at most, no rights of
