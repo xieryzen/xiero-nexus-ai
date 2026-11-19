@@ -695,6 +695,10 @@ containers can reach the service's port. They get nothing from it without
 the token. Pages the browser opens cannot reach them either: the gate
 refuses every address on a private network.
 
+How the service is afterwards, any day: the action `check`
+(`node-check.sh`) says whether the container runs, how old its image is,
+and whether the server's container reaches it with the token of its `.env`.
+
 It is tested on a made-up host with stand-ins for Docker and for the
 upgrade script ([`test/browser.sh`](test/browser.sh)), where the questions it
 asks with Node are asked for real, of a stand-in that answers as a Chromium
@@ -803,10 +807,17 @@ bash scripts/host/over-ssh.sh browser -- --rebuild      # a newer Chromium
 Docker are there, which servers hold the app, what is in the named server's
 files, what that server runs when it starts, and how the site's address is
 answered on the machine: where the name leads, what listens on ports 80 and
-443, whether a web server's configuration names the site. It shows no
-setting's value. With `-- --try-image` it also starts a container from the
-server's image for a moment, without network and without any server's files,
-to say which Node.js, ffmpeg and `ts-node` the image holds.
+443, whether a web server's configuration names the site. Of the browser
+service it says where `BROWSER_URL` of the server's `.env` points, which
+container is there and whether it runs, how old its image is (its Chromium
+is as old: `browser -- --rebuild` builds it anew), and whether the server's
+container reaches the service and the service takes the token of `.env`.
+That last question is asked inside the server's container, where the app
+asks it, so that the token is neither shown nor handed to a program of the
+node. It shows no setting's value. With `-- --try-image` it also starts a
+container from the server's image for a moment, without network and without
+any server's files, to say which Node.js, ffmpeg and `ts-node` the image
+holds.
 
 Options for the host script go after `--`, for example
 `over-ssh.sh upgrade -- --with-media`. All settings come from the environment
@@ -939,7 +950,7 @@ bash scripts/host/test/site.sh
 bash scripts/host/test/workforce.sh
 
 # The browser service on a made-up host (a few seconds): stand-ins for docker
-# and for pterodactyl-upgrade.sh.
+# and for pterodactyl-upgrade.sh. Also what node-check.sh says of the service.
 bash scripts/host/test/browser.sh
 
 # The browser service in its container (a few minutes, after "npm run

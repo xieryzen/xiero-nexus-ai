@@ -7,9 +7,9 @@
 # It says what the machine runs, whether Wings and Docker are there, whether
 # the releases on GitHub can be reached from here, which servers hold a Xiero
 # Nexus AI bundle, and for one server what is in its files, which image it
-# runs in, what it runs when it starts and how much room is left. Of .env it
-# shows which names are set and no value; it shows no token and no file's
-# content.
+# runs in, what it runs when it starts, how much room is left, and whether
+# the browser service its .env names answers it. Of .env it shows which names
+# are set and no value; it shows no token and no file's content.
 #
 #   --server <id>        The server to look at: its UUID or the first 8
 #                        characters. Without it: the one server that has the app.
@@ -380,6 +380,146 @@ if [ -n "${PORTS}" ]; then
   local_port="${first##*:}"
   row "Port" "this machine passes ${PORTS% } on to the server"
   if have curl; then more "the app at http://127.0.0.1:${local_port}/api/health: $(ask "http://127.0.0.1:${local_port}/api/health")"; fi
+fi
+
+# ── The browser agents work in ───────────────────────────────────────────────
+
+# Where BROWSER_URL of the server's .env points, which container is there, and
+# whether a browser service answers the server at it. The address holds the
+# token of the service: it is read and used inside the server's container,
+# where the app uses it, and is neither shown nor handed to a program here.
+if [ -n "${APP_DIR}" ]; then
+  browser_at=""
+  if [ -f "${APP_DIR}/.env" ]; then
+    browser_at="$(sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?BROWSER_URL[[:space:]]*=[[:space:]]*[\"']?[A-Za-z]+:\/\/([^\/?#\"' ]*).*/\2/p" "${APP_DIR}/.env" 2> /dev/null | tail -n 1 | tr -d '\r')"
+    # A user name in front of the host would be something that signs in.
+    browser_at="${browser_at##*@}"
+  fi
+  if [ -z "${browser_at}" ]; then
+    row "Browser" "none: .env names no browser service (BROWSER_URL), so agents have no browser to work in"
+    more "The action \"browser\" sets one up next to the server (browser-service.sh)."
+  else
+    row "Browser" "BROWSER_URL in .env names ${browser_at}"
+    browser_host="${browser_at%:*}"
+    browser_container=""
+    if have docker; then
+      ids="$(docker ps -aq 2> /dev/null | tr '\n' ' ')"
+      if [ -n "${ids}" ]; then
+        # shellcheck disable=SC2086 # the identifiers, one word each
+        browser_container="$(docker inspect -f '{{.Name}}{{range .NetworkSettings.Networks}} {{.IPAddress}}{{if .IPAMConfig}} {{.IPAMConfig.IPv4Address}}{{end}}{{end}}' ${ids} 2> /dev/null |
+          awk -v want="${browser_host}" '{ name = substr($1, 2); if (name == want) { print name; exit } for (i = 2; i <= NF; i++) if ($i == want) { print name; exit } }')"
+      fi
+    fi
+    if [ -n "${browser_container}" ]; then
+      state="$(docker inspect -f '{{.State.Status}}' "${browser_container}" 2> /dev/null || true)"
+      line="container ${browser_container}: ${state:-unknown}"
+      browser_image="$(docker inspect -f '{{.Config.Image}}' "${browser_container}" 2> /dev/null || true)"
+      built="$(docker image inspect -f '{{.Created}}' "${browser_image}" 2> /dev/null | cut -c 1-10 || true)"
+      if [ -n "${built}" ]; then
+        line="${line}, image ${browser_image} (built ${built})"
+        built_at="$(date -u -d "${built}" +%s 2> /dev/null || true)"
+        if [ -n "${built_at}" ]; then
+          days=$((($(date -u +%s) - built_at) / 86400))
+          more "${line}"
+          line=""
+          if [ "${days}" -ge 30 ]; then
+            more "Its Chromium is as old as the image, ${days} days: the action \"browser\" with --rebuild in options builds it anew from the newest packages."
+          fi
+        fi
+      fi
+      [ -z "${line}" ] || more "${line}"
+      if [ "${state}" != "running" ]; then more "It does not run: the action \"browser\" starts it again."; fi
+    elif have docker; then
+      more "no container of this machine has that address: the service is somewhere else, or it was taken away"
+    fi
+    if have docker && [ "$(docker inspect -f '{{.State.Running}}' "${UUID}" 2> /dev/null || true)" = "true" ]; then
+      # Asked from where the app asks: inside the server's container, with the
+      # address as its .env has it. What comes back says how it went, and
+      # nothing of the address.
+      answer="$(timeout 40 docker exec -e "XN_ENV_FILE=/home/container${APP_DIR#"${VOLUME}"}/.env" "${UUID}" node -e '
+        const fs = require("fs");
+        (async () => {
+          let raw = "";
+          try {
+            const lines = fs.readFileSync(process.env.XN_ENV_FILE, "utf8").split(/\r?\n/).filter((l) => /^\s*(export\s+)?BROWSER_URL\s*=/.test(l));
+            raw = (lines.pop() || "").replace(/^\s*(export\s+)?BROWSER_URL\s*=\s*/, "").trim().replace(/^(["\x27])(.*)\1$/, "$2");
+          } catch {
+            return console.log("unread");
+          }
+          let url;
+          try {
+            url = new URL(raw);
+          } catch {
+            return console.log("unparsed");
+          }
+          if (!/^https?:$/.test(url.protocol)) return console.log("other");
+          const ask = async (path, signedIn) => {
+            const to = new URL(url.toString());
+            to.pathname = url.pathname.replace(/\/+$/, "") + path;
+            if (!signedIn) to.search = "";
+            try {
+              const res = await fetch(to, { signal: AbortSignal.timeout(8000) });
+              return { status: res.status, body: (await res.text()).slice(0, 4000) };
+            } catch (err) {
+              const cause = err && err.cause;
+              const why = err && /Timeout|Abort/.test(String(err.name)) ? "no answer in 8 s" : (cause && (cause.code || cause.message)) || (err && err.name) || "no answer";
+              return { status: 0, body: String(why).replace(/[^\w -]/g, "").slice(0, 40) };
+            }
+          };
+          const health = await ask("/healthz", false);
+          console.log("health " + health.status + (health.status === 0 ? " " + health.body : ""));
+          if (health.status === 0) return;
+          const version = await ask("/json/version", true);
+          let product = "";
+          let egress = "unsaid";
+          try {
+            const body = JSON.parse(version.body);
+            product = String(body.Browser || "").replace(/[^\w ./()-]/g, "").slice(0, 60);
+            if (body.gate) egress = body.gate.egress === "filtered" ? "filtered" : "open";
+          } catch {
+            // Not what a browser service answers.
+          }
+          console.log("version " + version.status + " " + egress + " " + product);
+        })();
+      ' 2> /dev/null || true)"
+      health="$(printf '%s\n' "${answer}" | sed -n 's/^health //p' | head -n 1)"
+      version="$(printf '%s\n' "${answer}" | sed -n 's/^version //p' | head -n 1)"
+      case "${answer}" in
+        unread*) more "the server's container could not read its .env: not asked" ;;
+        unparsed*) more "BROWSER_URL is not an address: the app has no browser" ;;
+        other*) more "BROWSER_URL is a DevTools address (ws://), which is not asked here" ;;
+        "") more "the server's container could not be asked (no Node.js in it, or it did not answer)" ;;
+        *)
+          case "${health}" in
+            200) ;;
+            0\ * | 0) more "the server's container does NOT reach it (${health#0 }): agents have no browser until it does" ;;
+            503) more "the service answers the server's container, and its Chromium is not running (HTTP 503)" ;;
+            *) more "what answers the server's container there is not a browser service (HTTP ${health})" ;;
+          esac
+          if [ "${health}" = "200" ] || [ "${health}" = "503" ]; then
+            code="${version%% *}"
+            rest="${version#* }"
+            egress="${rest%% *}"
+            product="${rest#* }"
+            [ "${product}" != "${rest}" ] || product=""
+            case "${code}" in
+              200)
+                more "the server's container reaches it, and it takes the token of .env${product:+: ${product}}"
+                case "${egress}" in
+                  filtered) more "it keeps pages from private networks" ;;
+                  *) more "it does not say that it keeps pages from private networks: it is not the service of this repository" ;;
+                esac
+                ;;
+              401 | 403) more "the server's container reaches it, and it does NOT take the token of .env: the action \"browser\" writes the one it has" ;;
+              *) more "the server's container reaches it, and it did not say what it is (HTTP ${code:-none})" ;;
+            esac
+          fi
+          ;;
+      esac
+    elif have docker; then
+      more "The server is not running: whether it reaches the service is seen when it runs."
+    fi
+  fi
 fi
 
 if [ -n "${SITE}" ] && have curl; then
