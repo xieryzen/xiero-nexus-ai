@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "visibility"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "visibility", "servers"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -2283,7 +2283,527 @@ export async function automation(ctx) {
     eq("the accounts of these checks are deleted", gone, [200, 200]);
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility };
+
+  // ─── Servers over SSH ──────────────────────────────────────────────────────
+
+  async function servers() {
+    const SSH_PORT = Number(process.env.E2E_SSH_PORT ?? 4012);
+    const CONTROL = process.env.E2E_SSH_CONTROL_URL ?? "http://127.0.0.1:4013";
+    const PASS = "servers-first-password-1";
+    const HOST = "127.0.0.1";
+    const control = async (path) => (await fetch(`${CONTROL}${path}`)).json();
+    const machine = () => control("/__state");
+    const make = (username, extra = {}) => admin.post("/api/admin/users", { username, email: `${username}@example.com`, password: PASS, ...extra });
+    const signIn = async (name) => {
+      const who = client();
+      await who.post("/api/auth/login", { identifier: name, password: PASS });
+      return who;
+    };
+    const logOf = async (who, server, limit = 60) => (await who.get(`/api/servers/commands?limit=${limit}${server ? `&server=${server}` : ""}`)).data?.commands ?? [];
+    /** A workflow whose one agent runs these commands on a server, in order. */
+    const ssh = (...calls) => calls.map((c) => `SSH: ${JSON.stringify(typeof c === "string" ? { command: c } : c)}`).join("\n");
+    const toolResults = async (who, projectId, seq) => {
+      const tasks = (await who.get(`/api/projects/${projectId}`)).data?.project?.tasks ?? [];
+      const task = tasks.find((x) => x.seq === seq);
+      const calls = task ? ((await who.get(`/api/projects/${projectId}/tasks/${task.id}/tool-calls`)).data?.calls ?? []) : [];
+      return calls.filter((c) => c.name === "run_on_server");
+    };
+    const statusOf = async (who, projectId) => (await who.get(`/api/projects/${projectId}`)).data?.project;
+
+    begin("Servers: accounts for these checks");
+    const sam = (await make("sam", { role: "admin" })).data?.user?.id;
+    const sue = (await make("sue")).data?.user?.id;
+    const admins = await signIn("sam");
+    const users = await signIn("sue");
+    check("an administrator and a user are there", Boolean(sam && sue) && admins.hasSession() && users.hasSession(), [sam, sue]);
+    await control("/__reset");
+    await control("/__idle?seconds=0");
+    await control("/__sessions?max=0");
+    await control("/__shell?on=1");
+    await control("/__listen?on=1");
+    const first = await machine();
+
+    begin("Servers: only an owner registers one, and nothing is signed in to before the host key was shown");
+    const empty = await admin.get("/api/servers");
+    eq("at first there is none", [empty.status, empty.data?.servers, empty.data?.canManage], [200, [], true]);
+    eq("  an administrator reads the list and manages nothing; a user is not shown it", [(await admins.get("/api/servers")).data?.canManage, (await users.get("/api/servers")).status, (await users.get("/api/servers/commands")).status], [false, 403, 403]);
+    const where = { host: HOST, port: SSH_PORT };
+    eq("the host key is read by an owner only", [(await admins.post("/api/servers/host-key", where)).status, (await users.post("/api/servers/host-key", where)).status], [403, 403]);
+    const shown = await admin.post("/api/servers/host-key", where);
+    eq("  it is the key the machine has, with the fingerprint ssh-keygen prints", [shown.status, shown.data?.hostKey, shown.data?.fingerprint, shown.data?.type, shown.data?.file], [200, first.hostKey, first.fingerprint, "ssh-ed25519", "/etc/ssh/ssh_host_ed25519_key.pub"]);
+    const afterReading = await machine();
+    eq("  reading it signs in to nothing, and tries nothing", [afterReading.signIns, afterReading.refused], [0, 0]);
+    const nowhere = await admin.post("/api/servers/host-key", { host: HOST, port: 1 });
+    check("  a port nothing answers on is said so", nowhere.status === 400 && nowhere.code === "server_unreachable" && /refused the connection/.test(nowhere.error ?? ""), [nowhere.status, nowhere.code, nowhere.error]);
+    eq("  a host that is not one is refused before anything is asked", [(await admin.post("/api/servers/host-key", { host: "ssh://example.com" })).status, (await admin.post("/api/servers/host-key", { host: "root@example.com" })).status], [400, 400]);
+
+    const good = { name: "vps-1", ...where, username: "root", authType: "password", password: first.password, hostKey: shown.data?.hostKey, notes: "A test machine. Leave /etc alone." };
+    const otherKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGWXFVYWJ6nBkGY4G4oSpmyYMHhj2S7Rr6mbfEx8Cjq5";
+    const wrongKey = await admin.post("/api/servers", { ...good, hostKey: otherKey });
+    check("a machine that shows another key than the one accepted is not registered", wrongKey.status === 400 && wrongKey.code === "host_key_mismatch" && /Nothing was sent/.test(wrongKey.error ?? ""), [wrongKey.status, wrongKey.code, wrongKey.error]);
+    eq("  and the password was not sent to it", [(await machine()).signIns, (await machine()).refused], [0, 0]);
+    const wrongPassword = await admin.post("/api/servers", { ...good, password: "not-the-password" });
+    check("a password the machine does not take: not registered, and said", wrongPassword.status === 400 && wrongPassword.code === "sign_in_refused", [wrongPassword.status, wrongPassword.code, wrongPassword.error]);
+    eq(
+      "what is not a name, a host or a key is refused",
+      [
+        (await admin.post("/api/servers", { ...good, name: "My Server" })).status,
+        (await admin.post("/api/servers", { ...good, host: "example.com:22" })).status,
+        (await admin.post("/api/servers", { ...good, hostKey: "not a key" })).status,
+        (await admin.post("/api/servers", { ...good, hostKey: undefined })).status,
+        (await admin.post("/api/servers", { ...good, authType: "key", password: undefined, privateKey: "ssh-ed25519 AAAA the public half" })).status,
+      ],
+      [400, 400, 400, 400, 400],
+    );
+    // A machine that takes the password and then is no shell: the command line of a router.
+    await control("/__shell?on=0");
+    const noShell = await admin.post("/api/servers", good);
+    await control("/__shell?on=1");
+    check(
+      "a machine that signs us in and runs no command the way sh does: not registered, and said with what it answered",
+      noShell.status === 400 &&
+        noShell.code === "command_not_run" &&
+        noShell.error === "The machine signed us in, but it did not run the command of the check the way a machine with sh does (exit code 1). It said: bad command name sh (line 1 column 1). Agents run their commands with sh: a machine without it cannot be worked on.",
+      [noShell.status, noShell.code, noShell.error],
+    );
+    eq("  nothing was saved by any of that", (await admin.get("/api/servers")).data?.servers?.length, 0);
+    eq("an administrator and a user register nothing", [(await admins.post("/api/servers", good)).status, (await users.post("/api/servers", good)).status], [403, 403]);
+
+    await control("/__reset");
+    const made = await admin.post("/api/servers", good);
+    const vps = made.data?.server;
+    eq("an owner registers a machine: the app signs in once and runs one command", [made.status, vps?.name, vps?.host, vps?.port, vps?.username, vps?.authType, vps?.access, vps?.status, vps?.fingerprint], [201, "vps-1", HOST, SSH_PORT, "root", "password", "owners", "enabled", first.fingerprint]);
+    check("  what the command printed is in the answer", /^\S+ \S+\n\S+$/.test(made.data?.checked ?? ""), made.data?.checked);
+    eq("  that command is the only one the machine was given", (await machine()).commands, ["uname -sr 2>/dev/null; id -un"]);
+    check("  it is given an empty input, and is told which processes are its own", (await machine()).lines.length === 1 && (await machine()).lines[0].includes("</dev/null") && (await machine()).lines[0].includes("__xn_pid__:"), (await machine()).lines);
+    check("  the answer holds nothing that signs in", !JSON.stringify(made.data).includes(first.password) && !("secretCiphertext" in (vps ?? {})) && !("password" in (vps ?? {})), Object.keys(vps ?? {}));
+    {
+      const db = database();
+      const row = db.prepare("SELECT secret_ciphertext AS secret, host_key AS hostKey FROM servers WHERE id = ?").get(vps?.id);
+      db.close();
+      check("  the password is kept encrypted", typeof row?.secret === "string" && row.secret.length > 20 && !row.secret.includes(first.password) && row.hostKey === first.hostKey, row?.secret?.slice(0, 12));
+    }
+    eq("  a second machine of the same name is refused", (await admin.post("/api/servers", good)).status, 409);
+    const audits = () => {
+      const db = database();
+      const rows = db.prepare("SELECT action, metadata FROM audit_logs WHERE action LIKE 'server.%' ORDER BY created_at").all();
+      db.close();
+      return rows;
+    };
+    const audited = audits().find((e) => e.action === "server.create");
+    check("  the audit log has it: where the machine is and how it is signed in to, not with what", JSON.parse(audited?.metadata ?? "{}").hostKey === first.fingerprint && JSON.parse(audited?.metadata ?? "{}").signIn === "password" && !JSON.stringify(audited).includes(first.password), audited);
+
+    begin("Servers: a key, with and without a passphrase");
+    const keyed = { name: "vps-key", ...where, username: "deploy", authType: "key", hostKey: first.hostKey, access: "admins" };
+    const noPassphrase = await admin.post("/api/servers", { ...keyed, privateKey: first.sealedKey });
+    check("a key that needs a passphrase, without it: not registered, and said", noPassphrase.status === 400 && noPassphrase.code === "sign_in_refused" && /private key cannot be read/i.test(noPassphrase.error ?? ""), [noPassphrase.status, noPassphrase.code, noPassphrase.error]);
+    const wrongAccount = await admin.post("/api/servers", { ...keyed, username: "root", privateKey: first.key });
+    eq("a key the account does not have: not registered", [wrongAccount.status, wrongAccount.code], [400, "sign_in_refused"]);
+    await control("/__reset");
+    const madeKey = await admin.post("/api/servers", { ...keyed, privateKey: first.sealedKey, passphrase: first.passphrase });
+    const keyVps = madeKey.data?.server;
+    eq("with its passphrase it is registered, and the machine was signed in to with the key", [madeKey.status, keyVps?.authType, keyVps?.access, (await machine()).method], [201, "key", "admins", "publickey"]);
+    check("  the answer holds nothing of the key", !JSON.stringify(madeKey.data).includes("PRIVATE KEY") && !JSON.stringify(madeKey.data).includes(first.passphrase), null);
+
+    begin("Servers: who sees which");
+    const forAdmin = await admins.get("/api/servers");
+    eq("an administrator is shown the machines that are opened to administrators", forAdmin.data?.servers?.map((s) => s.name), ["vps-key"]);
+    eq(
+      "  the other one is not there for them, and they change, check and remove none",
+      [
+        (await admins.get(`/api/servers/${vps?.id}`)).status,
+        (await admins.get(`/api/servers/${keyVps?.id}`)).status,
+        (await admins.patch(`/api/servers/${keyVps?.id}`, { notes: "mine" })).status,
+        (await admins.post(`/api/servers/${keyVps?.id}/test`)).status,
+        (await admins.del(`/api/servers/${keyVps?.id}`)).status,
+        (await admins.get(`/api/servers/commands?server=${vps?.id}`)).status,
+        (await admins.get("/api/servers/commands?server=removed")).status,
+      ],
+      [404, 200, 403, 403, 403, 404, 403],
+    );
+    eq("  a user is shown none of it", [(await users.get(`/api/servers/${keyVps?.id}`)).status, (await users.patch(`/api/servers/${keyVps?.id}`, { notes: "mine" })).status, (await users.del(`/api/servers/${keyVps?.id}`)).status], [403, 403, 403]);
+    eq("the owner reads both, by name", (await admin.get("/api/servers")).data?.servers?.map((s) => [s.name, s.projects, s.open]), [["vps-1", 0, []], ["vps-key", 0, []]]);
+
+    begin("Servers: the tool, and the projects that may name a machine");
+    const tools = await admin.get("/api/agents/tools");
+    const tool = tools.data?.tools?.find((x) => x.name === "run_on_server");
+    eq("agents can be given a tool to work on servers", [tool?.group, tool?.available, tools.data?.groups?.servers], ["servers", true, "Servers over SSH"]);
+    await agent("Operator", "Operator", { tools: ["run_on_server"] });
+    await agent("Bystander", "Bystander", { tools: ["list_files"] });
+    const two = await workflow("Server work", [
+      { title: "Tool: ssh first", objective: ssh("echo one > note.txt; cat note.txt", "sleep 5; echo still-here", "cat note.txt; echo problem >&2; exit 3"), role: "Operator" },
+      { title: "Tool: ssh second", objective: ssh({ command: "cat note.txt && echo second-task", server: "VPS-1" }), role: "Operator", dependsOn: [1] },
+    ]);
+    const base = { goal: "Work on the server.", managerModelRowId: ids.models.chat };
+    const SAME = "A server of this project does not exist, or the projects of this account may not work on it.";
+    const byUser = await users.post("/api/projects", { title: "Sue's", goal: "Work on the server.", serverIds: [vps?.id] });
+    const byAdmin = await admins.post("/api/projects", { ...base, title: "Sam's on vps-1", serverIds: [vps?.id] });
+    const unknown = await admin.post("/api/projects", { ...base, title: "Nowhere", serverIds: ["no-such-server"] });
+    eq("a project names only machines its account may use; the answer does not say which there are", [[byUser.status, byUser.error], [byAdmin.status, byAdmin.error], [unknown.status, unknown.error]], [[400, SAME], [400, SAME], [400, SAME]]);
+    const ops = await admin.post("/api/projects", { ...base, title: "Ops", workflowId: two, serverIds: [vps?.id] });
+    const opsId = ops.data?.project?.id;
+    eq("the owner's project names one", [ops.status, ops.data?.project?.servers], [201, [{ id: vps?.id, name: "vps-1" }]]);
+    eq("  the machine says how many projects name it", (await admin.get(`/api/servers/${vps?.id}`)).data?.server?.projects, 1);
+
+    begin("Servers: one connection for the whole run, kept alive, then closed");
+    // The mock cuts a connection that sends nothing for 3 seconds, as a firewall
+    // in between does. The app says every second that it is still there.
+    await control("/__reset");
+    await control("/__idle?seconds=3");
+    {
+      const require = createRequire(import.meta.url);
+      const { Client } = require("ssh2");
+      const silent = await new Promise((resolve) => {
+        const c = new Client();
+        const started = Date.now();
+        c.on("ready", () => undefined)
+          .on("close", () => resolve(Date.now() - started))
+          .on("error", () => undefined)
+          .connect({ host: HOST, port: SSH_PORT, username: "root", password: first.password, hostVerifier: () => true });
+        setTimeout(() => {
+          c.end();
+          resolve(null);
+        }, 8000);
+      });
+      check("(a connection that says nothing is cut by the mock after 3 seconds)", silent !== null && silent >= 2800 && silent < 6000 && (await machine()).idleCuts === 1, silent);
+    }
+    await control("/__reset");
+    let during = null;
+    await mockReset();
+    const run = await runProject(admin, opsId, {
+      onEvent: async (event) => {
+        if (event.type === "progress" && /sleep 5/.test(event.message ?? "") && !during) {
+          during = { servers: (await admin.get("/api/servers")).data?.servers, machine: await machine() };
+        }
+      },
+    });
+    eq("the run does its two tasks", finished(run.events).map((e) => [e.seq, e.status]), [[1, "succeeded"], [2, "succeeded"]]);
+    const afterRun = await until(machine, (m) => m.open === 0, { tries: 10, gapMs: 300 });
+    eq("  four commands reached the machine, in order, over ONE connection", [afterRun.commands, afterRun.connections, afterRun.signIns], [["echo one > note.txt; cat note.txt", "sleep 5; echo still-here", "cat note.txt; echo problem >&2; exit 3", "cat note.txt && echo second-task"], 1, 1]);
+    eq("  it was not cut in the 5 seconds a command said nothing, nor between the tasks", afterRun.idleCuts, 0);
+    eq("  when the run had ended, it was closed", afterRun.open, 0);
+    const held = during?.servers?.find((s) => s.name === "vps-1")?.open ?? [];
+    eq("  while it ran, the Servers list said which run held the connection", [held.length, held[0]?.projectTitle, held[0]?.connected, during?.machine?.open], [1, "Ops", true, 1]);
+    check("  the page of the run said what was running there", run.events.some((e) => e.type === "progress" && e.message === "vps-1: sleep 5; echo still-here"), run.events.filter((e) => e.type === "progress").map((e) => e.message));
+    const firstCalls = await toolResults(admin, opsId, 1);
+    const secondCalls = await toolResults(admin, opsId, 2);
+    check("  the agent read each command's exit code and what it printed", /^\[vps-1\] exit code 0, [\d.]+ s\nstdout:\none\nstderr: \(empty\)$/.test(firstCalls[0]?.result ?? "") && /still-here/.test(firstCalls[1]?.result ?? "") && /^\[vps-1\] exit code 3, [\d.]+ s\nstdout:\none\nstderr:\nproblem$/.test(firstCalls[2]?.result ?? ""), firstCalls.map((c) => c.result));
+    eq("  a command that ends with another code than 0 is not a failed tool call", firstCalls.map((c) => c.isError), [false, false, false]);
+    check("  the second task found what the first left on the machine", /stdout:\none\nsecond-task/.test(secondCalls[0]?.result ?? ""), secondCalls[0]?.result);
+    check("  nothing of where the machine is or what signs in was said to the model", !(await mockLog()).some((l) => JSON.stringify(l.body ?? {}).includes(first.password) || JSON.stringify(l.body ?? {}).includes(`${HOST}:${SSH_PORT}`)), null);
+    const offered = (await mockLog()).find((l) => (l.body?.tools ?? []).some((x) => x.function?.name === "run_on_server"))?.body?.tools?.find((x) => x.function?.name === "run_on_server")?.function;
+    check("  the tool names the project's machine, the account, and the owner's notes", /Servers: vps-1 \(signed in as root; A test machine\. Leave \/etc alone\.\)\.$/.test(offered?.description ?? "") && JSON.stringify(offered?.parameters?.required) === '["command"]', offered?.description?.slice(-120));
+
+    begin("Servers: every command is written down");
+    const log = (await logOf(admin, vps?.id)).filter((c) => c.projectTitle === "Ops").reverse();
+    eq(
+      "the log has the connection, the four commands, and the closing, in order",
+      log.map((c) => [c.kind, c.command, c.status, c.exitCode]),
+      [
+        ["session", "Connected", "ok", null],
+        ["command", "echo one > note.txt; cat note.txt", "ok", 0],
+        ["command", "sleep 5; echo still-here", "ok", 0],
+        ["command", "cat note.txt; echo problem >&2; exit 3", "failed", 3],
+        ["command", "cat note.txt && echo second-task", "ok", 0],
+        ["session", "Closed", "ok", null],
+      ],
+    );
+    eq("  each command with its project, its task, its agent and the account it was for", log.filter((c) => c.kind === "command").map((c) => [c.projectId, c.taskTitle, c.agentName, c.username]), [[opsId, "Tool: ssh first", "Operator", "admin"], [opsId, "Tool: ssh first", "Operator", "admin"], [opsId, "Tool: ssh first", "Operator", "admin"], [opsId, "Tool: ssh second", "Operator", "admin"]]);
+    check("  with what it printed and how long it took", log[3]?.output === "one\nstderr:\nproblem" && log[2]?.durationMs >= 5000 && log[2]?.durationMs < 9000, [log[3]?.output, log[2]?.durationMs]);
+    check("  the closing says how long it was open and for how many commands", /^The run has ended\. Open for [\d.]+ s, 4 commands\.$/.test(log[5]?.output ?? ""), log[5]?.output);
+    check("  the connection says who was signed in and which key the machine showed", log[0]?.output === `Signed in as root. Host key ${first.fingerprint}. It stays open until the run has ended.`, log[0]?.output);
+    eq("  the registration is in it too", (await logOf(admin, vps?.id)).filter((c) => c.kind === "test").map((c) => [c.command, c.status]), [["Registered: signed in and ran one command", "ok"]]);
+    eq("  an administrator is not shown the log of a machine that is for owners", (await logOf(admins, "")).filter((c) => c.serverName === "vps-1").length, 0);
+    await control("/__idle?seconds=0");
+
+    begin("Servers: a connection that is lost on the way is opened again");
+    const cut = await workflow("Server work, cut", [{ title: "Tool: ssh cut", objective: ssh("echo before", "sleep 4; echo never", "echo after"), role: "Operator" }]);
+    const cutId = (await admin.post("/api/projects", { ...base, title: "Ops, cut", workflowId: cut, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    let dropped = false;
+    const cutRun = await runProject(admin, cutId, {
+      onEvent: async (event) => {
+        if (event.type === "progress" && /sleep 4/.test(event.message ?? "") && !dropped) {
+          dropped = true;
+          await sleep(800);
+          await control("/__drop");
+        }
+      },
+    });
+    const cutCalls = await toolResults(admin, cutId, 1);
+    const afterCut = await until(machine, (m) => m.open === 0, { tries: 10, gapMs: 300 });
+    eq("the task goes on after the cut", [finished(cutRun.events).map((e) => e.status), dropped], [["succeeded"], true]);
+    check("  the command that was running is said to be lost, with what is not known", /^\[vps-1\] the connection was lost after [\d.]+ s, while the command ran\. Whether it finished is not known\. The next call connects again/.test(cutCalls[1]?.result ?? ""), cutCalls[1]?.result);
+    check("  the next command ran, over a second connection", /^\[vps-1\] exit code 0.*\nstdout:\nafter/.test(cutCalls[2]?.result ?? "") && afterCut.connections === 2, [cutCalls[2]?.result, afterCut.connections]);
+    const cutLog = (await logOf(admin, vps?.id)).filter((c) => c.projectTitle === "Ops, cut").reverse();
+    eq(
+      "  the log says all of it: lost, opened again, closed",
+      cutLog.map((c) => [c.kind, c.command, c.status]),
+      [
+        ["session", "Connected", "ok"],
+        ["command", "echo before", "ok"],
+        ["session", "Connection lost", "lost"],
+        ["command", "sleep 4; echo never", "lost"],
+        ["session", "Connected again", "ok"],
+        ["command", "echo after", "ok"],
+        ["session", "Closed", "ok"],
+      ],
+    );
+    check("  the closing counts the commands that were started, and the connections", /, 3 commands, connected 2 times\.$/.test(cutLog[6]?.output ?? ""), cutLog[6]?.output);
+
+    begin("Servers: a command whose time is up, and a run that is stopped");
+    const slow = await workflow("Server work, slow", [{ title: "Tool: ssh slow", objective: ssh({ command: "sh -c 'sleep 60' & sleep 60", timeout_seconds: 5 }, "echo afterwards"), role: "Operator" }]);
+    const slowId = (await admin.post("/api/projects", { ...base, title: "Ops, slow", workflowId: slow, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    const slowRun = await runProject(admin, slowId);
+    const slowCalls = await toolResults(admin, slowId, 1);
+    check("after the 5 seconds it was allowed, the command is ended, and the agent is told", /^\[vps-1\] stopped: it was still running after the 5 s it was allowed \(timeout_seconds\)\. It was ended on the server\./.test(slowCalls[0]?.result ?? ""), slowCalls[0]?.result);
+    eq("  nothing of it is left running on the machine, also not what it started", (await until(machine, (m) => m.running === 0, { tries: 10, gapMs: 300 })).running, 0);
+    check("  the task goes on with the next command, on the same connection", /stdout:\nafterwards/.test(slowCalls[1]?.result ?? "") && (await machine()).connections === 1 && finished(slowRun.events)[0]?.status === "succeeded", [slowCalls[1]?.result, (await machine()).connections]);
+    eq("  the log says that its time was up", (await logOf(admin, vps?.id)).filter((c) => c.projectTitle === "Ops, slow" && c.kind === "command").reverse().map((c) => c.status), ["timeout", "ok"]);
+
+    const long = await workflow("Server work, long", [{ title: "Tool: ssh long", objective: ssh("sleep 45; echo never"), role: "Operator" }]);
+    const longId = (await admin.post("/api/projects", { ...base, title: "Ops, long", workflowId: long, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    let cancelled = null;
+    const startedAt = Date.now();
+    const longRun = await runProject(admin, longId, {
+      onEvent: async (event) => {
+        if (event.type === "progress" && /sleep 45/.test(event.message ?? "") && !cancelled) {
+          await sleep(500);
+          cancelled = await admin.post(`/api/projects/${longId}/cancel`);
+        }
+      },
+    });
+    const stoppedIn = Date.now() - startedAt;
+    eq("a run that is stopped stops the command on the machine", [cancelled?.status, (await statusOf(admin, longId))?.status, longRun.events.at(-1)?.status], [200, "cancelled", "cancelled"]);
+    check("  within seconds, not after the 45 the command would have taken", stoppedIn < 15_000, stoppedIn);
+    const afterStop = await until(machine, (m) => m.running === 0 && m.open === 0, { tries: 12, gapMs: 300 });
+    eq("  nothing is left running, and the connection is closed", [afterStop.running, afterStop.open], [0, 0]);
+    const stopLog = (await logOf(admin, vps?.id)).filter((c) => c.projectTitle === "Ops, long").reverse();
+    eq("  the log says so", stopLog.map((c) => [c.kind, c.command, c.status]), [["session", "Connected", "ok"], ["command", "sleep 45; echo never", "cancelled"], ["session", "Closed", "ok"]]);
+    check("  and why it was closed", /^The run was stopped\./.test(stopLog[2]?.output ?? ""), stopLog[2]?.output);
+
+    begin("Servers: a machine that opens one session at a time");
+    // As a machine with MaxSessions 1 does: a second session on the connection is turned down.
+    const side = await workflow("Server work, side by side", [
+      { title: "Tool: ssh left", objective: ssh("sleep 2; echo left"), role: "Operator" },
+      { title: "Tool: ssh right", objective: ssh("sleep 2; echo right"), role: "Operator" },
+      { title: "Tool: ssh stuck", objective: ssh({ command: "sleep 50", timeout_seconds: 5 }, "echo afterwards"), role: "Operator", dependsOn: [1, 2] },
+    ]);
+    const sideId = (await admin.post("/api/projects", { ...base, title: "Ops, side by side", workflowId: side, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    await control("/__sessions?max=1");
+    const sideRun = await runProject(admin, sideId);
+    await control("/__sessions?max=0");
+    const sideMachine = await until(machine, (m) => m.running === 0, { tries: 10, gapMs: 300 });
+    const left = (await toolResults(admin, sideId, 1))[0];
+    const right = (await toolResults(admin, sideId, 2))[0];
+    eq("two tasks that work at the same time both get their turn, over one connection", [finished(sideRun.events).slice(0, 2).map((e) => e.status).sort(), /stdout:\nleft/.test(left?.result ?? ""), /stdout:\nright/.test(right?.result ?? ""), left?.isError || right?.isError, sideMachine.connections], [["succeeded", "succeeded"], true, true, false, 1]);
+    check("  the machine turned a session down, and the app waited instead of failing", sideMachine.sessionsRefused >= 1, sideMachine.sessionsRefused);
+    const stuck = await toolResults(admin, sideId, 3);
+    check("a command whose time is up there is ended through its own channel: the line that ends it gets no session", sideMachine.signals.includes("TERM") && sideMachine.running === 0 && /^\[vps-1\] stopped: it was still running after the 5 s it was allowed/.test(stuck[0]?.result ?? ""), [sideMachine.signals, sideMachine.running, stuck[0]?.result]);
+    check("  the agent is told that the ending could not be confirmed, and goes on", /Ending it on the server could not be confirmed: look whether it still runs\./.test(stuck[0]?.result ?? "") && /stdout:\nafterwards/.test(stuck[1]?.result ?? ""), stuck.map((c) => c.result));
+
+    begin("Servers: an attempt that starts over is told what the task already ran");
+    // An agent whose first model fails in the middle of the task: its second model starts the task over.
+    await model("chat-ops", openai, "chat-ops", ["text"]);
+    await agent("Operator again", "Second operator", { tools: ["run_on_server"], primaryModelRowId: state.models["chat-ops"], fallbackModelRowId: ids.models.chat });
+    const twice = await workflow("Server work, twice", [{ title: "Tool: ssh twice", objective: ssh("echo once >> twice.txt; wc -l < twice.txt", "echo done"), role: "Second operator" }]);
+    const twiceId = (await admin.post("/api/projects", { ...base, title: "Ops, twice", workflowId: twice, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    await mockReset();
+    // The model answers once, and fails when it is handed the first result.
+    await fetch(`${MOCK}/__force?model=chat-ops&status=500&times=1&after=1`);
+    const twiceRun = await runProject(admin, twiceId);
+    await fetch(`${MOCK}/__force?model=chat-ops&status=200`);
+    const attempts = ((await admin.get(`/api/projects/${twiceId}/attempts`)).data?.attempts ?? []).map((a) => [a.attempt, a.status, a.modelId]);
+    eq("the task was attempted twice", [attempts, finished(twiceRun.events)[0]?.status], [[[1, "error", "chat-ops"], [2, "ok", "chat-mini"]], "succeeded"]);
+    eq("  the second attempt ran its commands again, over the same connection", [(await machine()).commands, (await machine()).connections], [["echo once >> twice.txt; wc -l < twice.txt", "echo once >> twice.txt; wc -l < twice.txt", "echo done"], 1]);
+    const told = (await mockLog()).filter((l) => l.method === "POST").flatMap((l) => (l.body?.messages ?? []).filter((m) => m.role === "tool").map((m) => String(m.content)));
+    const note = told.find((text) => text.startsWith("(Before this attempt"));
+    check("  before its first result it was told what had been run, and that it is not undone", note?.startsWith("(Before this attempt, this task already ran 1 command on the server:\n1. [vps-1] exit 0: echo once >> twice.txt; wc -l < twice.txt\nThey are not undone. Look at what is there before you repeat one.)\n\n[vps-1] exit code 0") && /stdout:\n2$/m.test(note), note);
+    eq("  it was told once, not with every command", told.filter((text) => text.includes("Before this attempt")).length >= 1 && !told.some((text) => text.includes("Before this attempt") && text.includes("stdout:\ndone")), true);
+
+    begin("Servers: what stands in the way is said, and nothing is sent to a machine that is not the one");
+    const plain = await workflow("Server work, plain", [{ title: "Tool: ssh plain", objective: ssh("echo reached"), role: "Operator" }]);
+    const plainId = (await admin.post("/api/projects", { ...base, title: "Ops, plain", workflowId: plain, serverIds: [vps?.id] })).data?.project?.id;
+    const off = await admin.patch(`/api/servers/${vps?.id}`, { status: "disabled" });
+    await control("/__reset");
+    await runProject(admin, plainId);
+    const refused = await statusOf(admin, plainId);
+    eq("a machine that is switched off: the run does not start, and says why", [off.status, off.data?.server?.status, refused?.status, refused?.error, (await machine()).connections], [200, "disabled", "failed", 'The server "vps-1" of this project is switched off (Servers page).', 0]);
+    eq("  switched on again without signing in: nothing about the connection changed", [(await admin.patch(`/api/servers/${vps?.id}`, { status: "enabled" })).data?.checked, (await machine()).connections], [null, 0]);
+
+    const rekeyed = await control("/__rekey");
+    await control("/__reset");
+    await runProject(admin, plainId);
+    const otherMachine = await toolResults(admin, plainId, 1);
+    check("a machine that shows another host key: the agent is told, and that trying again does not help", otherMachine[0]?.isError === true && otherMachine[0]?.result === '"vps-1" showed another host key than the one registered, so nothing was sent to it. Trying again does not help: an owner has to look at it on the Servers page.', otherMachine[0]);
+    eq("  nothing was signed in to, and the command did not reach it", [(await machine()).signIns, (await machine()).refused, (await machine()).commands], [0, 0, []]);
+    const keyLog = (await logOf(admin, vps?.id)).filter((c) => c.projectTitle === "Ops, plain").slice(0, 2).reverse();
+    check("  the log has the command as not started, with both fingerprints", keyLog.map((c) => [c.kind, c.status]).join() === "session,refused,command,refused" && keyLog[1]?.command === "echo reached" && keyLog[1]?.output?.includes(rekeyed.fingerprint) && keyLog[1]?.output?.includes(first.fingerprint), keyLog);
+    const checkedKey = await admin.post(`/api/servers/${vps?.id}/test`);
+    eq("the owner's check says the same, and shows the key the machine has now", [checkedKey.status, checkedKey.data?.ok, checkedKey.data?.kind, checkedKey.data?.shown?.fingerprint, checkedKey.data?.shown?.hostKey], [200, false, "host_key", rekeyed.fingerprint, rekeyed.hostKey]);
+    check("  the machine keeps the problem on its row", (await admin.get(`/api/servers/${vps?.id}`)).data?.server?.lastError?.includes("another host key"), null);
+    const accepted = await admin.patch(`/api/servers/${vps?.id}`, { hostKey: checkedKey.data?.shown?.hostKey });
+    eq("  accepting the new key signs in to the machine that shows it", [accepted.status, accepted.data?.server?.fingerprint, typeof accepted.data?.checked, accepted.data?.server?.lastError], [200, rekeyed.fingerprint, "string", null]);
+    await runProject(admin, plainId);
+    check("  and the project works again", /stdout:\nreached/.test((await toolResults(admin, plainId, 1))[0]?.result ?? ""), (await toolResults(admin, plainId, 1))[0]?.result);
+    eq("  (the other machine is the same mock: its new key is accepted too)", (await admin.patch(`/api/servers/${keyVps?.id}`, { hostKey: rekeyed.hostKey })).status, 200);
+
+    await control("/__password?value=changed-on-the-machine");
+    const stale = await admin.post(`/api/servers/${vps?.id}/test`);
+    check("a password that was changed on the machine: the check says that the sign-in is not accepted", stale.data?.ok === false && stale.data?.kind === "sign_in" && stale.data?.shown === null, stale.data);
+    await runProject(admin, plainId);
+    eq("  an agent is told so, and not to try again", (await toolResults(admin, plainId, 1))[0]?.result, '"vps-1" did not accept the sign-in that is registered for it. Trying again does not help: an owner has to look at it on the Servers page.');
+    const repaired = await admin.patch(`/api/servers/${vps?.id}`, { password: "changed-on-the-machine" });
+    eq("  the owner enters the new password, and it is checked before it is saved", [repaired.status, typeof repaired.data?.checked, (await admin.patch(`/api/servers/${vps?.id}`, { password: "wrong-again" })).code], [200, "string", "sign_in_refused"]);
+    eq("  (a password that was refused is not saved: the check still passes)", (await admin.post(`/api/servers/${vps?.id}/test`)).data?.ok, true);
+
+    await control("/__listen?on=0");
+    const away = await admin.post(`/api/servers/${vps?.id}/test`);
+    check("a machine that does not answer: the check says so", away.data?.ok === false && away.data?.kind === "unreachable" && /refused the connection/.test(away.data?.error ?? ""), away.data);
+    const awayStarted = Date.now();
+    await runProject(admin, plainId);
+    const awayCall = (await toolResults(admin, plainId, 1))[0];
+    check("  an agent is told that it could not be reached, after the app tried three times", awayCall?.result === '"vps-1" could not be reached just now. It was tried more than once; a later call tries again.' && Date.now() - awayStarted >= 6500, [awayCall?.result, Date.now() - awayStarted]);
+    await control("/__listen?on=1");
+    eq("  it answers again, and the check passes", (await admin.post(`/api/servers/${vps?.id}/test`)).data?.ok, true);
+
+    begin("Servers: an agent is handed the tool only where it has it and the project names a machine");
+    const noTool = await workflow("Server work, bystander", [{ title: "Tool: ssh bystander", objective: ssh("echo should-not-run"), role: "Bystander" }]);
+    const noToolId = (await admin.post("/api/projects", { ...base, title: "Ops, bystander", workflowId: noTool, serverIds: [vps?.id] })).data?.project?.id;
+    const noServerId = (await admin.post("/api/projects", { ...base, title: "Ops, nowhere", workflowId: plain })).data?.project?.id;
+    const noServerPlanId = (await admin.post("/api/projects", { ...base, title: "Ops, nowhere, planned" })).data?.project?.id;
+    await control("/__reset");
+    await mockReset();
+    await runProject(admin, noToolId);
+    await runProject(admin, noServerId);
+    const offeredTools = (await mockLog()).filter((l) => l.method === "POST").map((l) => (l.body?.tools ?? []).map((x) => x.function?.name));
+    eq("an agent without the tool, and a project without a machine: the tool is not offered, and nothing reaches the machine", [offeredTools.some((names) => names.includes("run_on_server")), (await machine()).connections, (await machine()).commands], [false, 0, []]);
+
+    begin("Servers: the one who plans is told that there are servers, and who can work on them");
+    const planOf = async (projectId) => {
+      await mockReset();
+      await runProject(admin, projectId);
+      const asked = (await mockLog())
+        .filter((l) => l.method === "POST")
+        .map((l) => String((l.body?.messages ?? []).find((m) => m.role === "system")?.content ?? ""))
+        .find((text) => text.includes("You are the AI Manager of an engineering team")) ?? "";
+      const from = asked.indexOf("This project works on real servers");
+      const to = asked.indexOf("\n\nAvailable agents:");
+      return { asked, servers: from >= 0 && to > from ? asked.slice(from, to) : "", agents: to >= 0 ? asked.slice(to).split("\n").filter((line) => line.startsWith("- ")) : [] };
+    };
+    const marked = (plan) => plan.agents.filter((line) => line.includes("[works on servers]")).map((line) => /^- (.+?) \(/.exec(line)?.[1]).sort();
+    const plannedId = (await admin.post("/api/projects", { ...base, title: "Ops, planned", serverIds: [vps?.id] })).data?.project?.id;
+    const planned = await planOf(plannedId);
+    check(
+      "a project without a workflow: the plan is asked for with the servers by name, and the owner's notes",
+      planned.servers.startsWith("This project works on real servers over SSH: vps-1 (signed in as root; A test machine. Leave /etc alone.). "),
+      planned.asked.slice(-900),
+    );
+    eq(
+      "  and with the agents that can run commands there, marked in the list",
+      [/Only the agents marked \[works on servers\] can run commands there \(([^)]*)\)\./.exec(planned.servers)?.[1]?.split(", ").sort(), marked(planned), planned.agents.some((line) => line.startsWith("- Bystander (Bystander)") && !line.includes("[works on servers]"))],
+      [["Operator", "Operator again"], ["Operator", "Operator again"], true],
+    );
+    check("  it is told to look before it changes, and to check afterwards", /Plan a task that looks at what is there before one that changes it, and one that checks the result afterwards\.$/.test(planned.servers), planned.servers);
+    check("  never with where a machine is, or how it is signed in to", !planned.servers.includes(HOST) && !planned.servers.includes(String(SSH_PORT)) && !planned.asked.includes(first.password), planned.servers);
+    // A team none of whose agents has the tool.
+    const lookers = (await admin.post("/api/teams", { name: "Lookers on", agentIds: [state.agents.Bystander] })).data?.team?.id;
+    const lookersId = (await admin.post("/api/projects", { ...base, title: "Ops, lookers on", teamId: lookers, serverIds: [vps?.id] })).data?.project?.id;
+    await control("/__reset");
+    const lookedOn = await planOf(lookersId);
+    check(
+      "a team none of whose agents has the tool: the one who plans is told that nothing on a server can be done",
+      /None of the available agents can run commands there, so nothing on a server can be looked at or changed in this run\./.test(lookedOn.servers) && marked(lookedOn).length === 0 && lookedOn.agents.length === 1,
+      [lookedOn.servers, lookedOn.agents],
+    );
+    eq("  and nothing reached the machine", [(await machine()).connections, (await machine()).commands], [0, []]);
+    const plainPlan = await planOf(noServerPlanId);
+    eq("a project that names no server: the plan is asked for as before", [plainPlan.asked.includes("real servers"), plainPlan.agents.some((line) => line.includes("[works on servers]")), plainPlan.agents.length > 2], [false, false, true]);
+
+    begin("Servers: the project's page says who can work there");
+    /** What the card "Servers" of a project's page says, as it is sent: the text without its markup. */
+    const serversCard = async (who, projectId) => {
+      const res = await who.raw(`/dashboard/projects/${projectId}`);
+      if (res.status !== 200) return `status ${res.status}`;
+      const html = await res.text();
+      const from = html.indexOf('id="project-servers"');
+      if (from < 0) return "";
+      // Up to the end of the page's markup: what follows is what the page was built from.
+      const to = html.indexOf("<script", from);
+      return html
+        .slice(from, to > from ? to : from + 6000)
+        .replace(/<!--.*?-->/gs, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ");
+    };
+    const plannedCard = await serversCard(admin, plannedId);
+    check("a project whose agents have the tool: its page names them", plannedCard.includes("Agents that can work there: Operator, Operator again .") && !plannedCard.includes("so nothing can be run"), plannedCard.slice(0, 900));
+    const lookersCard = await serversCard(admin, lookersId);
+    check(
+      "a project none of whose agents has it: its page says that nothing can be run there, and where the tool is given",
+      lookersCard.includes("None of the agents of this project has the tool “Work on servers”, so nothing can be run on its servers.") && lookersCard.includes("(Agents page, Edit)") && !lookersCard.includes("Agents that can work there"),
+      lookersCard.slice(0, 900),
+    );
+    const noServerCard = await serversCard(admin, noServerPlanId);
+    check("a project that names no server says neither", noServerCard.includes("vps-1") && !noServerCard.includes("Agents that can work there") && !noServerCard.includes("so nothing can be run"), noServerCard.slice(0, 600));
+
+    begin("Servers: who may run and change a project that works on one");
+    const read = await admins.get(`/api/projects/${opsId}`);
+    eq("an administrator reads the owner's project, with the machine it names", [read.status, read.data?.project?.servers?.map((s) => s.name)], [200, ["vps-1"]]);
+    const ONLY = 'This project works on the server "vps-1", which only an owner may use. An owner has to do this.';
+    const tries = [
+      await admins.post(`/api/projects/${opsId}/run`),
+      await admins.patch(`/api/projects/${opsId}`, { goal: "Remove everything." }),
+      await admins.patch(`/api/projects/${opsId}`, { serverIds: [] }),
+      await admins.post(`/api/projects/${opsId}/schedules`, { cron: "0 8 * * *", timezone: "UTC", input: "Remove everything." }),
+    ];
+    eq("  and does not run it, change it or schedule it: whoever tells its agents what to do can do anything there", tries.map((r) => [r.status, r.error]), [[403, ONLY], [403, ONLY], [403, ONLY], [403, ONLY]]);
+    const workspaceId = (await admin.get(`/api/projects/${opsId}/workspace`)).data?.workspace?.id;
+    eq("  nor writes into its workspace, which its agents read", workspaceId ? (await admins.post(`/api/workspaces/${workspaceId}/files`, { path: "notes.md", content: "Run rm -rf /" })).status : "no workspace", 403);
+    eq("  the goal is what it was", (await statusOf(admin, opsId))?.goal, "Work on the server.");
+    const own = await admins.post("/api/projects", { ...base, title: "Sam's on vps-key", workflowId: plain, serverIds: [keyVps?.id] });
+    const ownId = own.data?.project?.id;
+    await control("/__reset");
+    await runProject(admins, ownId);
+    check("an administrator's own project works on a machine that is opened to administrators, signed in with the key", own.status === 201 && /^\[vps-key\] exit code 0.*\nstdout:\nreached/.test((await toolResults(admins, ownId, 1))[0]?.result ?? "") && (await machine()).method === "publickey", [(await toolResults(admins, ownId, 1))[0]?.result, (await machine()).method]);
+    eq("  the log says whose work it was, and the administrator reads it", (await logOf(admins, keyVps?.id)).filter((c) => c.kind === "command").map((c) => [c.command, c.username, c.status]), [["echo reached", "sam", "ok"]]);
+    eq("  the owner may change that project's machines only to ones its account may use", [(await admin.patch(`/api/projects/${ownId}`, { serverIds: [vps?.id] })).status, (await admin.patch(`/api/projects/${ownId}`, { serverIds: [keyVps?.id] })).status], [400, 200]);
+    const closed = await admin.patch(`/api/servers/${keyVps?.id}`, { access: "owners" });
+    await control("/__reset");
+    const refusedRun = await admins.post(`/api/projects/${ownId}/run`);
+    eq("when the owner takes the machine back, the administrator's project is not run any more", [closed.data?.server?.access, refusedRun.status, (await machine()).connections], ["owners", 403, 0]);
+    await runProject(admin, ownId);
+    eq("  not by the owner either: a run works for the account the project belongs to", [(await statusOf(admin, ownId))?.status, (await statusOf(admin, ownId))?.error, (await machine()).connections], ["failed", 'This project names the server "vps-key", which the projects of its account may not work on.', 0]);
+    eq("a user's project has no machines, and a user is not shown that there are any", [(await users.post("/api/projects", { title: "Sue's own", goal: "Write a line." })).data?.project?.servers, (await users.get("/api/agents/tools")).status], [[], 403]);
+
+    begin("Servers: removing one");
+    const removed = await admin.del(`/api/servers/${keyVps?.id}`);
+    eq("the owner removes a machine; the project that named it is without it", [removed.status, (await statusOf(admin, ownId))?.servers, (await admin.get("/api/servers")).data?.servers?.map((s) => s.name)], [200, [], ["vps-1"]]);
+    const kept = await logOf(admin, "removed");
+    check("  what was done on it stays in the log, under the name it had", kept.length >= 3 && kept.every((c) => c.serverName === "vps-key" && c.serverId === null) && kept.some((c) => c.command === "echo reached"), kept.map((c) => [c.serverName, c.command]));
+    const actions = audits();
+    check(
+      "  the audit log has what the owner did with the machines, and nothing that signs in",
+      ["server.create", "server.update", "server.test", "server.delete"].every((a) => actions.some((e) => e.action === a)) &&
+        ![first.password, "changed-on-the-machine", first.passphrase, "PRIVATE KEY"].some((secret) => JSON.stringify(actions).includes(secret)),
+      [...new Set(actions.map((e) => e.action))],
+    );
+
+    // The accounts of these checks go, and the model that was made to fail with
+    // its agent. The machine "vps-1", the agent "Operator" and the projects stay
+    // for the browser checks.
+    const gone = [];
+    for (const id of [sam, sue]) gone.push((await admin.del(`/api/admin/users/${id}`)).status);
+    gone.push((await admin.del(`/api/agents/${state.agents["Operator again"]}`)).status, (await admin.del(`/api/models/${state.models["chat-ops"]}`)).status);
+    eq("the accounts of these checks are deleted, and the model that was made to fail", gone, [200, 200, 200, 200]);
+    eq("  the machine of the mock is left as it was found", [(await control("/__password?value=changed-on-the-machine")).ok, (await machine()).listening], [true, true]);
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility, servers };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

@@ -18,9 +18,10 @@ const nextConfig = {
   eslint: { ignoreDuringBuilds: true },
   experimental: {
     // Loaded from node_modules at run time instead of being bundled by Next's
-    // server compiler: better-sqlite3 is a native module, and unpdf (PDF text
-    // for the knowledge base) loads its PDF reader with an import of its own.
-    serverComponentsExternalPackages: ["better-sqlite3", "unpdf"],
+    // server compiler: better-sqlite3 is a native module, unpdf (PDF text for
+    // the knowledge base) loads its PDF reader with an import of its own, and
+    // ssh2 (the connections to servers) looks for optional native parts.
+    serverComponentsExternalPackages: ["better-sqlite3", "unpdf", "ssh2"],
     // src/instrumentation.ts starts the background worker with the server.
     instrumentationHook: true,
   },

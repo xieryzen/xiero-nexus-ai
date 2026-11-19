@@ -15,6 +15,7 @@ import { Icon } from "@/components/icons";
 import { MediaView } from "@/components/media/media-view";
 import { useMediaPolling } from "@/components/media/use-media-polling";
 import { ProjectAutomation } from "./project-automation";
+import { ProjectServers, type ServerOption } from "./project-servers";
 import { StateBadge } from "./status-badge";
 
 interface TaskLive {
@@ -87,6 +88,9 @@ export function ProjectRunner({
   initialSchedules,
   initialRuns,
   chooses = true,
+  serverOptions = [],
+  serverOperators = [],
+  mayOperate = true,
 }: {
   project: ProjectDTO;
   agentNames: Record<string, string>;
@@ -102,6 +106,12 @@ export function ProjectRunner({
   initialRuns: RunDTO[];
   /** Whether the viewer is shown the setup: the models by name, and what a provider does. */
   chooses?: boolean;
+  /** The servers the project may be given by this account. */
+  serverOptions?: ServerOption[];
+  /** The agents of this project that have the tool to work on servers, by name. */
+  serverOperators?: string[];
+  /** Whether this account may run and change the project: false when it names a server the account may not use. */
+  mayOperate?: boolean;
 }) {
   const [status, setStatus] = useState(project.status);
   const [tasks, setTasks] = useState<TaskLive[]>(
@@ -504,7 +514,7 @@ export function ProjectRunner({
         </div>
       )}
 
-      {!canRun && (
+      {!canRun && mayOperate && (
         <Alert tone="warn">
           {chooses
             ? "No usable agents/models yet — add a model and at least one agent with a model."
@@ -516,6 +526,8 @@ export function ProjectRunner({
       <Card title="Goal" className="mb-6">
         <p className="whitespace-pre-wrap text-sm text-ink-2">{project.goal}</p>
       </Card>
+
+      <ProjectServers projectId={project.id} options={serverOptions} initial={project.servers} operators={serverOperators} mayChange={mayOperate} busy={isRunning} />
 
       <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-3">
         Tasks {tasks.length > 0 && `(${tasks.length})`}

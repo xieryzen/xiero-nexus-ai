@@ -32,6 +32,7 @@
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "ssh2": "1.17.0",
     "unpdf": "1.7.0",
     "zod": "^3.23.8"
   },
@@ -41,6 +42,7 @@
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
+    "@types/ssh2": "1.15.6",
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.28.0",
     "eslint": "^8.57.1",

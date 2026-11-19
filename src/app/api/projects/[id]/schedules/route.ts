@@ -1,7 +1,7 @@
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
-import { loadOwnedProject } from "@/lib/project-access";
+import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
 import { getClientMeta } from "@/lib/request";
 import { createSchedule, listSchedules, serializeSchedule } from "@/lib/schedules";
 import { scheduleCreateSchema } from "@/lib/validation";
@@ -17,7 +17,7 @@ export const GET = handle(async (_req, { params }) => {
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
-  const project = loadOwnedProject(params.id!, user);
+  const project = loadOperableProject(params.id!, user);
   const body = await parseBody(req, scheduleCreateSchema);
   const schedule = createSchedule(project, user.id, body);
   audit({

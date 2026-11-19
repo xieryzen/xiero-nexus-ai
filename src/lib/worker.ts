@@ -12,6 +12,7 @@ import { publish } from "./run-bus";
 import { runtime } from "./runtime";
 import { runDueSchedules } from "./schedules";
 import { stopOnSignal, stopping } from "./shutdown";
+import { closeStraySessions } from "./ssh/sessions";
 
 /**
  * The background worker: one loop per server process that does the work no
@@ -238,6 +239,9 @@ function housekeeping(): void {
   const now = Date.now();
   if (w.lastHousekeepingAt && now - w.lastHousekeepingAt < HOUSEKEEPING_MS) return;
   w.lastHousekeepingAt = now;
+  // A connection to a machine belongs to a run that is executed here, and is
+  // closed with it. None should be left over; this makes sure.
+  closeStraySessions(new Set(runtime().activeRuns.keys()));
   recoverJobs();
   for (const asset of failStaleRenders(RENDER_MAX_AGE_MS)) {
     notify(asset.userId, {

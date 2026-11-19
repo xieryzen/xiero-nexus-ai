@@ -16,7 +16,7 @@ export const GET = handle(async (_req, { params }) => {
 
 export const PATCH = handle(async (req, { params }) => {
   const user = requireUser();
-  const ws = loadOwnedWorkspace(params.id!, user);
+  const ws = loadOwnedWorkspace(params.id!, user, true);
   const file = getFile(ws.id, params.fileId!);
   const body = await parseBody(req, patchSchema);
   const updated = upsertFile(ws.id, file.path, body.content);
@@ -25,7 +25,7 @@ export const PATCH = handle(async (req, { params }) => {
 
 export const DELETE = handle(async (_req, { params }) => {
   const user = requireUser();
-  const ws = loadOwnedWorkspace(params.id!, user);
+  const ws = loadOwnedWorkspace(params.id!, user, true);
   deleteFile(ws.id, params.fileId!);
   return json({ ok: true });
 });

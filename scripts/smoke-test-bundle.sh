@@ -3,13 +3,15 @@
 # it really works: it refuses to start without its key, serves pages, signs in
 # (which exercises the native SQLite binding and the migrations), keeps the
 # session, stores its data inside the bundle folder, reads a PDF into the
-# knowledge base (a package that is only loaded while the server runs), has
-# its background worker going, and stops when it is told to.
+# knowledge base (a package that is only loaded while the server runs), signs
+# in to a machine over SSH (another such package), has its background worker
+# going, and stops when it is told to.
 #
 #   bash scripts/smoke-test-bundle.sh [path/to/bundle.zip]
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+REPO="$(pwd)"
 
 ZIP="${1:-}"
 if [ -z "${ZIP}" ]; then
@@ -26,9 +28,11 @@ ZIP="$(cd "$(dirname "${ZIP}")" && pwd)/$(basename "${ZIP}")"
 PORT="${SMOKE_PORT:-3210}"
 WORK="$(mktemp -d)"
 PID=""
+SSH_PID=""
 
 cleanup() {
   if [ -n "${PID}" ]; then kill "${PID}" 2>/dev/null || true; fi
+  if [ -n "${SSH_PID}" ]; then kill "${SSH_PID}" 2>/dev/null || true; fi
   rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -140,11 +144,39 @@ hits="$(curl -s "${session[@]}" -X POST "${BASE}/api/knowledge/search" -H 'conte
 echo "${hits}" | grep -q "about marmalade" || fail "the PDF's text was not found again: ${hits}"
 echo "ok: a PDF is read into the knowledge base and found by its words"
 
-# 6. Subtitles need the font that comes with the bundle.
+# 6. A machine is signed in to over SSH and runs a command. The SSH client is
+#    loaded while the server runs, so it has to be in the bundle, whole. The
+#    machine is the mock SSH server of the end-to-end checks, on this machine.
+SSH_PORT="$((PORT + 2))"
+SSH_CONTROL="$((PORT + 3))"
+node "${REPO}/scripts/e2e/mock-ssh.mjs" "${SSH_PORT}" "${SSH_CONTROL}" > "${WORK}/ssh.log" 2>&1 &
+SSH_PID=$!
+machine="$(curl -s --retry 20 --retry-delay 1 --retry-connrefused "http://127.0.0.1:${SSH_CONTROL}/__state" || true)"
+machine_password="$(echo "${machine}" | field password)"
+[ -n "${machine_password}" ] || fail "the mock SSH server did not start: $(cat "${WORK}/ssh.log")"
+shown="$(curl -s "${session[@]}" -X POST "${BASE}/api/servers/host-key" -H 'content-type: application/json' \
+  -d "{\"host\":\"127.0.0.1\",\"port\":${SSH_PORT}}")"
+host_key="$(echo "${shown}" | field hostKey)"
+if [ -z "${host_key}" ] || [ "$(echo "${shown}" | field fingerprint)" != "$(echo "${machine}" | field fingerprint)" ]; then
+  fail "the host key of the machine was not read: ${shown}"
+fi
+registered="$(curl -s "${session[@]}" -X POST "${BASE}/api/servers" -H 'content-type: application/json' \
+  -d "{\"name\":\"smoke\",\"host\":\"127.0.0.1\",\"port\":${SSH_PORT},\"username\":\"root\",\"authType\":\"password\",\"password\":\"${machine_password}\",\"hostKey\":\"${host_key}\"}")"
+if [ -z "$(echo "${registered}" | field server.id)" ] || [ -z "$(echo "${registered}" | field checked)" ]; then
+  fail "the machine was not signed in to: ${registered}"
+fi
+kill "${SSH_PID}" 2>/dev/null || true
+SSH_PID=""
+if find "${APP}/node_modules" -name '*.node' ! -name 'better_sqlite3.node' | grep -q .; then
+  fail "the bundle holds a compiled part besides the SQLite binding: $(find "${APP}/node_modules" -name '*.node' ! -name 'better_sqlite3.node' | head -n 3)"
+fi
+echo "ok: a machine is signed in to over SSH and runs a command, with nothing compiled besides SQLite"
+
+# 7. Subtitles need the font that comes with the bundle.
 [ -f "${APP}/assets/fonts/NotoSans-Bold.ttf" ] || fail "the subtitle font is missing from the bundle"
 echo "ok: the subtitle font is in the bundle"
 
-# 7. The background worker runs inside the server: no second process to start.
+# 8. The background worker runs inside the server: no second process to start.
 worker_state() {
   curl -s "${session[@]}" "${BASE}/dashboard/observability" \
     | grep -o 'data-status="Background worker" data-state="[^"]*"' | head -n 1 | sed -E 's/.*data-state="([^"]*)"/\1/'
@@ -158,7 +190,7 @@ done
 [ "${state}" = "Running" ] || fail "the status page says the background worker is \"${state:-not reported}\", not Running"
 echo "ok: the background worker is running"
 
-# 8. Told to stop (a panel's Stop button sends Ctrl+C), it ends within seconds,
+# 9. Told to stop (a panel's Stop button sends Ctrl+C), it ends within seconds,
 #    also while a request is still open: here one whose body never arrives.
 exec 9<> "/dev/tcp/127.0.0.1/${PORT}"
 printf 'POST /api/auth/login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 400\r\n\r\n{' >&9

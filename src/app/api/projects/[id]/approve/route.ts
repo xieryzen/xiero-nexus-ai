@@ -6,6 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
+import { assertMayOperate } from "@/lib/ssh/servers";
 import { serializeProject } from "@/lib/workforce";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,8 @@ export const POST = handle(async (req, { params }) => {
   const project = db.select().from(projects).where(eq(projects.id, params.id!)).get();
   if (!project) throw Errors.notFound("Project not found");
   if (!project.requiresApproval) throw Errors.badRequest("This project does not require approval");
+  // Approving lets it run: where it names servers, that is for an account that may use them.
+  assertMayOperate(project, admin);
 
   db.update(projects)
     .set({ approved: true, status: "draft", updatedAt: new Date() })

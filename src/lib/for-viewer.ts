@@ -114,6 +114,8 @@ export function projectFor(role: Role, project: ProjectDTO): ProjectDTO {
     imageModelRowId: null,
     videoModelRowId: null,
     speechModelRowId: null,
+    // Servers are part of the setup, and no project of a user works on one.
+    servers: [],
     finalDeliverable: deliverableFor(role, project.finalDeliverable),
     error: textFor(role, project.error),
     tasks: project.tasks.map((task) => taskFor(role, task, Boolean(project.workflowId))),

@@ -21,6 +21,7 @@ import {
   VOICE_PATTERN,
 } from "@/lib/creative/prompt";
 import { API_SCOPES, MAX_PROJECT_TASKS } from "@/lib/limits";
+import { SERVERS_PER_PROJECT, SERVER_ACCESS, SERVER_NAME_MAX, SERVER_NOTES_MAX } from "@/lib/ssh/rules";
 import { MAX_RENDER_CLIPS, MAX_STILL_SECONDS } from "@/lib/media/render-plan";
 import {
   SKILL_DESCRIPTION_MAX,
@@ -217,6 +218,57 @@ export const skillUpdateSchema = z.object({
   files: z.array(skillFileSchema).max(SKILL_FILES_MAX).optional(),
 });
 
+// ─── Servers over SSH ────────────────────────────────────────────────────────
+
+const serverFields = {
+  name: z.string().trim().min(1).max(SERVER_NAME_MAX),
+  host: z.string().trim().min(1).max(253),
+  port: z.number().int().min(1).max(65535),
+  username: z.string().trim().min(1).max(64),
+  authType: z.enum(["password", "key"]),
+  password: z.string().min(1).max(1024),
+  privateKey: z.string().min(1).max(20_000),
+  passphrase: z.string().max(1024).nullable(),
+  // The host key the owner was shown and accepted, as one line.
+  hostKey: z.string().trim().min(1).max(4000),
+  access: z.enum(SERVER_ACCESS),
+  notes: z.string().trim().max(SERVER_NOTES_MAX).nullable(),
+};
+
+/** What reads the host key of a machine: where it is, and nothing that signs in. */
+export const serverHostKeySchema = z.object({ host: serverFields.host, port: serverFields.port.optional() });
+
+export const serverCreateSchema = z.object({
+  name: serverFields.name,
+  host: serverFields.host,
+  port: serverFields.port.optional(),
+  username: serverFields.username,
+  authType: serverFields.authType,
+  password: serverFields.password.optional(),
+  privateKey: serverFields.privateKey.optional(),
+  passphrase: serverFields.passphrase.optional(),
+  hostKey: serverFields.hostKey,
+  access: serverFields.access.optional(),
+  notes: serverFields.notes.optional(),
+});
+
+export const serverUpdateSchema = z
+  .object({
+    name: serverFields.name.optional(),
+    host: serverFields.host.optional(),
+    port: serverFields.port.optional(),
+    username: serverFields.username.optional(),
+    authType: serverFields.authType.optional(),
+    password: serverFields.password.optional(),
+    privateKey: serverFields.privateKey.optional(),
+    passphrase: serverFields.passphrase.optional(),
+    hostKey: serverFields.hostKey.optional(),
+    access: serverFields.access.optional(),
+    status: z.enum(["enabled", "disabled"]).optional(),
+    notes: serverFields.notes.optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, "Nothing to change");
+
 export const projectCreateSchema = z.object({
   title: z.string().trim().min(1).max(120),
   goal: z.string().trim().min(1).max(8000),
@@ -236,6 +288,8 @@ export const projectCreateSchema = z.object({
   maxMedia: z.number().int().min(0).max(MAX_MEDIA_PER_RUN).optional(),
   // Give each run what the earlier runs delivered (v1.5).
   memory: z.boolean().optional(),
+  // The machines the project's agents may work on over SSH (v1.8).
+  serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
 });
 
 export const projectUpdateSchema = z
@@ -243,6 +297,7 @@ export const projectUpdateSchema = z
     title: z.string().trim().min(1).max(120).optional(),
     goal: z.string().trim().min(1).max(8000).optional(),
     memory: z.boolean().optional(),
+    serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "Nothing to change");
 

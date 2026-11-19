@@ -10,6 +10,7 @@ import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { CommandCenter } from "@/components/projects/command-center";
 import { isAdminRole, seesSetup } from "@/lib/roles";
+import { serversFor } from "@/lib/ssh/servers";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "AI Manager" };
@@ -69,6 +70,8 @@ export default async function ProjectsPage() {
       canRender={ffmpeg.available && ffmpeg.h264}
       teams={teamRows.map((t) => ({ id: t.id, label: t.name }))}
       workflows={workflowOptions}
+      // The machines the projects of this account may work on: none for a user.
+      servers={serversFor(user).map((s) => ({ id: s.id, label: s.name, where: `${s.username}@${s.host}:${s.port}`, off: s.status !== "enabled" }))}
     />
   );
 }

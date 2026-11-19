@@ -41,6 +41,7 @@ const groups: { heading: string; items: NavItem[] }[] = [
     items: [
       { href: "/dashboard/providers", label: "Providers", icon: "providers", adminOnly: true },
       { href: "/dashboard/models", label: "Models", icon: "models", adminOnly: true },
+      { href: "/dashboard/servers", label: "Servers", icon: "server", adminOnly: true },
       { href: "/dashboard/usage", label: "Usage & Costs", icon: "usage", adminOnly: true },
     ],
   },

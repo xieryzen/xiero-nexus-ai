@@ -375,10 +375,15 @@ run -- --user boss --file "${FILE}" --yes
 is "it ends well" "0" "${CODE}"
 check "an agent that was changed by hand is reported" line 'Agent "QA" is in the app and differs from the file \(.*instructions.*\)'
 is "and left as it is" "Changed by hand. 3" "$(ask "/api/agents" '[a["instructions"] + " " + str(a["maxSteps"]) for a in d["agents"] if a["name"] == "QA"][0]')"
+# The tool an agent works on servers with is given by hand, to the agents that are to have it.
+QA_TOOLS="$(ask /api/agents 'json.dumps([a["tools"] for a in d["agents"] if a["name"] == "QA"][0] + ["run_on_server"])')"
+api PATCH "/api/agents/${QA_ID}" "{\"tools\":${QA_TOOLS}}" > /dev/null
+is "(an agent is given the tool to work on servers by hand)" "True" "$(ask /api/agents '"run_on_server" in [a["tools"] for a in d["agents"] if a["name"] == "QA"][0]')"
 run -- --user boss --file "${FILE}" --yes --update
 is "with --update it ends well" "0" "${CODE}"
 check "it says what it changes" line 'done +Agent "QA": change it to what the file says'
 check_not "the agent is as the file says again" test "$(ask /api/agents '[a["instructions"] for a in d["agents"] if a["name"] == "QA"][0]')" = "Changed by hand."
+is "  and keeps the tool to work on servers that it was given by hand, with the tools of the file" "${QA_TOOLS}" "$(ask /api/agents 'json.dumps([a["tools"] for a in d["agents"] if a["name"] == "QA"][0])')"
 is "under the ID it had" "${QA_ID}" "$(ask /api/agents '[a["id"] for a in d["agents"] if a["name"] == "QA"][0]')"
 is "the provider the file names is waited for as long as the file says" "300000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"] if p["name"] == "Gemini")')"
 is "the one it does not name is as it was" "60000" "$(ask /api/providers '" ".join(str(p["timeoutMs"]) for p in d["providers"] if p["name"] == "Claude")')"

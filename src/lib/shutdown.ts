@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projectRuns } from "@/db/schema";
 import { runtime } from "./runtime";
+import { closeAllSessions } from "./ssh/sessions";
 
 /**
  * Stopping the server.
@@ -72,6 +73,13 @@ export function stopOnSignal(): void {
       `[xiero-nexus] ${signal}: stopping.` +
         (runs > 0 ? ` ${runs} run${runs === 1 ? "" : "s"} in progress will be picked up again at the next start.` : ""),
     );
+    // The connections to the machines runs work on are closed, and the log
+    // of each says why. A run that is picked up again connects again.
+    try {
+      closeAllSessions("the app is stopping");
+    } catch {
+      // They end with the process all the same.
+    }
     setTimeout(() => process.exit(0), STOP_GRACE_MS);
   };
   process.on("SIGINT", () => begin("SIGINT"));

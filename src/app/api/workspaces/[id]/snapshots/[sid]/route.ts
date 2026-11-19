@@ -16,7 +16,7 @@ export const GET = handle(async (_req, { params }) => {
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
-  const ws = loadOwnedWorkspace(params.id!, user);
+  const ws = loadOwnedWorkspace(params.id!, user, true);
   const restored = restoreSnapshot(ws.id, params.sid!);
   audit({ actorUserId: user.id, action: "workspace.restore", targetType: "workspace", targetId: ws.id, metadata: { snapshotId: params.sid, restored }, ip, userAgent });
   return json({ ok: true, restored });

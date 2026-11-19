@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, models, projects } from "@/db/schema";
+import { agents, models, projects, users } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
 import { serializeAsset } from "@/lib/media/dto";
 import { assetsForProject } from "@/lib/media/service";
@@ -13,6 +13,8 @@ import { ProjectRunner } from "@/components/projects/project-runner";
 import { isAdminRole, seesSetup } from "@/lib/roles";
 import { assetFor, projectFor } from "@/lib/for-viewer";
 import { kindsAvailable, withRunModels } from "@/lib/model-choice";
+import { mayUseServer } from "@/lib/ssh/rules";
+import { operatorsOf, serversFor, serversOfProject } from "@/lib/ssh/servers";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Project" };
@@ -52,13 +54,28 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
     return m ? m.displayName || m.modelId : null;
   };
 
+  // The servers the project may be given: the ones this account may use and
+  // the account the project belongs to may use as well. And whether this
+  // account may run and change the project at all: only when its own projects
+  // may work on every server this one names (ssh/servers.ts).
+  const owner = project.createdBy ? db.select({ role: users.role }).from(users).where(eq(users.id, project.createdBy)).get() : undefined;
+  const serverOptions = serversFor(user)
+    .filter((s) => mayUseServer(owner?.role, s.access))
+    .map((s) => ({ id: s.id, label: s.name, where: `${s.username}@${s.host}:${s.port}`, off: s.status !== "enabled" }));
+  const mayOperate = serversOfProject(project.id).every((s) => mayUseServer(user.role, s.access));
+  // Which of its agents can run commands there: without one, naming a server reaches nothing.
+  const operators = serverOptions.length > 0 ? operatorsOf(project) : [];
+
   return (
     <ProjectRunner
       project={projectFor(user.role, serializeProject(project, { withTasks: true }))}
+      serverOptions={serverOptions}
+      serverOperators={operators}
+      mayOperate={mayOperate}
       chooses={sees}
       agentNames={agentNames}
-      canRun={canRun}
-      canApprove={isAdminRole(user.role)}
+      canRun={canRun && mayOperate}
+      canApprove={isAdminRole(user.role) && mayOperate}
       initialAssets={assetsForProject(project.id).map((a) => assetFor(user.role, serializeAsset(a)))}
       imageModelLabel={modelLabel(asRun.imageModelRowId)}
       videoModelLabel={modelLabel(asRun.videoModelRowId)}

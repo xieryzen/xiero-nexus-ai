@@ -206,6 +206,8 @@ function embedding(text, dimensions = 24) {
  *   "Tool: skill"     read a file of a skill, the skill itself, and a file it does not have
  *   "Tool: output"    save the task's output file with write_file, then say what was done
  *   "Tool: silent"    save the task's output file with write_file, then say nothing
+ *   "Tool: ssh"       run on a server what the task's objective lists, a line each:
+ *                     SSH: {"command": "uname -a", "server": "vps-1", "timeout_seconds": 5}
  *
  * Returns the tool calls of this step, or null to answer in text.
  */
@@ -263,6 +265,17 @@ function nextToolCalls(body) {
     const target = (system.match(/Your deliverable is the file (\S+): save it with write_file/) ?? [])[1];
     if (done === 0 && target) return call("write_file", { path: target, content: "# Written with the tool\n\nBy the agent, in the file.\n" });
     return null;
+  }
+  if (title.startsWith("Tool: ssh")) {
+    // The calls are written in the objective, one a line, and made in that order.
+    const calls = [...String(task).matchAll(/^SSH: (\{.*\})\s*$/gm)].map((m) => {
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        return null;
+      }
+    });
+    return done < calls.length && calls[done] ? call("run_on_server", calls[done]) : null;
   }
   if (title.startsWith("Tool: skill")) {
     // Written the way a model writes a name: in other letters than the skill has.

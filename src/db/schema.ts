@@ -12,6 +12,7 @@ import {
 import { CAPABILITIES } from "@/lib/capabilities";
 import { MEDIA_API_SETTINGS } from "@/lib/adapters/media-protocol";
 import { TASK_KINDS } from "@/lib/creative/prompt";
+import { SERVER_ACCESS, SERVER_COMMAND_STATES } from "@/lib/ssh/rules";
 
 export { CAPABILITIES } from "@/lib/capabilities";
 export type { Capability } from "@/lib/capabilities";
@@ -1089,6 +1090,107 @@ export const teamSkills = sqliteTable(
   }),
 );
 
+// ─── Servers over SSH (v1.8.0) ───────────────────────────────────────────────
+
+/**
+ * A machine agents may work on over SSH. An owner registers it; a project
+ * names the ones it works on; an agent that has the tool run_on_server runs
+ * commands there, over one connection that stays open until the run has
+ * ended (src/lib/ssh).
+ */
+export const servers = sqliteTable(
+  "servers",
+  {
+    id: id(),
+    // How a project and an agent name it: lower-case letters, digits, ".", "_", "-".
+    name: text("name").notNull(),
+    host: text("host").notNull(),
+    port: integer("port").notNull().default(22),
+    username: text("username").notNull(),
+    authType: text("auth_type", { enum: ["password", "key"] }).notNull(),
+    // AES-256-GCM ciphertext of the password, or of the private key. Never leaves the server.
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    // The same of the private key's passphrase, when it has one.
+    passphraseCiphertext: text("passphrase_ciphertext"),
+    // The host key the machine showed when an owner accepted it ("ssh-ed25519 AAAA…").
+    // A machine that shows another key is not signed in to.
+    hostKey: text("host_key").notNull(),
+    access: text("access", { enum: SERVER_ACCESS }).notNull().default("owners"),
+    status: text("status", { enum: ["enabled", "disabled"] })
+      .notNull()
+      .default("enabled"),
+    // What the owner says about it: agents are told (the system it runs, what it is for).
+    notes: text("notes"),
+    lastConnectedAt: integer("last_connected_at", { mode: "timestamp_ms" }),
+    lastError: text("last_error"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ byName: uniqueIndex("servers_name_unique").on(t.name) }),
+);
+
+/** The servers a project works on. */
+export const projectServers = sqliteTable(
+  "project_servers",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    serverId: text("server_id")
+      .notNull()
+      .references(() => servers.id, { onDelete: "cascade" }),
+  },
+  (t) => ({
+    unique: uniqueIndex("project_servers_unique").on(t.projectId, t.serverId),
+    byServer: index("project_servers_server_idx").on(t.serverId),
+  }),
+);
+
+/**
+ * What was done on a server: every command an agent ran there and how it
+ * ended, and every connection that was opened and closed for a run. A row
+ * stays when its project or its server is deleted.
+ */
+export const serverCommands = sqliteTable(
+  "server_commands",
+  {
+    id: id(),
+    serverId: text("server_id").references(() => servers.id, { onDelete: "set null" }),
+    serverName: text("server_name").notNull(),
+    // command: an agent's; session: a connection opened, lost or closed; test: an owner's check.
+    kind: text("kind", { enum: ["command", "session", "test"] })
+      .notNull()
+      .default("command"),
+    projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
+    projectTitle: text("project_title"),
+    runId: text("run_id"),
+    // No reference: the tasks of a project are replaced by its next run.
+    taskId: text("task_id"),
+    taskTitle: text("task_title"),
+    agentName: text("agent_name"),
+    // The account the work was done for (the project's), or who made the check.
+    userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
+    // The command line. For a session: what happened to the connection.
+    command: text("command").notNull(),
+    status: text("status", { enum: SERVER_COMMAND_STATES }).notNull(),
+    exitCode: integer("exit_code"),
+    signal: text("signal"),
+    // What it printed, shortened to its end.
+    output: text("output"),
+    outputBytes: integer("output_bytes").notNull().default(0),
+    durationMs: integer("duration_ms"),
+    createdAt: createdAt(),
+  },
+  (t) => ({
+    byServer: index("server_commands_server_idx").on(t.serverId, t.createdAt),
+    byTask: index("server_commands_task_idx").on(t.taskId),
+    byRun: index("server_commands_run_idx").on(t.runId),
+    byTime: index("server_commands_time_idx").on(t.createdAt),
+  }),
+);
+
 // Convenience exported types
 export type User = typeof users.$inferSelect;
 export type Provider = typeof providers.$inferSelect;
@@ -1120,5 +1222,7 @@ export type AgentMemory = typeof agentMemories.$inferSelect;
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type SkillFile = typeof skillFiles.$inferSelect;
+export type Server = typeof servers.$inferSelect;
+export type ServerCommand = typeof serverCommands.$inferSelect;
 
 export const _sqlKeepalive = sql``;

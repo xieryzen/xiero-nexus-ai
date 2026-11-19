@@ -1,7 +1,7 @@
 import { handle } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
-import { loadOwnedProject } from "@/lib/project-access";
+import { loadOperableProject } from "@/lib/project-access";
 import { SSE_HEADERS, runEventStream } from "@/lib/run-bus";
 import { startRun } from "@/lib/runs";
 import { runStartSchema } from "@/lib/validation";
@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
  */
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
-  const project = loadOwnedProject(params.id!, user); // throws if not owner/admin
+  const project = loadOperableProject(params.id!, user); // throws if not owner/admin, or not allowed on its servers
 
   let input: string | undefined;
   const raw = await req.text().catch(() => "");

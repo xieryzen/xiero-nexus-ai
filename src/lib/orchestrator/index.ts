@@ -23,7 +23,7 @@ import {
 import type { ChatMessage } from "@/lib/adapters/types";
 import { adapterIsImplemented, getAdapter } from "@/lib/adapters";
 import { notesForTask } from "@/lib/agent/memory";
-import { DEFAULT_MAX_STEPS, MAX_MAX_STEPS } from "@/lib/agent/catalog";
+import { DEFAULT_MAX_STEPS, MAX_MAX_STEPS, parseToolNames } from "@/lib/agent/catalog";
 import { runToolLoop, type LoopTool, type ToolCallEvent } from "@/lib/agent/loop";
 import { buildTools } from "@/lib/agent/tools";
 import { isMediaOnly } from "@/lib/capabilities";
@@ -59,6 +59,9 @@ import { publish } from "@/lib/run-bus";
 import { runtime } from "@/lib/runtime";
 import { projectOwnerChooses, withRunModels } from "@/lib/model-choice";
 import { NOT_SET_UP } from "@/lib/public-text";
+import { SERVER_TOOL, serversLine, type ServerForAgent } from "@/lib/ssh/rules";
+import { serversForRun } from "@/lib/ssh/servers";
+import { closeRun } from "@/lib/ssh/sessions";
 import { taskTokenBudget, usedUpMessage } from "@/lib/token-rules";
 import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
@@ -130,17 +133,38 @@ function elapsedLabel(ms: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-/** The agents as the one who plans sees them: who they are, and what they have a skill for. */
-function describeAgents(list: Agent[], teamId: string | null): string {
+/**
+ * The agents as the one who plans sees them: who they are, what they have a
+ * skill for, and, in a project that names servers, who can work on them.
+ */
+function describeAgents(list: Agent[], teamId: string | null, withServers = false): string {
   return list
     .map((a) => {
       const skilled = skillNames(skillsForWork(a.id, teamId));
       return (
         `- ${a.name} (${a.role})${skilled ? ` [skills: ${skilled}]` : ""}` +
+        (withServers && parseToolNames(a.tools).includes(SERVER_TOOL) ? " [works on servers]" : "") +
         (a.instructions ? `: ${a.instructions.slice(0, 160)}` : "")
       );
     })
     .join("\n");
+}
+
+/** What the one who plans is told about the servers of the project. Empty when it names none. */
+function serversForPlan(servers: readonly ServerForAgent[], workforce: Agent[]): string {
+  if (servers.length === 0) return "";
+  const able = workforce.filter((a) => parseToolNames(a.tools).includes(SERVER_TOOL)).map((a) => a.name);
+  return (
+    `\n\nThis project works on real servers over SSH: ${serversLine(servers)}. ` +
+    (able.length > 0
+      ? `Only the agents marked [works on servers] can run commands there (${able.join(", ")}). ` +
+        "Give every task that has to look at a server or change it to one of them, and say in its objective " +
+        "which server it is about and what has to be true when the task is done. Plan a task that looks at " +
+        "what is there before one that changes it, and one that checks the result afterwards."
+      : "None of the available agents can run commands there, so nothing on a server can be looked at or changed in this run. " +
+        "Plan only what can be done without that, and have the last task say plainly that an agent has to be given " +
+        "the tool to work on servers first, and that nothing was done on a server.")
+  );
 }
 
 async function invoke(
@@ -252,6 +276,10 @@ export function prepareRun(asSet: Project): RunSetup {
       "No usable agents (each agent needs a model, auto-routing, or a project manager model).",
     );
   }
+  // The machines the project names: its account has to be one that may work
+  // on them now, and each has to be switched on.
+  const machines = serversForRun(asSet);
+  if (machines.problem) throw new AppError(400, "run_not_possible", machines.problem);
   return { manager, routable, workforce };
 }
 
@@ -576,6 +604,8 @@ export async function executeRun(runId: string): Promise<void> {
               "task needs to know into text tasks. " +
               `Use at most ${mediaLimit} such tasks, and only where the goal asks for them.`
             : "";
+        // The machines the project names, for the one who plans: by name, never where they are.
+        const planServers = serversForRun(project).servers;
         const planMessages: ChatMessage[] = [
           {
             role: "system",
@@ -588,7 +618,8 @@ export async function executeRun(runId: string): Promise<void> {
               '(code/config), add an "outputFile" relative path and the agent should return ONLY that file\'s contents; ' +
               "its artifact is saved to the project workspace. Keep it minimal and ordered." +
               creative +
-              `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId)}`,
+              serversForPlan(planServers, workforce) +
+              `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId, planServers.length > 0)}`,
           },
           { role: "user", content: `Goal:\n${goal}${memoryNote}` },
         ];
@@ -948,6 +979,18 @@ export async function executeRun(runId: string): Promise<void> {
                 agent,
                 collectionIds: collectionIdsForAgent(agent.id),
                 skills: workSkills,
+                // The machines the project names, as they are now. The run's
+                // connection to each stays open from its first command until
+                // the run has ended (ssh/sessions.ts).
+                servers: {
+                  runId,
+                  projectTitle: project.title,
+                  taskTitle: row.title,
+                  servers: serversForRun(project).servers,
+                  isCancelled,
+                  progress: (message) => emit({ type: "progress", seq, message }),
+                  attempt: () => attempt,
+                },
               })
             : [];
         const toolNames = tools.map((t) => t.definition.name);
@@ -1606,5 +1649,10 @@ export async function executeRun(runId: string): Promise<void> {
       console.error("[xiero-nexus] run failed unexpectedly:", err);
     }
     fail(err instanceof AppError ? err.message : "Orchestration error");
+  } finally {
+    // The connections to the machines the run worked on were kept open for
+    // all of it. Now it has ended, however it ended, and they are closed.
+    const ended = db.select({ status: projectRuns.status }).from(projectRuns).where(eq(projectRuns.id, runId)).get()?.status;
+    closeRun(runId, ended === "cancelled" ? "the run was stopped" : "the run has ended");
   }
 }
