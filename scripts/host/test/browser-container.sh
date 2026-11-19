@@ -45,6 +45,11 @@ fail() {
   echo "error: $*"
   echo "--- what the container said:"
   docker logs --tail 40 "${NAME}" 2>&1 || true
+  # On GitHub, also on the run's page, with the last lines of the container.
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    said="$(docker logs --tail 12 "${NAME}" 2>&1 | tr '\n' '|' | cut -c1-900 || true)"
+    echo "::error title=The browser service in its container::$* What the container said: ${said}"
+  fi
   exit 1
 }
 for _ in $(seq 1 30); do
