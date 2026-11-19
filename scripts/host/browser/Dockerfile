@@ -4,8 +4,10 @@
 FROM debian:bookworm-slim
 
 # Chromium and Node.js as Debian ships them, and fonts for what a person is
-# shown of a page. Nothing else.
-RUN apt-get update \
+# shown of a page. Nothing else. A list of packages that could not be fetched
+# ends the build there, with the reason, and not later with "Unable to locate
+# package".
+RUN apt-get -o APT::Update::Error-Mode=any update \
  && apt-get install -y --no-install-recommends chromium nodejs ca-certificates fonts-liberation fonts-dejavu-core fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/* \
  && fc-cache -f

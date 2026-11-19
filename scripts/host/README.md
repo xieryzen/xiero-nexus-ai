@@ -651,15 +651,25 @@ What it does, in this order:
 1. finds the server, and the Docker network its container is on;
 2. shows the plan and asks;
 3. builds the image on this machine from [`browser/`](browser): Debian's
-   Chromium behind the gate (`gate.mjs`), nothing else;
+   Chromium behind the gate (`gate.mjs`), nothing else. A build installs
+   Debian's packages from inside a container on Docker's default network.
+   On some machines that network does not get to the outside while the
+   machine itself does (a firewall that passes on only what Wings set up):
+   the script asks first, and builds on the machine's own network where only
+   that gets there (`--build-network host` or `default` says it outright);
 4. starts it as a container **on the server's network**, at an address of its
    own near the end of that network (it stays the same when the container is
    made anew), with 1 GB of memory and 1.5 processors at most, no rights of
    root, a read-only file system, and **nothing published** to the machine
-   or to the outside;
+   or to the outside. It looks names up at the DNS servers Wings gave the
+   server's container: what finds a name for the app finds it for the
+   browser;
 5. checks that Chromium runs in it, that it lets nobody in without its
-   token, and that the server's container reaches it. When one of these
-   fails, it stops there, and the server is not touched;
+   token, that it reaches the outside (a name looked up, a connection made),
+   that its Chromium opens a page (`https://example.com/`, through the gate
+   as every page goes; `--skip-page-test` leaves that out), and that the
+   server's container reaches it. When one of these fails, it stops there,
+   and the server is not touched;
 6. writes `BROWSER_URL` into the server's `.env` and starts the server again.
    That part is done by `pterodactyl-upgrade.sh` (the installed version put
    in place again, or `--version`): with its backup, and back to how it was
@@ -684,12 +694,20 @@ containers can reach the service's port. They get nothing from it without
 the token. Pages the browser opens cannot reach them either: the gate
 refuses every address on a private network.
 
-It was tested on a made-up host with stand-ins for Docker and for the
-upgrade script ([`test/browser.sh`](test/browser.sh)); the image is built
-and run with a real Docker in CI ([`test/browser-container.sh`](test/browser-container.sh)),
-where the end-to-end checks of the browser run against it. **On a real
-Pterodactyl node it had not run when this was written**: do the dry run
-first.
+It is tested on a made-up host with stand-ins for Docker and for the
+upgrade script ([`test/browser.sh`](test/browser.sh)), where the questions it
+asks with Node are asked for real, of a stand-in that answers as a Chromium
+does. With a real Docker, in CI ([`test/browser-container.sh`](test/browser-container.sh)),
+the script itself builds the image, starts the container on a network of its
+own and asks a real Chromium behind the real gate; then the end-to-end
+checks of the browser run against the service in its container.
+
+It has set the service up on one real Pterodactyl node (Debian 13, Docker
+29, Wings). Two things showed there that no stand-in had shown, and both
+are tested now: Docker's default network did not reach the package servers
+(so the script asks, and builds on the machine's own network), and a real
+Chromium says more about itself than the check of the token read. Another
+node can differ in other ways: do the dry run first.
 
 ## Tidying up: `disk-report.sh`
 
