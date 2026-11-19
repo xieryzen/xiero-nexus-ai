@@ -29,7 +29,10 @@
 #                 container of its own on the server's network, and
 #                 BROWSER_URL in the server's .env (browser-service.sh --yes).
 #                 With "-- --remove" it is taken away again.
-#   last-log      what the last run on the node said and how it ended.
+#   last-log      what the last run on the node said and how it ended. With
+#                 "-- --list": the runs that are kept, and how each ended.
+#                 With "-- --back 1": the run before the last (2: the one
+#                 before that), for when another run came in between.
 #   input-key     the public key of this node, for what is sealed for it: a
 #                 password or a skill that has to pass through a place others
 #                 can read. The key pair is made at the first call and stays
@@ -100,7 +103,8 @@ die() { # CODE MESSAGE
   printf 'error: %s\n' "$*" >&2
   exit "${code}"
 }
-usage() { sed -n '2,70p' "$0" | sed 's/^# \{0,1\}//'; }
+# The description at the top of this file, to its end however long it gets.
+usage() { awk 'NR == 1 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; }
 trimmed() { # the value without spaces and line ends around it
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -325,13 +329,60 @@ state_of() { # LOG: how that run ended
 }
 
 if [ "${action}" = "last-log" ]; then
-  last="$(find "${dir}/logs" -maxdepth 1 -name '*.log' | sort | tail -n 1)"
-  if [ -z "${last}" ]; then
+  # Which run: the last one, or one that many before it. --list names them.
+  back=0
+  list=no
+  set -- ${args[@]+"${args[@]}"}
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --list)
+        list=yes
+        shift
+        ;;
+      --back)
+        back="${2:-}"
+        case "${back}" in
+          "" | *[!0-9]* | ????*)
+            echo "error: --back needs a number: 1 for the run before the last, 2 for the one before that."
+            ended 90
+            ;;
+        esac
+        shift 2
+        ;;
+      *)
+        echo "error: last-log takes --list and --back <n> (got \"$1\")."
+        ended 90
+        ;;
+    esac
+  done
+  logs="$(find "${dir}/logs" -maxdepth 1 -name '*.log' | sort)"
+  if [ -z "${logs}" ]; then
     echo "Nothing was run on this node yet."
     ended 1
   fi
+  count="$(printf '%s\n' "${logs}" | wc -l)"
+  if [ "${list}" = yes ]; then
+    echo "The runs that are kept on this node, the last one first:"
+    n=0
+    printf '%s\n' "${logs}" | sort -r | while IFS= read -r one; do
+      name="${one##*/}"
+      if [ "${n}" -eq 0 ]; then which="the last"; else which="--back ${n}"; fi
+      printf '  %-34s %-22s %s\n' "${name%.log}" "$(state_of "${one}")" "${which}"
+      n=$((n + 1))
+    done
+    ended 0
+  fi
+  if [ "${back}" -ge "${count}" ]; then
+    echo "There is no run that far back: ${count} are kept on this node (--list names them)."
+    ended 1
+  fi
+  last="$(printf '%s\n' "${logs}" | tail -n "$((back + 1))" | head -n 1)"
   name="${last##*/}"
-  echo "Last run: ${name%.log}, which $(state_of "${last}")."
+  if [ "${back}" -eq 0 ]; then
+    echo "Last run: ${name%.log}, which $(state_of "${last}")."
+  else
+    echo "The run ${back} before the last: ${name%.log}, which $(state_of "${last}")."
+  fi
   echo
   cat "${last}"
   if [ -s "${last}.err" ]; then

@@ -29,7 +29,9 @@ name: Deploy to a Pterodactyl node
 #                 outside; BROWSER_URL goes into the server's .env, and the
 #                 server is started again. "--remove" in "options" takes it
 #                 away, "--rebuild" gives its Chromium the newest updates.
-#   last-log      what the last run on the node said and how it ended
+#   last-log      what the last run on the node said and how it ended; with
+#                 "--list" in options, the runs that are kept; with
+#                 "--back 1", the run before the last
 #   input-key     the public key of the node, for a password or a skill that
 #                 is sealed for it and given in "options" (scripts/host/README.md,
 #                 "Sealed for the node")

@@ -5,6 +5,50 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+Changes to the host scripts since 1.8.0-rc.5. They are not part of a release
+bundle: the Deploy workflow runs the ones of the branch it is started on.
+
+### Fixed
+
+- `browser-service.sh` could not build the image on a node whose Docker
+  default network does not reach Debian's package servers, while the node
+  itself and the containers on the server's network do: the build ended
+  after eleven minutes with "Unable to locate package chromium". The
+  script now asks first, with the image the build starts from, and builds on
+  the machine's own network where only that gets there;
+  `--build-network host` or `default` says it outright. A list of packages
+  that cannot be fetched ends the build at once, with the reason, and what
+  the package tool said first is shown before the end of the build's output.
+- `browser-service.sh` said of a service that works that it "did not take
+  its own token": it read the first 200 characters of the answer, and a real
+  Chromium says more than that about itself before the gate's part.
+- `over-ssh.sh --help` ended in the middle of the settings, before
+  `DEPLOY_ENV` and the script's own exit codes: it printed the description
+  at the top of the script up to a line number, and the description had
+  grown past it. It prints the description to its end now.
+
+### Added
+
+- The browser's container looks names up at the DNS servers Wings gave the
+  server's container (else the ones of the Wings configuration, else as
+  Docker does), and the plan says which.
+- `browser-service.sh` checks two more things before it touches the server:
+  that the service's container reaches the outside (a name looked up, a
+  connection made), and that its Chromium opens a page
+  (`https://example.com/`, through the gate; `--skip-page-test` leaves it
+  out).
+- `last-log` shows an earlier run of the node: `--list` names the runs that
+  are kept and how each ended, `--back <n>` shows the run that many before
+  the last. For a run whose output was sealed for a key that is gone, after
+  other runs came in between.
+- CI runs `browser-service.sh` itself with a real Docker, on a made-up
+  server: it builds, starts the container as on a node, and asks a real
+  Chromium behind the real gate. The test on a made-up host asks the
+  questions the script asks with Node for real, of a stand-in that answers
+  at the length a Chromium does.
+
 ## [1.8.0-rc.5] - 2026-11-19
 
 The fifth candidate for 1.8: agents work in a web browser, sign in with the

@@ -254,6 +254,27 @@ code=0
 DEPLOY_HOST="${LOGIN}@127.0.0.1:${PORT}" DEPLOY_PORT="" DEPLOY_USER="" remote plan || code=$?
 expect_exit "user@host:port in DEPLOY_HOST is understood" 0 "${code}"
 
+begin "Its help"
+# The help is the description at the top of the script. It ended at a line
+# number once, and the description had grown past it.
+bash "${script}" --help > "${WORK}/help.txt" 2>&1 || true
+last_of_description="$(awk 'NR > 1 && !/^#/ { exit } { line = $0 } END { sub(/^# ?/, "", line); print line }' "${script}")"
+check "--help goes to the end of the description at the top of the script" test "$(tail -n 1 "${WORK}/help.txt")" = "${last_of_description}"
+check "  to its own exit codes" grep -qF -- "93 the user on the node may not run it." "${WORK}/help.txt"
+check_not "  and not into the script" grep -qE -- '^set -euo pipefail|^usage\(\)' "${WORK}/help.txt"
+actions="$(bash "${script}" no-such-action 2>&1 | sed -n 's/.*There are: //p' | tr -d ',.' || true)"
+check "an action that does not exist is answered with the ones there are" test "$(printf '%s\n' "${actions}" | wc -w)" -ge 14
+unnamed=""
+for action in ${actions}; do
+  grep -qE -- "^  ${action} " "${WORK}/help.txt" || unnamed="${unnamed} ${action}"
+done
+check "  and --help says what each of them does" test -z "${unnamed}"
+unnamed=""
+for setting in DEPLOY_HOST DEPLOY_PORT DEPLOY_USER DEPLOY_PASSWORD DEPLOY_SSH_KEY DEPLOY_HOST_KEY DEPLOY_SERVER DEPLOY_APP_URL DEPLOY_VERSION DEPLOY_OUTPUT DEPLOY_ENV; do
+  grep -qE -- "^  ${setting} " "${WORK}/help.txt" || unnamed="${unnamed} ${setting}"
+done
+check "  and every setting" test -z "${unnamed}"
+
 begin "Settings that are wrong"
 code=0
 DEPLOY_HOST="" remote plan || code=$?
@@ -412,6 +433,36 @@ if wait_until 20 grep -qF "Running" "${ERR}"; then
   check "last-log afterwards: how it ended" said "ended with code 0"
   check "  and what it said" said "the end"
   check "  what it left to tidy up is tidied up" wait_until 10 tidied_up
+  # Another run comes in between: the one before it can still be read.
+  sleep 1
+  DEPLOY_ENV="MY_SETTING=in between" remote plan || true
+  code=0
+  remote last-log -- --list || code=$?
+  expect_exit "last-log --list" 0 "${code}"
+  check "  names the runs that are kept" test "$(grep -cE -- '-(plan|upgrade) +ended with code 0' "${OUT}")" = "2"
+  check "  the last one first" grep -qE -- '-plan +ended with code 0 +the last' "${OUT}"
+  check "  and how the one before it is asked for" grep -qE -- '-upgrade +ended with code 0 +--back 1' "${OUT}"
+  check_not "  it shows nothing of what they said" said "MY_SETTING"
+  remote last-log || true
+  check "last-log is the run that came in between" said "-plan, which ended with code 0"
+  check "  with what that one said" said "MY_SETTING=[in between]"
+  code=0
+  remote last-log -- --back 1 || code=$?
+  expect_exit "last-log --back 1" 0 "${code}"
+  check "  is the run before the last, and says so" said "The run 1 before the last:"
+  check "  with what that one said" said "MY_SETTING=[]"
+  check_not "  and nothing of the last" said "in between"
+  code=0
+  remote last-log -- --back 2 || code=$?
+  expect_exit "further back than there are runs: 1" 1 "${code}"
+  check "  says how many are kept" said "2 are kept on this node"
+  code=0
+  remote last-log -- --back one || code=$?
+  expect_exit "--back without a number: 90" 90 "${code}"
+  code=0
+  remote last-log -- --first || code=$?
+  expect_exit "an option last-log does not have: 90" 90 "${code}"
+  check "  says which it has" said "last-log takes --list and --back"
 else
   kill "${background}" 2> /dev/null || true
   bad "the run did not start" "$(tail -n 3 "${ERR}")"

@@ -66,6 +66,10 @@ docker:
   network:
     name: pterodactyl_nw
     interface: 172.18.0.1
+    dns:
+    - 9.9.9.9
+    - 149.112.112.112
+    is_internal: false
 EOF
 
 # docker, as this script uses it. What exists is a file in ${FAKE}/containers:
@@ -93,14 +97,41 @@ case "${1:-}" in
       case " $* " in
         *"NetworkSettings.Networks}}{{"*) printf 'pterodactyl_nw\n' ;;
         *"State.Running"*) if [ "${FAKE_SERVER:-running}" = "running" ]; then echo true; else echo false; fi ;;
+        # The DNS servers Wings gave the server's container, one in a line.
+        *"HostConfig.Dns"*) for one in ${FAKE_DNS-1.1.1.1 1.0.0.1}; do printf '%s\n' "${one}"; done ;;
       esac
       exit 0
     fi
     [ -f "${FAKE}/containers/${name}" ] || exit 1
     case " $* " in *"IPAddress"*) address_of "${name}" ;; esac
     ;;
+  pull) [ "${FAKE_PULL:-ok}" = "ok" ] ;;
   build)
-    [ "${FAKE_BUILD:-ok}" = "ok" ] || { echo "E: Unable to locate package chromium" >&2; exit 1; }
+    if [ "${FAKE_BUILD:-ok}" = "needs-host" ]; then
+      # A machine whose default network does not get to the package servers:
+      # the build works on the machine's own network only. Said as a build says it.
+      case " $* " in
+        *" --network host "*) ;;
+        *)
+          printf '%s\n' \
+            "#6 [2/5] RUN apt-get -o APT::Update::Error-Mode=any update" \
+            "#6 0.21 Ign:1 http://deb.debian.org/debian bookworm InRelease" \
+            "#6 20.22 Err:1 http://deb.debian.org/debian bookworm InRelease" \
+            "#6 20.22   Temporary failure resolving 'deb.debian.org'" \
+            "#6 20.23 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'" \
+            "#6 20.23 E: Some index files failed to download. They have been ignored, or old ones used instead."
+          for n in $(seq 1 30); do echo "#6 2${n}.00 Reading package lists..."; done
+          printf '%s\n' \
+            "#6 674.1 E: Unable to locate package chromium" \
+            "#6 674.1 E: Unable to locate package nodejs" \
+            "#6 ERROR: process \"/bin/sh -c apt-get update\" did not complete successfully: exit code: 100"
+          exit 1
+          ;;
+      esac >&2
+    elif [ "${FAKE_BUILD:-ok}" != "ok" ]; then
+      echo "E: Unable to locate package chromium" >&2
+      exit 1
+    fi
     [ -f "${*: -1}/Dockerfile" ] && [ -f "${*: -1}/gate.mjs" ] && [ -f "${*: -1}/policy.json" ]
     ;;
   image) printf ' (612345678 bytes)' ;;
@@ -108,6 +139,11 @@ case "${1:-}" in
     rm -f "${FAKE}/containers/${*: -1}"
     ;;
   run)
+    if [ "${2:-}" = "--rm" ]; then
+      # Whether a container on that network gets to the package servers:
+      # FAKE_BUILD_NET says which networks do ("ok": both, "host", "none").
+      case "${FAKE_BUILD_NET:-ok}:${4:-}" in ok:* | host:host) exit 0 ;; *) exit 1 ;; esac
+    fi
     name="" address="" envfile=""
     words=("$@")
     for i in "${!words[@]}"; do
@@ -146,13 +182,52 @@ case "${1:-}" in
       if [ "${FAKE_REACH:-yes}" = "yes" ]; then echo '200 {"ok":true}'; else echo "0 connect ETIMEDOUT ${url#http://}"; fi
       exit 0
     fi
+    case " $* " in
+      *" XN_PAGE="*)
+        # Whether Chromium opens a page: asked for real, with the words the
+        # script handed over, of a stand-in that answers as Chromium answers
+        # at its own port; or, where a test wants that, what a page that the
+        # gate refused looks like.
+        if [ "${FAKE_PAGE:-ok}" != "ok" ]; then
+          echo 'no after 20.1 s the tab is titled "Not opened", not "Example Domain"'
+          exit 0
+        fi
+        page="" title=""
+        for word in "$@"; do
+          case "${word}" in XN_PAGE=*) page="${word#XN_PAGE=}" ;; XN_TITLE=*) title="${word#XN_TITLE=}" ;; esac
+        done
+        XN_TMP="${FAKE}/tmp" XN_PAGE="${page}" XN_TITLE="${title}" node -e "${*: -1}"
+        exit 0
+        ;;
+      *" XN_OUTSIDE=1 "*)
+        # Whether the service's container gets to the outside.
+        if [ "${FAKE_OUTSIDE:-yes}" = "yes" ]; then echo "ok deb.debian.org"; else echo "no deb.debian.org: the name was not found (EAI_AGAIN); github.com: the name was not found (EAI_AGAIN); www.wikipedia.org: the name was not found (EAI_AGAIN)"; fi
+        exit 0
+        ;;
+    esac
+    # Where a test makes nothing go wrong, the question is asked for real: by
+    # the Node of this machine, with the words the script handed over, of a
+    # stand-in for the gate that answers at the length a Chromium answers.
+    if [ -s "${FAKE}/gate-port" ] && [ "${FAKE_HEALTH:-ok}${FAKE_OPEN:-no}${FAKE_GATE:-yes}" = "oknoyes" ]; then
+      asked_of="http://127.0.0.1:$(cat "${FAKE}/gate-port")/${url#http://*/}"
+      if [ -n "${token}" ]; then
+        XN_URL="${asked_of}" XN_TOKEN_ENV=BROWSER_TOKEN BROWSER_TOKEN="$(sed -n 's/^BROWSER_TOKEN=//p' "${FAKE}/envfile")" node -e "${*: -1}"
+      else
+        XN_URL="${asked_of}" node -e "${*: -1}"
+      fi
+      exit 0
+    fi
     case "${url}" in
       */healthz) if [ "${FAKE_HEALTH:-ok}" = "ok" ]; then echo '200 {"ok":true}'; else echo '503 {"ok":false}'; fi ;;
       */json/version)
+        # As a Chromium answers: what the gate adds stands at the end, hundreds of characters in.
+        chrome='"Browser":"Chrome/120.0.1","Protocol-Version":"1.3","User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/120.0.0.0 Safari/537.36","V8-Version":"12.0.267.8","WebKit-Version":"537.36 (@0123456789abcdef0123456789abcdef01234567)","webSocketDebuggerUrl":"ws://127.0.0.1:9223/devtools/browser/01234567-89ab-cdef-0123-456789abcdef"'
         if [ -z "${token}" ]; then
-          if [ "${FAKE_OPEN:-no}" = "yes" ]; then echo '200 {"Browser":"Chrome/120.0.1"}'; else echo '401 {"error":"The token is missing or wrong."}'; fi
+          if [ "${FAKE_OPEN:-no}" = "yes" ]; then echo "200 {${chrome}}"; else echo '401 {"error":"The token is missing or wrong."}'; fi
+        elif [ "${FAKE_GATE:-yes}" = "yes" ]; then
+          echo "200 {${chrome},\"gate\":{\"version\":1,\"egress\":\"filtered\",\"allowPrivate\":[],\"starts\":1}}"
         else
-          echo '200 {"Browser":"Chrome/120.0.1","gate":{"version":1,"egress":"filtered"}}'
+          echo "200 {${chrome}}"
         fi
         ;;
     esac
@@ -162,6 +237,65 @@ case "${1:-}" in
 esac
 EOF
 chmod +x "${WORK}/bin/docker"
+
+# A stand-in for the gate, for the questions the script asks with Node: it
+# takes the token the container was given, and answers what a gate in front
+# of a Chromium answers, at that length.
+cat > "${WORK}/gate.js" << 'EOF'
+const http = require("http");
+const fs = require("fs");
+const chrome = {
+  Browser: "Chrome/120.0.1",
+  "Protocol-Version": "1.3",
+  "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/120.0.0.0 Safari/537.36",
+  "V8-Version": "12.0.267.8",
+  "WebKit-Version": "537.36 (@0123456789abcdef0123456789abcdef01234567)",
+  webSocketDebuggerUrl: "ws://127.0.0.1:9223/devtools/browser/01234567-89ab-cdef-0123-456789abcdef",
+};
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, "http://gate");
+  const send = (code, body) => {
+    res.writeHead(code, { "content-type": "application/json" });
+    res.end(JSON.stringify(body, null, 2));
+  };
+  let token = "";
+  try {
+    token = (/^BROWSER_TOKEN=(.*)$/m.exec(fs.readFileSync(`${process.env.FAKE}/envfile`, "utf8")) || [])[1] || "";
+  } catch {
+    // No container was started yet.
+  }
+  if (url.pathname === "/healthz") return send(200, { ok: true });
+  // What Chromium answers at its own port: a tab is opened, listed with the
+  // title its page has, and closed.
+  if (url.pathname === "/json/new") {
+    if (req.method !== "PUT") return send(405, { error: "Using unsafe HTTP verb GET to invoke /json/new. This action supports only PUT verb." });
+    fs.appendFileSync(`${process.env.FAKE}/tabs`, `opened ${url.search.slice(1)}\n`);
+    return send(200, { id: "TAB1", title: "", url: url.search.slice(1) });
+  }
+  if (url.pathname === "/json/list") return send(200, [{ id: "OTHER", title: "about:blank" }, { id: "TAB1", title: "Example Domain", url: "https://example.com/" }]);
+  if (url.pathname.startsWith("/json/close/")) {
+    fs.appendFileSync(`${process.env.FAKE}/tabs`, `closed ${url.pathname.slice(12)}\n`);
+    return send(200, { ok: true });
+  }
+  if (url.pathname !== "/json/version") return send(404, { error: "not found" });
+  if (!token || url.searchParams.get("token") !== token) return send(401, { error: "The token is missing or wrong." });
+  send(200, { ...chrome, gate: { version: 1, egress: "filtered", allowPrivate: [], starts: 1 } });
+});
+server.listen(0, "127.0.0.1", () => {
+  // Where Chromium writes the port it chose: into its profile, under the temporary folder.
+  fs.mkdirSync(`${process.env.FAKE}/tmp/profile`, { recursive: true });
+  fs.writeFileSync(`${process.env.FAKE}/tmp/profile/DevToolsActivePort`, `${server.address().port}\n/devtools/browser/01234567-89ab-cdef-0123-456789abcdef\n`);
+  fs.writeFileSync(`${process.env.FAKE}/gate-port`, String(server.address().port));
+});
+EOF
+FAKE="${FAKE}" node "${WORK}/gate.js" &
+GATE_PID=$!
+trap 'kill "${GATE_PID}" 2> /dev/null || true; rm -rf "${WORK}"' EXIT
+for _ in $(seq 1 50); do
+  [ -s "${FAKE}/gate-port" ] && break
+  sleep 0.1
+done
+[ -s "${FAKE}/gate-port" ] || { echo "error: the stand-in for the gate did not start." >&2; exit 1; }
 
 # pterodactyl-upgrade.sh: says what it was called with, and ends as the test says.
 cat > "${WORK}/upgrade.sh" << 'EOF'
@@ -201,10 +335,12 @@ check "an address of its own near the end of that network" said "at 172.18.255.2
 check "nothing is published, and the limits are said" said "not published to this machine or to the outside"
 check "  " said "1g of memory, 1.5 processors; no rights of root; a read-only file system"
 check "pages cannot reach private networks" line "Pages +cannot reach private networks$"
+check "names are looked up as the server's container looks them up" line "Names +are looked up as the server's container does: 1\.1\.1\.1 1\.0\.0\.1$"
+check "the image is built on Docker's default network, or on the machine's own where only that gets out" said "built on Docker's default network, or on this machine's own where only that reaches Debian's package servers"
 check "what happens to the app" said "BROWSER_URL is written into ${WORK}/volumes/${UUID}/xiero-nexus-ai/.env, and the server is started again"
 check "  with the version that is installed" said "with version 1.8.0-rc.5 (the one that is installed, put in place again)"
 check "it says that nothing was changed" said "Dry run: nothing was changed."
-check_not "nothing was built, started or removed" asked '^(build|run|rm|exec) '
+check_not "nothing was fetched, built, started or removed" asked '^(pull|build|run|rm|exec) '
 check_not "no token was made" test -e "${STATE}"
 check_not "the server was not touched" test -e "${FAKE}/upgrade"
 
@@ -240,9 +376,12 @@ begin "Setting it up"
 run --server "${UUID}" --yes
 is "it ends well" "0" "${CODE}"
 check "the image is built from what is next to the script, with the newest base" asked "^build --pull -t xiero-browser ${here%/test}/browser$"
+check "  after asking whether Docker's default network gets to the package servers, with the image the build starts from" asked "^run --rm --network bridge debian:bookworm-slim timeout 15 bash -c "
+check_not "  which it does here: the machine's own network is not asked about" asked '^run --rm --network host '
 RUN="$(cat "${FAKE}/run" 2> /dev/null || true)"
 has() { case " ${RUN} " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 check "the container is on the server's network, at its own address" has "--network pterodactyl_nw --ip 172.18.255.250"
+check "  it looks names up at the DNS servers of the server's container" has "--ip 172.18.255.250 --dns 1.1.1.1 --dns 1.0.0.1"
 check "  started again with Docker" has "--restart unless-stopped"
 check "  with a limit on memory, processors and processes" has "--memory 1g --memory-swap 1g --cpus 1.5 --pids-limit 512"
 check "  a read-only file system, and what it writes kept in memory" has "--read-only --tmpfs /tmp:rw,nosuid,nodev,size=384m,mode=1777"
@@ -256,8 +395,12 @@ check "  handed to the container in a file, not on the command line" has "--env-
 check_not "  " eval 'case "$(cat "${FAKE}/log")" in *"${TOKEN}"*) true ;; *) false ;; esac'
 check "  the container got it" grep -qx "BROWSER_TOKEN=${TOKEN}" "${FAKE}/envfile"
 check "it looks whether Chromium runs, whether the token is asked for, and whether it is taken" said "Chromium is running in it."
+check "  (asked for real, of a stand-in that answers at the length a Chromium does)" test "$(XN_URL="http://127.0.0.1:$(cat "${FAKE}/gate-port")/json/version?token=${TOKEN}" node -e 'require("http").get(process.env.XN_URL, (res) => { let n = 0; res.on("data", (d) => (n += d.length)); res.on("end", () => console.log(n > 400 ? "long" : "short")); })')" = "long"
 check "  " said "Without the token it lets nobody in."
 check "  " said "With the token it does, and it keeps pages from private networks: Chrome/120.0.1."
+check "  whether it reaches the outside" said "It reaches the outside (deb.debian.org)."
+check "  whether its Chromium opens a page" line "^Its Chromium opens a page: https://example\.com/ came up in [0-9.]+ s\.$"
+check "    asked of Chromium at the port it chose: a tab on that page, and closed again" test "$(tr '\n' ' ' < "${FAKE}/tabs")" = "opened https://example.com/ closed TAB1 "
 check "  and whether the server's container reaches it" said "The server's container reaches it."
 check "  asked from inside that container, at the service's address" asked "^exec -e XN_URL=http://172.18.255.250:9223/healthz ${UUID} node "
 check "the server is restarted with the address of the service in its .env" upgraded "BROWSER_URL=http://172.18.255.250:9223/?token=${TOKEN}"
@@ -301,13 +444,78 @@ check "a smaller network: an address near its end" said "at 192.168.77.250:9223"
 FAKE_SUBNET="" run --server "${UUID}" --dry-run
 check "a network that says nothing of its addresses: Docker's choice, and said" said "at an address Docker chooses:9223"
 
+begin "A machine whose default network does not get to the package servers"
+rm -f "${FAKE}/containers/xiero-browser"
+FAKE_BUILD_NET=host FAKE_BUILD=needs-host run --server "${UUID}" --yes
+is "the image is built all the same" "0" "${CODE}"
+check "  both networks were asked about, the default one first" test "$(grep -E '^run --rm --network ' "${FAKE}/log" | cut -d ' ' -f 4 | tr '\n' ' ')" = "bridge host "
+check "  it says what it found" said "Docker's default network does not reach Debian's package servers from this machine; the machine's own network does."
+check "  and built on the machine's own network" asked "^build --pull -t xiero-browser --network host ${here%/test}/browser$"
+RUN="$(cat "${FAKE}/run" 2> /dev/null || true)"
+check "  the container is on the server's network as ever, not on the machine's" has "--network pterodactyl_nw --ip 172.18.255.250"
+check_not "  " has "--network host"
+check "  and the app is pointed at it" upgraded "BROWSER_URL=http://172.18.255.250:9223/?token=${TOKEN}"
+rm -f "${FAKE}/containers/xiero-browser"
+FAKE_BUILD_NET=none FAKE_BUILD=needs-host run --server "${UUID}" --yes
+is "a machine that does not get there on either: the build is tried, and fails" "1" "${CODE}"
+check "  it says beforehand that neither gets there" said "neither Docker's default network nor this machine's own reaches deb.debian.org just now"
+check "  what the package tool said first is shown under its own heading" said "What the package tool said first:"
+check "    each line once, without the counters of the build" test "$(grep -cx "W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'" "${OUT}")" = "1"
+check "    the errors among them" grep -qx "E: Some index files failed to download. They have been ignored, or old ones used instead." "${OUT}"
+check_not "    though the end of what the build said no longer shows them" grep -q "^#6 20.23 W: Failed to fetch" "${OUT}"
+check "  and the end of what the build said" said "did not complete successfully: exit code: 100"
+check "  with the way out" said "run this again with --build-network host"
+check_not "  no container was started" asked '^run -d '
+check_not "  the server was not touched" test -e "${FAKE}/upgrade"
+FAKE_BUILD_NET=host FAKE_BUILD=needs-host run --server "${UUID}" --yes --build-network host
+is "--build-network host builds there without asking" "0" "${CODE}"
+check_not "  " asked '^(pull|run --rm) '
+check "  " asked "^build --pull -t xiero-browser --network host "
+check "  and the plan says so" said "built on this machine's own network (--build-network host)"
+rm -f "${FAKE}/containers/xiero-browser"
+FAKE_BUILD_NET=host FAKE_BUILD=needs-host run --server "${UUID}" --yes --build-network default
+is "--build-network default builds on Docker's network without asking, whatever comes of it" "1" "${CODE}"
+check_not "  " asked '^(pull|run --rm) '
+check_not "  " asked '^build .*--network host'
+FAKE_PULL=fails run --server "${UUID}" --yes
+is "an image to start from that cannot be fetched now: nothing is asked, and the build is tried" "0" "${CODE}"
+check_not "  " asked '^run --rm '
+check "  " asked "^build --pull -t xiero-browser ${here%/test}/browser$"
+run --server "${UUID}" --build-network elsewhere --dry-run
+is "a network to build on that is neither" "1" "${CODE}"
+
+begin "Where names are looked up"
+FAKE_DNS="" run --server "${UUID}" --yes
+is "a server's container that was given no DNS servers" "0" "${CODE}"
+check "  the ones of the Wings configuration are taken" line "Names +are looked up as the Wings configuration says: 9\.9\.9\.9 149\.112\.112\.112$"
+RUN="$(cat "${FAKE}/run")"
+check "  " has "--dns 9.9.9.9 --dns 149.112.112.112"
+FAKE_SERVER=none run --server "${UUID}" --dry-run
+check "a server whose container is not there: the same" line "Names +are looked up as the Wings configuration says: 9\.9\.9\.9 149\.112\.112\.112$"
+FAKE_DNS="1.1.1.1 not-an-address --privileged 2606:4700:4700::1111" run --server "${UUID}" --yes
+RUN="$(cat "${FAKE}/run")"
+check "what is no address is not handed to Docker" has "--dns 1.1.1.1 --dns 2606:4700:4700::1111 --memory"
+check_not "  " has "--privileged"
+cp "${WORK}/wings.yml" "${WORK}/wings.keep"
+grep -v -e 'dns:' -e '^    - ' "${WORK}/wings.keep" > "${WORK}/wings.yml"
+FAKE_DNS="" run --server "${UUID}" --yes
+is "no DNS servers anywhere: Docker decides" "0" "${CODE}"
+check "  and that is said" line "Names +are looked up as Docker does on this machine$"
+RUN="$(cat "${FAKE}/run")"
+check_not "  " has "--dns"
+printf 'token: node-token\nsystem:\n  data: %s\ndocker:\n  network:\n    name: pterodactyl_nw\n    dns: [8.8.8.8, "8.8.4.4"]\n' "${WORK}/volumes" > "${WORK}/wings.yml"
+FAKE_DNS="" run --server "${UUID}" --dry-run
+check "a list written in one line is read too" line "Names +are looked up as the Wings configuration says: 8\.8\.8\.8 8\.8\.4\.4$"
+mv "${WORK}/wings.keep" "${WORK}/wings.yml"
+
 begin "What stops it, with the server left alone"
 rm -f "${FAKE}/containers/xiero-browser"
 FAKE_BUILD=fails run --server "${UUID}" --yes
 is "an image that cannot be built" "1" "${CODE}"
 check "  with what the build said" said "Unable to locate package chromium"
+check_not "    once, where it is short" said "What the package tool said first:"
 check "  " said "the image could not be built. Nothing else was changed."
-check_not "  no container was started" asked '^run '
+check_not "  no container was started" asked '^run -d '
 check_not "  the server was not touched" test -e "${FAKE}/upgrade"
 FAKE_RUN=fails run --server "${UUID}" --yes
 is "a container that cannot be started" "1" "${CODE}"
@@ -321,6 +529,25 @@ check_not "  the server was not touched" test -e "${FAKE}/upgrade"
 FAKE_OPEN=yes run --server "${UUID}" --yes
 is "a service that answers without the token" "1" "${CODE}"
 check "  " said "the service answered a question without the token"
+check_not "  the server was not touched" test -e "${FAKE}/upgrade"
+FAKE_GATE=no run --server "${UUID}" --yes
+is "something at that port that takes the token and is not the gate" "1" "${CODE}"
+check "  is said" said "does not say that it keeps pages from private networks"
+check_not "  the server was not touched" test -e "${FAKE}/upgrade"
+FAKE_PAGE=no run --server "${UUID}" --yes
+is "a Chromium that does not open a page" "1" "${CODE}"
+check "  is said, with what the tab showed" said 'Chromium did not open https://example.com/ (after 20.1 s the tab is titled "Not opened", not "Example Domain").'
+check "  where to look, and the way around it" said "docker logs xiero-browser"
+check "  " said "run this again with --skip-page-test"
+check_not "  the server was not touched" test -e "${FAKE}/upgrade"
+FAKE_PAGE=no run --server "${UUID}" --yes --skip-page-test
+is "--skip-page-test does not ask for the page" "0" "${CODE}"
+check_not "  " asked 'XN_PAGE='
+check_not "  " said "opens a page"
+FAKE_OUTSIDE=no run --server "${UUID}" --yes
+is "a service whose container does not get to the outside" "1" "${CODE}"
+check "  is said, with what it tried" said "the browser's container does not reach the outside (deb.debian.org: the name was not found (EAI_AGAIN); github.com:"
+check "  what that means, and where it looks names up" said "so pages would not load. A name that is not found is a matter of DNS: the container looks names up at 1.1.1.1 1.0.0.1."
 check_not "  the server was not touched" test -e "${FAKE}/upgrade"
 FAKE_REACH=no run --server "${UUID}" --yes
 is "a server whose container does not reach the service" "1" "${CODE}"

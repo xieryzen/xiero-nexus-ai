@@ -53,6 +53,12 @@ docker run -d --name xiero-browser --restart unless-stopped \
 - `-p 127.0.0.1:9223:9223` publishes it to this machine only. For an app in
   another container, put both on one Docker network instead of publishing
   the port, and use the container's name or address.
+- A build installs Debian's packages from inside a container on Docker's
+  default network. Where the build ends at `apt-get update` (a name that is
+  not found, nothing that connects), that network does not get to the
+  outside on this machine:
+  `docker build --network host -t xiero-browser scripts/host/browser` builds
+  on the machine's own. (`browser-service.sh` asks first, and chooses.)
 
 In the app's `.env`:
 
