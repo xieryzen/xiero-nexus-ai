@@ -131,6 +131,26 @@ async function endpoint(url: URL): Promise<Endpoint> {
   };
 }
 
+/**
+ * What a page of this browser tells a site that it is: asked of a page, in a
+ * context of its own that is closed again. What the browser says of itself
+ * elsewhere need not be the same.
+ */
+async function userAgentOfPages(conn: CdpConnection): Promise<string | null> {
+  let browserContextId: string | undefined;
+  try {
+    ({ browserContextId } = await conn.send<{ browserContextId: string }>("Target.createBrowserContext", { disposeOnDetach: true }));
+    const { targetId } = await conn.send<{ targetId: string }>("Target.createTarget", { url: "about:blank", browserContextId });
+    const { sessionId } = await conn.send<{ sessionId: string }>("Target.attachToTarget", { targetId, flatten: true });
+    const answer = await conn.send<{ result?: { value?: unknown } }>("Runtime.evaluate", { expression: "navigator.userAgent", returnByValue: true }, sessionId, 5_000);
+    return typeof answer.result?.value === "string" ? answer.result.value.slice(0, 300) : null;
+  } catch {
+    return null;
+  } finally {
+    if (browserContextId) await conn.send("Target.disposeBrowserContext", { browserContextId }).catch(() => undefined);
+  }
+}
+
 function note(patch: Partial<BrowserStatus>): BrowserStatus {
   const s = store();
   s.status = { ...s.status, ...patch, checkedAt: Date.now() };
@@ -161,7 +181,7 @@ export async function connection(): Promise<CdpConnection> {
       try {
         const version = await conn.send<{ product?: string; userAgent?: string }>("Browser.getVersion");
         product = version.product?.slice(0, 80) ?? product;
-        userAgent = version.userAgent?.slice(0, 300) ?? null;
+        userAgent = (await userAgentOfPages(conn)) ?? version.userAgent?.slice(0, 300) ?? null;
         await conn.send("Target.setDiscoverTargets", { discover: true });
       } catch {
         // A browser that does not say what it is works all the same.

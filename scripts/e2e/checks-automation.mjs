@@ -3098,7 +3098,8 @@ export async function automation(ctx) {
     const wrong = (await admin.post("/api/browser/accounts", { name: "shop-wrong", siteUrl: `${SITE}/login`, username: "budi", password: "not-the-password-9" })).data?.account;
     const careless = (await admin.post("/api/browser/accounts", { name: "careless", siteUrl: `${SITE}/echo-login`, username: "budi", password: BUDI })).data?.account;
     const twoStep = (await admin.post("/api/browser/accounts", { name: "two-step", siteUrl: `${SITE}/two-step`, username: "sari", password: SARI })).data?.account;
-    const elsewhere = (await admin.post("/api/browser/accounts", { name: "elsewhere", siteUrl: "https://example.org/login", username: "budi", password: BUDI })).data?.account;
+    // A site that is nowhere, on a machine with a way out to the web and on one without.
+    const elsewhere = (await admin.post("/api/browser/accounts", { name: "elsewhere", siteUrl: "https://no-such-site.invalid/login", username: "budi", password: BUDI })).data?.account;
     const bad = await web(admin, "refused", [{ action: "sign_in", account: "shop-wrong" }, { action: "sign_in", account: "careless" }, { action: "click", find: 'button "Show password"' }, { action: "sign_in", account: "two-step" }, { action: "sign_in", account: "nobody" }], { siteAccountIds: [wrong?.id, careless?.id, twoStep?.id] });
     await site("/__reset");
     await mockReset();
@@ -3113,7 +3114,7 @@ export async function automation(ctx) {
     check("an account the project does not have is said so, with the ones it has", b[4]?.isError === true && b[4]?.result === 'This project has no account "nobody". Its accounts: careless, shop-wrong, two-step.', b[4]?.result);
     const away = await web(admin, "elsewhere", [{ action: "sign_in", account: "elsewhere" }], { siteAccountIds: [elsewhere?.id] });
     await runProject(admin, away.id);
-    check("an account whose page cannot be opened is said so", (await results(admin, away.id))[0]?.isError === true && /^The sign-in page of "elsewhere" was not opened: /.test((await results(admin, away.id))[0]?.result ?? ""), (await results(admin, away.id))[0]?.result);
+    check("an account whose page cannot be opened is said so", (await results(admin, away.id))[0]?.isError === true && /^The sign-in page of "elsewhere" was not opened: the browser service did not open it: the address is on a private network, or its name could not be found\.$/.test((await results(admin, away.id))[0]?.result ?? ""), (await results(admin, away.id))[0]?.result);
     const typed = await web(admin, "typing a password", [{ action: "open", url: `${SITE}/login` }, { action: "type", find: 'field "Password"', text: "typed-by-the-agent-77" }]);
     await runProject(admin, typed.id);
     check("what an agent types into a password field itself is not shown back, and not written down", (await results(admin, typed.id))[1]?.result.includes('field "Password" (password) = [hidden]') && (await log(admin)).some((a) => a.kind === "type" && a.detail === 'field "Password": (not written down: a password field)') && !JSON.stringify(await log(admin)).includes("typed-by-the-agent-77"), (await results(admin, typed.id))[1]?.result);
