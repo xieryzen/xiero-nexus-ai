@@ -21,6 +21,13 @@ export interface LoopTool {
   definition: ToolDefinition;
   /** Runs the tool. Resolves to what the model reads; throws ToolError to report a failure. */
   run(args: Record<string, unknown>): Promise<string>;
+  /**
+   * For a tool whose every answer shows the same thing as it is now (a page
+   * in a browser): what stays of an older answer once a newer one is there.
+   * Without it, a model that works through many steps reads every earlier
+   * state again with each step.
+   */
+  shorten?(result: string): string;
 }
 
 export interface ToolCallEvent {
@@ -180,6 +187,15 @@ export async function runToolLoop(opts: LoopOptions): Promise<LoopResult> {
       }
       output = clipResult(output, maxResult);
       toolCalls++;
+      if (tool?.shorten && !isError) {
+        // The newest answer has the thing as it is now: the older ones keep only what they said had been done.
+        for (let i = 0; i < messages.length; i++) {
+          const earlier = messages[i]!;
+          if (earlier.role !== "tool" || earlier.name !== call.name || earlier.isError) continue;
+          const short = tool.shorten(earlier.content);
+          if (short.length < earlier.content.length) messages[i] = { ...earlier, content: short };
+        }
+      }
       messages.push({
         role: "tool",
         toolCallId: call.id,

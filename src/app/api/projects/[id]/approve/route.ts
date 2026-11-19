@@ -6,7 +6,7 @@ import { requireAdmin } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
-import { assertMayOperate } from "@/lib/ssh/servers";
+import { assertMayOperate } from "@/lib/project-access";
 import { serializeProject } from "@/lib/workforce";
 
 export const dynamic = "force-dynamic";

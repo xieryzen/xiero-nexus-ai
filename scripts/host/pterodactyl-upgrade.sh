@@ -215,6 +215,17 @@ env_get() {
     | sed -E 's/^"([^"]*)".*$/\1/; t; s/^'"'"'([^'"'"']*)'"'"'.*$/\1/; t; s/[[:space:]]+#.*$//; s/[[:space:]]+$//'
 }
 
+# The value of a setting as it is printed. What signs in somewhere is not: a
+# setting that is a key, a token or a password, and a token inside an address.
+shown_value() { # KEY VALUE
+  case "$1" in
+    *KEY* | *TOKEN* | *SECRET* | *PASSWORD*)
+      if [ -n "$2" ]; then printf '(not shown)'; fi
+      ;;
+    *) printf '%s' "$2" | sed -E 's/([?&](token|key|secret|password)=)[^&]*/\1(not shown)/g; s#(://[^/:@]*:)[^@/]*@#\1(not shown)@#' ;;
+  esac
+}
+
 # Set KEY=VALUE in an env file: replaces the line that sets it now, or adds one.
 # The file keeps its owner and permissions.
 env_set() {
@@ -956,11 +967,12 @@ else
   say "  Check       no address found: the site has to be checked by hand afterwards (--check-url)"
 fi
 for setting in ${SETTINGS[@]+"${SETTINGS[@]}"}; do
-  current="$(env_get "${setting%%=*}" "${ENV_FILE}")"
+  key="${setting%%=*}"
+  current="$(env_get "${key}" "${ENV_FILE}")"
   if [ "${current}" = "${setting#*=}" ]; then
-    say "  Setting     ${setting} (already so)"
+    say "  Setting     ${key}=$(shown_value "${key}" "${setting#*=}") (already so)"
   else
-    say "  Setting     ${setting}$([ -n "${current}" ] && echo "   (now: ${current})")"
+    say "  Setting     ${key}=$(shown_value "${key}" "${setting#*=}")$([ -n "${current}" ] && echo "   (now: $(shown_value "${key}" "${current}"))")"
   fi
 done
 [ -z "${FFMPEG_FILE}" ] || say "  ffmpeg      ${FFMPEG_FILE} is copied to ${VOLUME}/xiero-tools/ffmpeg"

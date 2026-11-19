@@ -116,6 +116,8 @@ export function projectFor(role: Role, project: ProjectDTO): ProjectDTO {
     speechModelRowId: null,
     // Servers are part of the setup, and no project of a user works on one.
     servers: [],
+    // Nor does one sign in with a site account.
+    siteAccounts: [],
     finalDeliverable: deliverableFor(role, project.finalDeliverable),
     error: textFor(role, project.error),
     tasks: project.tasks.map((task) => taskFor(role, task, Boolean(project.workflowId))),
@@ -161,7 +163,9 @@ export function usageFor(role: Role, summary: UsageSummary): UsageSummary {
 /** One event of a run, as this role follows it. */
 export function eventFor(role: Role, event: RunEvent): RunEvent {
   if (seesSetup(role)) {
-    if (event.type === "progress" && event.full) return { type: "progress", seq: event.seq, message: event.full };
+    if (event.type === "progress" && event.full) {
+      return { type: "progress", seq: event.seq, message: event.full, ...(event.link ? { link: event.link } : {}) };
+    }
     return event;
   }
   switch (event.type) {

@@ -171,6 +171,10 @@ cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/disk-report.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/node-check.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/nginx-site.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/workforce.sh"
+# The script that sets up the browser service, with what its image is built from.
+cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/browser-service.sh"
+mkdir -p "${WORK}/scripts/browser"
+echo "# a stand-in" > "${WORK}/scripts/browser/Dockerfile"
 # What workforce.sh works with travels with it: its program, its file, and the skills the file names.
 echo "# a stand-in" > "${WORK}/scripts/workforce.py"
 echo "{}" > "${WORK}/scripts/workforce.json"
@@ -307,6 +311,12 @@ check "  its program, its file and the skills are next to it on the node" said "
 check "  a skill arrives as it was written" said "skill=# A skill of the test"
 DEPLOY_SERVER=0a11ce00 remote workforce -- --update --test || true
 check "workforce: --yes, and what came after \"--\"" args_are --server 0a11ce00 --yes --update --test
+DEPLOY_SERVER=0a11ce00 remote browser-plan || true
+check "browser-plan: runs browser-service.sh" said "ran=browser-service.sh"
+check "  with the server and --dry-run" args_are --server 0a11ce00 --dry-run
+check "  what its image is built from is next to it on the node" said "beside=browser browser-service.sh "
+DEPLOY_SERVER=0a11ce00 DEPLOY_VERSION=v1.8.0 remote browser -- --rebuild || true
+check "browser: --yes, the version of the app, and what came after \"--\"" args_are --server 0a11ce00 --version 1.8.0 --yes --rebuild
 check "  a node without a key for sealed input is not told of one" said "input_key=[]"
 
 begin "Sealed for the node: a password or a skill that passes where others can read"

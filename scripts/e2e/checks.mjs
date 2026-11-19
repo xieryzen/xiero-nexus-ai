@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers,browser
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
@@ -913,5 +913,8 @@ for (const failure of failures) console.log(`  ✗ ${failure}`);
 if (process.env.GITHUB_ACTIONS === "true") {
   const ffmpeg = process.env.E2E_FFMPEG_VERSION ? `joining clips checked with ffmpeg ${process.env.E2E_FFMPEG_VERSION}` : "without ffmpeg";
   console.log(`::notice title=End-to-end checks::${passed} passed, ${failures.length} failed; ${ffmpeg}`);
+  // And what failed, so that it can be read without the log: the first ten, each cut to a page of text.
+  const line = (text) => text.slice(0, 1500).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  for (const failure of failures.slice(0, 10)) console.log(`::error title=End-to-end check failed::${line(failure)}`);
 }
 process.exit(failures.length ? 1 : 0);

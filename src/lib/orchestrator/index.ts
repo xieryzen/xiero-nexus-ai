@@ -62,6 +62,10 @@ import { NOT_SET_UP } from "@/lib/public-text";
 import { SERVER_TOOL, serversLine, type ServerForAgent } from "@/lib/ssh/rules";
 import { serversForRun } from "@/lib/ssh/servers";
 import { closeRun } from "@/lib/ssh/sessions";
+import { accountsForRun, roleOfUser } from "@/lib/browser/accounts";
+import { BROWSER_TOOL, accountsLine, callSummary, mayUseBrowser, type AccountForAgent } from "@/lib/browser/rules";
+import { browserConfigured } from "@/lib/browser/service";
+import { closeRunBrowser, closeTaskPages } from "@/lib/browser/sessions";
 import { taskTokenBudget, usedUpMessage } from "@/lib/token-rules";
 import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
 import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
@@ -137,17 +141,42 @@ function elapsedLabel(ms: number): string {
  * The agents as the one who plans sees them: who they are, what they have a
  * skill for, and, in a project that names servers, who can work on them.
  */
-function describeAgents(list: Agent[], teamId: string | null, withServers = false): string {
+function describeAgents(list: Agent[], teamId: string | null, withServers = false, withBrowser = false): string {
   return list
     .map((a) => {
       const skilled = skillNames(skillsForWork(a.id, teamId));
       return (
         `- ${a.name} (${a.role})${skilled ? ` [skills: ${skilled}]` : ""}` +
         (withServers && parseToolNames(a.tools).includes(SERVER_TOOL) ? " [works on servers]" : "") +
+        (withBrowser && parseToolNames(a.tools).includes(BROWSER_TOOL) ? " [works in a browser]" : "") +
         (a.instructions ? `: ${a.instructions.slice(0, 160)}` : "")
       );
     })
     .join("\n");
+}
+
+/**
+ * What the one who plans is told about the browser: who can work in it, and
+ * which site accounts the project signs in with. Empty when the project's
+ * account has no browser to work in and names no account.
+ */
+function browserForPlan(usable: boolean, accounts: readonly AccountForAgent[], workforce: Agent[]): string {
+  const able = usable ? workforce.filter((a) => parseToolNames(a.tools).includes(BROWSER_TOOL)).map((a) => a.name) : [];
+  if (able.length === 0) {
+    return accounts.length === 0
+      ? ""
+      : `\n\nThis project names site accounts (${accounts.map((a) => a.name).join(", ")}), but none of the available agents can work in a browser, ` +
+          "so nothing can be opened or signed in to in this run. Plan only what can be done without that, and have the last task say plainly " +
+          "that an agent has to be given the tool to work in a browser first.";
+  }
+  return (
+    `\n\nThe agents marked [works in a browser] can open web sites in a real browser, read them and act on them (${able.join(", ")}). ` +
+    "Give every task that has to look at a web site or do something on one to one of them, and say in its objective which site and what has to be true when the task is done. " +
+    (accounts.length > 0
+      ? `They can sign in with the site accounts of this project: ${accountsLine(accounts)}. `
+      : "No site account is saved for this project: they work with what a site shows to everyone. ") +
+    "Where a site asks for a CAPTCHA or a code, the task waits and a person does it in the same browser: that is a step of the work, not a reason to plan around it."
+  );
 }
 
 /** What the one who plans is told about the servers of the project. Empty when it names none. */
@@ -280,11 +309,15 @@ export function prepareRun(asSet: Project): RunSetup {
   // on them now, and each has to be switched on.
   const machines = serversForRun(asSet);
   if (machines.problem) throw new AppError(400, "run_not_possible", machines.problem);
+  // The same for the site accounts it signs in with.
+  const logins = accountsForRun(asSet);
+  if (logins.problem) throw new AppError(400, "run_not_possible", logins.problem);
   return { manager, routable, workforce };
 }
 
 /** One line that says what a tool was called with. */
 function summarizeCall(name: string, args: Record<string, unknown>): string {
+  if (name === BROWSER_TOOL) return callSummary(args);
   const first = ["path", "url", "command", "query", "note"]
     .map((key) => args[key])
     .find((value): value is string => typeof value === "string" && value.length > 0);
@@ -606,6 +639,9 @@ export async function executeRun(runId: string): Promise<void> {
             : "";
         // The machines the project names, for the one who plans: by name, never where they are.
         const planServers = serversForRun(project).servers;
+        // The same for the browser: whether the project's account has one to work in, and the accounts it signs in with.
+        const planBrowser = browserConfigured() && mayUseBrowser(roleOfUser(project.createdBy));
+        const planAccounts = accountsForRun(project).accounts;
         const planMessages: ChatMessage[] = [
           {
             role: "system",
@@ -619,7 +655,8 @@ export async function executeRun(runId: string): Promise<void> {
               "its artifact is saved to the project workspace. Keep it minimal and ordered." +
               creative +
               serversForPlan(planServers, workforce) +
-              `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId, planServers.length > 0)}`,
+              browserForPlan(planBrowser, planAccounts, workforce) +
+              `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId, planServers.length > 0, planBrowser)}`,
           },
           { role: "user", content: `Goal:\n${goal}${memoryNote}` },
         ];
@@ -797,6 +834,7 @@ export async function executeRun(runId: string): Promise<void> {
       let toolCallCount = 0;
 
       const failTask = (error: string, assets?: MediaAssetDTO[], status: TaskState = "failed") => {
+        closeTaskPages(runId, row.id);
         db.update(projectTasks)
           .set({
             status,
@@ -815,6 +853,7 @@ export async function executeRun(runId: string): Promise<void> {
       };
 
       const succeed = (artifact: string, assets?: MediaAssetDTO[]) => {
+        closeTaskPages(runId, row.id);
         db.update(projectTasks)
           .set({
             status: "succeeded",
@@ -991,6 +1030,20 @@ export async function executeRun(runId: string): Promise<void> {
                   progress: (message) => emit({ type: "progress", seq, message }),
                   attempt: () => attempt,
                 },
+                // The browser of the run: one for all its tasks, each in a tab
+                // of its own, closed when the run has ended (browser/sessions.ts).
+                // It is there for the projects of owners and administrators.
+                browser: mayUseBrowser(roleOfUser(project.createdBy))
+                  ? {
+                      runId,
+                      projectTitle: project.title,
+                      taskTitle: row.title,
+                      accounts: accountsForRun(project).accounts,
+                      isCancelled,
+                      progress: (message, link) => emit({ type: "progress", seq, message, ...(link ? { link } : {}) }),
+                      attempt: () => attempt,
+                    }
+                  : undefined,
               })
             : [];
         const toolNames = tools.map((t) => t.definition.name);
@@ -1654,5 +1707,7 @@ export async function executeRun(runId: string): Promise<void> {
     // all of it. Now it has ended, however it ended, and they are closed.
     const ended = db.select({ status: projectRuns.status }).from(projectRuns).where(eq(projectRuns.id, runId)).get()?.status;
     closeRun(runId, ended === "cancelled" ? "the run was stopped" : "the run has ended");
+    // The same for its browser: the sessions of the accounts it used are kept, and its pages are closed.
+    void closeRunBrowser(runId).catch(() => undefined);
   }
 }

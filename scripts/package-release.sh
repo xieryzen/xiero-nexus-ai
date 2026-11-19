@@ -63,11 +63,13 @@ if [ ! -f "${BINDING}" ]; then
 fi
 # Packages that are loaded while the server runs, not when it is built: the
 # build only brings them along because next.config.mjs names them. ssh2 (the
-# connections to servers) comes with what it is written with.
+# connections to servers) comes with what it is written with; ws (the
+# connection to the browser service) is written with nothing else.
 for needed in node_modules/unpdf/package.json assets/fonts/NotoSans-Bold.ttf \
   node_modules/ssh2/package.json node_modules/ssh2/lib/client.js \
   node_modules/asn1/package.json node_modules/bcrypt-pbkdf/package.json \
-  node_modules/tweetnacl/package.json node_modules/safer-buffer/package.json; do
+  node_modules/tweetnacl/package.json node_modules/safer-buffer/package.json \
+  node_modules/ws/package.json node_modules/ws/lib/websocket.js; do
   if [ ! -f "${OUT}/${needed}" ]; then
     echo "error: ${needed} is missing from the bundle" >&2
     exit 1

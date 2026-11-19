@@ -45,6 +45,8 @@ export interface ToolSetup {
   sandbox: boolean;
   /** The search service's name, or null when none is configured. */
   search: string | null;
+  /** A browser service is configured. */
+  browser: boolean;
 }
 
 export interface CollectionOption {
@@ -59,7 +61,7 @@ export interface SkillOption {
   enabled: boolean;
 }
 
-const GROUPS: ToolGroup[] = ["workspace", "execution", "web", "servers"];
+const GROUPS: ToolGroup[] = ["workspace", "execution", "web", "servers", "browser"];
 
 function AgentForm({
   models,
@@ -116,8 +118,8 @@ function AgentForm({
       }
       return next;
     });
-  const available = (needs?: "sandbox" | "search") =>
-    needs === "sandbox" ? toolSetup.sandbox : needs === "search" ? toolSetup.search !== null : true;
+  const available = (needs?: "sandbox" | "search" | "browser") =>
+    needs === "sandbox" ? toolSetup.sandbox : needs === "search" ? toolSetup.search !== null : needs === "browser" ? toolSetup.browser : true;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -248,7 +250,9 @@ function AgentForm({
                               <span className="mt-0.5 block text-xs text-warn">
                                 {tool.needs === "sandbox"
                                   ? "Not set up on this server: needs a sandbox runner (SANDBOX_URL). Until then the agent does not get this tool."
-                                  : "Not set up on this server: needs a search service (SEARCH_PROVIDER). Until then the agent does not get this tool."}
+                                  : tool.needs === "browser"
+                                    ? "Not set up on this server: needs a browser service (BROWSER_URL). Until then the agent does not get this tool."
+                                    : "Not set up on this server: needs a search service (SEARCH_PROVIDER). Until then the agent does not get this tool."}
                               </span>
                             )}
                             {tool.inProjects && <span className="mt-0.5 block text-xs text-warn">{tool.inProjects}</span>}
@@ -578,10 +582,11 @@ export function AgentsManager({
         </div>
       )}
 
-      {(!toolSetup.sandbox || toolSetup.search === null) && isAdmin && list.some((a) => a.tools.length > 0) && (
+      {(!toolSetup.sandbox || toolSetup.search === null || !toolSetup.browser) && isAdmin && list.some((a) => a.tools.length > 0) && (
         <p className="mb-3 text-xs text-ink-3">
           {!toolSetup.sandbox && "Running commands needs a sandbox runner (SANDBOX_URL). "}
           {toolSetup.search === null && "Searching the web needs a search service (SEARCH_PROVIDER). "}
+          {!toolSetup.browser && "Working in a browser needs a browser service (BROWSER_URL). "}
           Agents get the other tools they were given. See the <Link href="/dashboard/observability" className="text-signal hover:underline">server status</Link>.
         </p>
       )}

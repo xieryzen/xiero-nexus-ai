@@ -15,6 +15,7 @@ export const GET = handle(async () => {
     tools: TOOL_CATALOG.map((tool) => ({ ...tool, available: toolAvailable(tool.name, status) })),
     sandbox: status.sandbox,
     search: status.search,
+    browser: status.browser,
     // True when agents can only reach the hosts the administrator listed.
     hostsRestricted: agentAllowedHosts().length > 0,
   });

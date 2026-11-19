@@ -208,6 +208,9 @@ function embedding(text, dimensions = 24) {
  *   "Tool: silent"    save the task's output file with write_file, then say nothing
  *   "Tool: ssh"       run on a server what the task's objective lists, a line each:
  *                     SSH: {"command": "uname -a", "server": "vps-1", "timeout_seconds": 5}
+ *   "Tool: browser"   do in the browser what the task's objective lists, a line each:
+ *                     BROWSER: {"action": "open", "url": "https://example.com/"}
+ *                     BROWSER: {"action": "click", "find": "button \"Sign in\""}
  *
  * Returns the tool calls of this step, or null to answer in text.
  */
@@ -276,6 +279,26 @@ function nextToolCalls(body) {
       }
     });
     return done < calls.length && calls[done] ? call("run_on_server", calls[done]) : null;
+  }
+  if (title.startsWith("Tool: browser")) {
+    // The calls are written in the objective, one a line, and made in that
+    // order. "find" stands for the number of the element whose mark holds
+    // that text in the answer before: a model reads the number off the page.
+    const calls = [...String(task).matchAll(/^BROWSER: (\{.*\})\s*$/gm)].map((m) => {
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        return null;
+      }
+    });
+    const next = calls[done];
+    if (!next) return null;
+    if (typeof next.find !== "string") return call("use_browser", next);
+    // The page as it was last shown: the newest answer that shows one.
+    const last = String([...messages].reverse().find((m) => m.role === "tool" && /\[\d+: /.test(String(m.content)))?.content ?? "");
+    const mark = [...last.matchAll(/\[(\d+): ([^\]]*)\]?/g)].find((m) => m[2].includes(next.find));
+    const { find: _find, ...rest } = next;
+    return call("use_browser", { ...rest, element: mark ? Number(mark[1]) : 9999 });
   }
   if (title.startsWith("Tool: skill")) {
     // Written the way a model writes a name: in other letters than the skill has.

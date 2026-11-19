@@ -43,7 +43,7 @@ export default function AgentsPage() {
     // An administrator sees how many notes there are; everyone else, their own.
     memories: memoryCounts(isAdmin ? undefined : user?.id),
   }).map((agent) => agentFor(user?.role, agent));
-  const status = isAdmin ? toolStatus() : { sandbox: true, search: "" };
+  const status = isAdmin ? toolStatus() : { sandbox: true, search: "", browser: true };
   const skills = isAdmin
     ? listSkills({ withInstructions: false }).map((s) => ({
         id: s.id,
@@ -63,7 +63,7 @@ export default function AgentsPage() {
         initialAgents={serializedAgents}
         models={modelOptions}
         setModels={isAdmin ? setButNotOffered(agentRows.flatMap((a) => [a.primaryModelRowId, a.fallbackModelRowId]), modelOptions) : []}
-        toolSetup={{ sandbox: status.sandbox, search: status.search }}
+        toolSetup={{ sandbox: status.sandbox, search: status.search, browser: status.browser }}
         collections={isAdmin ? sharedCollections() : []}
         skills={skills}
         isAdmin={isAdmin}

@@ -13,6 +13,9 @@ import { ProjectRunner } from "@/components/projects/project-runner";
 import { isAdminRole, seesSetup } from "@/lib/roles";
 import { assetFor, projectFor } from "@/lib/for-viewer";
 import { kindsAvailable, withRunModels } from "@/lib/model-choice";
+import { accountsFor, accountsOfProject, browsersOf } from "@/lib/browser/accounts";
+import { mayUseAccount, siteHost } from "@/lib/browser/rules";
+import { browserConfigured } from "@/lib/browser/service";
 import { mayUseServer } from "@/lib/ssh/rules";
 import { operatorsOf, serversFor, serversOfProject } from "@/lib/ssh/servers";
 
@@ -62,7 +65,13 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
   const serverOptions = serversFor(user)
     .filter((s) => mayUseServer(owner?.role, s.access))
     .map((s) => ({ id: s.id, label: s.name, where: `${s.username}@${s.host}:${s.port}`, off: s.status !== "enabled" }));
-  const mayOperate = serversOfProject(project.id).every((s) => mayUseServer(user.role, s.access));
+  // The same for the site accounts its agents sign in with.
+  const accountOptions = accountsFor(user)
+    .filter((a) => mayUseAccount(owner?.role, a.access))
+    .map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, off: a.status !== "enabled" }));
+  const mayOperate =
+    serversOfProject(project.id).every((s) => mayUseServer(user.role, s.access)) &&
+    accountsOfProject(project.id).every((a) => mayUseAccount(user.role, a.access));
   // Which of its agents can run commands there: without one, naming a server reaches nothing.
   const operators = serverOptions.length > 0 ? operatorsOf(project) : [];
 
@@ -71,6 +80,10 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       project={projectFor(user.role, serializeProject(project, { withTasks: true }))}
       serverOptions={serverOptions}
       serverOperators={operators}
+      accountOptions={accountOptions}
+      // Which of its agents can work in a browser: without one, naming an account signs nobody in.
+      accountAgents={accountOptions.length > 0 ? browsersOf(project) : []}
+      browserReady={browserConfigured()}
       mayOperate={mayOperate}
       chooses={sees}
       agentNames={agentNames}

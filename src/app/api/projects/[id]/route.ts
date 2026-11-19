@@ -6,6 +6,7 @@ import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
 import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
+import { checkedAccountIds, setProjectAccounts } from "@/lib/browser/accounts";
 import { checkedServerIds, setProjectServers } from "@/lib/ssh/servers";
 import { users } from "@/db/schema";
 import { projectUpdateSchema } from "@/lib/validation";
@@ -20,7 +21,7 @@ export const GET = handle(async (_req, { params }) => {
   return json({ project: projectFor(user.role, serializeProject(p, { withTasks: true })) });
 });
 
-/** Change a project's title, its goal, whether it remembers earlier runs, or the servers it works on. */
+/** Change a project's title, its goal, whether it remembers earlier runs, the servers it works on, or the site accounts it signs in with. */
 export const PATCH = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
@@ -33,6 +34,13 @@ export const PATCH = handle(async (req, { params }) => {
     const owner = p.createdBy ? db.select({ role: users.role }).from(users).where(eq(users.id, p.createdBy)).get() : undefined;
     checkedServerIds({ role: owner?.role ?? "user" }, ids);
     setProjectServers(p.id, ids);
+  }
+  if (body.siteAccountIds !== undefined) {
+    // The same for the site accounts its agents sign in with.
+    const ids = checkedAccountIds(user, body.siteAccountIds);
+    const owner = p.createdBy ? db.select({ role: users.role }).from(users).where(eq(users.id, p.createdBy)).get() : undefined;
+    checkedAccountIds({ role: owner?.role ?? "user" }, ids);
+    setProjectAccounts(p.id, ids);
   }
   const updated = db
     .update(projects)

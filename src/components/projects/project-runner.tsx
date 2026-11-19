@@ -15,6 +15,7 @@ import { Icon } from "@/components/icons";
 import { MediaView } from "@/components/media/media-view";
 import { useMediaPolling } from "@/components/media/use-media-polling";
 import { ProjectAutomation } from "./project-automation";
+import { ProjectAccounts, type AccountOption } from "./project-accounts";
 import { ProjectServers, type ServerOption } from "./project-servers";
 import { StateBadge } from "./status-badge";
 
@@ -31,6 +32,8 @@ interface TaskLive {
   error?: string | null;
   /** What a running task is doing right now. */
   progress?: string | null;
+  /** Where a person does what the task waits for: a page of the dashboard. */
+  progressLink?: string | null;
   /** The media the task generated. */
   assets?: MediaAssetDTO[];
   /** Model calls and tool calls the task took (an agent with tools). */
@@ -90,6 +93,9 @@ export function ProjectRunner({
   chooses = true,
   serverOptions = [],
   serverOperators = [],
+  accountOptions = [],
+  accountAgents = [],
+  browserReady = true,
   mayOperate = true,
 }: {
   project: ProjectDTO;
@@ -110,6 +116,12 @@ export function ProjectRunner({
   serverOptions?: ServerOption[];
   /** The agents of this project that have the tool to work on servers, by name. */
   serverOperators?: string[];
+  /** The site accounts the project may be given by this account. */
+  accountOptions?: AccountOption[];
+  /** The agents of this project that have the tool to work in a browser, by name. */
+  accountAgents?: string[];
+  /** Whether a browser service is set up on this server. */
+  browserReady?: boolean;
   /** Whether this account may run and change the project: false when it names a server the account may not use. */
   mayOperate?: boolean;
 }) {
@@ -218,7 +230,7 @@ export function ProjectRunner({
         });
         break;
       case "progress":
-        upsert({ seq: evt.seq, progress: evt.message });
+        upsert({ seq: evt.seq, progress: evt.message, progressLink: evt.link ?? null });
         break;
       case "tool":
         setTasks((prev) =>
@@ -528,6 +540,7 @@ export function ProjectRunner({
       </Card>
 
       <ProjectServers projectId={project.id} options={serverOptions} initial={project.servers} operators={serverOperators} mayChange={mayOperate} busy={isRunning} />
+      <ProjectAccounts projectId={project.id} options={accountOptions} initial={project.siteAccounts} agents={accountAgents} ready={browserReady} mayChange={mayOperate} busy={isRunning} />
 
       <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-3">
         Tasks {tasks.length > 0 && `(${tasks.length})`}
@@ -563,7 +576,13 @@ export function ProjectRunner({
                         </button>
                       )}
                     </div>
-                    {t.status === "running" && t.progress && <p className="mt-2 text-xs text-ink-3">{t.progress}…</p>}
+                    {t.status === "running" && t.progress && !t.progressLink && <p className="mt-2 text-xs text-ink-3">{t.progress}…</p>}
+                    {t.status === "running" && t.progress && t.progressLink && (
+                      <div className="mt-2 flex flex-wrap items-center gap-3 rounded border border-warn/40 bg-warn/10 px-2.5 py-2 text-xs text-ink" data-testid="task-waits">
+                        <span className="min-w-0 flex-1">{t.progress}</span>
+                        <Link href={t.progressLink} className="btn btn-primary shrink-0 px-2.5 py-1 text-xs">Open the page</Link>
+                      </div>
+                    )}
                     {t.error && <p className="mt-2 whitespace-pre-wrap rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{t.error}</p>}
                   </div>
                   <StateBadge state={t.status} />

@@ -14,6 +14,7 @@ export const TOOL_NAMES = [
   "http_request",
   "web_search",
   "run_on_server",
+  "use_browser",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -22,7 +23,7 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 export const IMPLIED_TOOL_NAMES = ["search_knowledge", "remember", "recall", "read_skill"] as const;
 export type ImpliedToolName = (typeof IMPLIED_TOOL_NAMES)[number];
 
-export type ToolGroup = "workspace" | "execution" | "web" | "servers";
+export type ToolGroup = "workspace" | "execution" | "web" | "servers" | "browser";
 
 export interface ToolInfo {
   name: ToolName;
@@ -31,7 +32,7 @@ export interface ToolInfo {
   /** One line for the agent form. */
   summary: string;
   /** What must be configured on the server for the tool to work. */
-  needs?: "sandbox" | "search";
+  needs?: "sandbox" | "search" | "browser";
   /** What a project must have for the agent to be handed the tool in it. */
   inProjects?: string;
 }
@@ -41,6 +42,7 @@ export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
   execution: "Code execution",
   web: "Web and APIs",
   servers: "Servers over SSH",
+  browser: "Browser",
 };
 
 export const TOOL_CATALOG: readonly ToolInfo[] = [
@@ -77,6 +79,15 @@ export const TOOL_CATALOG: readonly ToolInfo[] = [
     summary:
       "Run shell commands on the servers a project names. One connection per server stays open for the whole run, and every command is logged.",
     inProjects: "Only in a project that names a server (Servers page): there the agent can run any command the registered account can.",
+  },
+  {
+    name: "use_browser",
+    label: "Work in a browser",
+    group: "browser",
+    summary:
+      "Open web pages, read them, click and type, and sign in with the site accounts a project names. A CAPTCHA or a code is left to a person, who does it in the same browser.",
+    needs: "browser",
+    inProjects: "Only in the projects of owners and administrators. It signs in with the site accounts the project names (Browser page), and can do there whatever that account can.",
   },
 ];
 

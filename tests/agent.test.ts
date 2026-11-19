@@ -43,6 +43,39 @@ const estimateTokens = (text: string) => Math.ceil(text.length / 4);
 
 // ─── The loop ────────────────────────────────────────────────────────────────
 
+test("a tool whose answers show the same thing as it is now: older answers give way to the newest", async () => {
+  // A page in a browser: every answer is the page then. Read again with every step, the earlier ones only cost.
+  const view = (n: number) => `Did step ${n}.\n[page]\n${"what the page showed then ".repeat(40)}`;
+  const page: LoopTool = {
+    definition: { name: "page", description: "page", parameters: { type: "object", properties: {} } },
+    run: async (args) => {
+      if (args.n === 2) throw new ToolError("That element is not on the page.");
+      return view(Number(args.n));
+    },
+    shorten: (result) => result.split("\n[page]")[0]!,
+  };
+  const model = scripted([
+    { content: "", toolCalls: [call("page", { n: 1 }, "a")] },
+    { content: "", toolCalls: [call("page", { n: 2 }, "b")] },
+    { content: "", toolCalls: [call("other", {}, "c")] },
+    { content: "", toolCalls: [call("page", { n: 4 }, "d")] },
+    { content: "Done." },
+  ]);
+  const events: ToolCallEvent[] = [];
+  await runToolLoop({ chat: model.chat, messages: [...BASE], tools: [page, tool("other", () => "something else")], maxSteps: 8, estimateTokens, onToolCall: (e) => events.push(e) });
+  const toolMessages = (i: number) => model.asked[i]!.messages.filter((m) => m.role === "tool").map((m) => m.content);
+  // After the first answer: it is the newest, whole.
+  assert.deepEqual(toolMessages(1), [view(1)]);
+  // An answer that says what went wrong shows no page: the one before it stays whole.
+  assert.deepEqual(toolMessages(2), [view(1), "That element is not on the page."]);
+  // Another tool's answer changes nothing.
+  assert.deepEqual(toolMessages(3), [view(1), "That element is not on the page.", "something else"]);
+  // The next page: the earlier one keeps what it said had been done, the error and the other tool stay as they were.
+  assert.deepEqual(toolMessages(4), ["Did step 1.", "That element is not on the page.", "something else", view(4)]);
+  // What is written down of each call is what the model read at the time.
+  assert.deepEqual(events.map((e) => e.result), [view(1), "That element is not on the page.", "something else", view(4)]);
+});
+
 test("a model that answers at once is asked once, and the conversation is not changed", async () => {
   const model = scripted([{ content: "Done.", usage: { promptTokens: 10, completionTokens: 2 } }]);
   const messages = [...BASE];
@@ -221,7 +254,7 @@ test("an agent's stored tools are read leniently", () => {
   assert.equal(isToolName("run_command"), true);
   assert.equal(isToolName("search_knowledge"), false); // comes with a collection, not by itself
   assert.deepEqual(TOOL_CATALOG.map((t) => t.name), [...TOOL_NAMES]);
-  assert.deepEqual(TOOL_CATALOG.filter((t) => t.needs).map((t) => [t.name, t.needs]), [["run_command", "sandbox"], ["web_search", "search"]]);
+  assert.deepEqual(TOOL_CATALOG.filter((t) => t.needs).map((t) => [t.name, t.needs]), [["run_command", "sandbox"], ["web_search", "search"], ["use_browser", "browser"]]);
   assert.ok(DEFAULT_MAX_STEPS >= 2);
 });
 

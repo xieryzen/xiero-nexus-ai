@@ -12,6 +12,7 @@ import { publish } from "./run-bus";
 import { runtime } from "./runtime";
 import { runDueSchedules } from "./schedules";
 import { stopOnSignal, stopping } from "./shutdown";
+import { closeStrayBrowsers } from "./browser/sessions";
 import { closeStraySessions } from "./ssh/sessions";
 
 /**
@@ -242,6 +243,7 @@ function housekeeping(): void {
   // A connection to a machine belongs to a run that is executed here, and is
   // closed with it. None should be left over; this makes sure.
   closeStraySessions(new Set(runtime().activeRuns.keys()));
+  closeStrayBrowsers(new Set(runtime().activeRuns.keys()));
   recoverJobs();
   for (const asset of failStaleRenders(RENDER_MAX_AGE_MS)) {
     notify(asset.userId, {

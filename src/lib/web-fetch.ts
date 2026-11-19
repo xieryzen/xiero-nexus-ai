@@ -1,6 +1,7 @@
 import "server-only";
 import { AppError } from "./errors";
 import { safeFetch } from "./http-client";
+import { assertSafeProviderUrl } from "./ssrf";
 import { readBodyCapped } from "./media/http";
 
 /**
@@ -60,6 +61,36 @@ function assertHostAllowed(url: URL): void {
       `${url.hostname} is not among the hosts this server lets agents reach`,
     );
   }
+}
+
+/**
+ * Whether an agent may be taken to an address: a web address, among the
+ * hosts agents may reach, and not on a private network. Throws an AppError
+ * that is safe to show. The address is not contacted.
+ */
+export async function assertWebAddress(input: string): Promise<URL> {
+  const url = parseWebUrl(input);
+  assertHostAllowed(url);
+  try {
+    await assertSafeProviderUrl(url.toString(), { allowHosts: agentPrivateHosts() });
+  } catch (err) {
+    if (err instanceof AppError) {
+      const messages: Record<string, string> = {
+        dns_error: `Could not find the host ${url.hostname}`,
+        blocked_host: `${url.hostname} is on a private network, which cannot be reached from here`,
+        invalid_url: "That is not a valid web address",
+      };
+      throw new AppError(err.status, err.code, messages[err.code] ?? err.message);
+    }
+    throw err;
+  }
+  return url;
+}
+
+/** Whether a host is among the ones agents may reach (always, when the server lists none). */
+export function agentHostAllowed(host: string): boolean {
+  const allowed = agentAllowedHosts();
+  return allowed.length === 0 || hostMatches(host, [...allowed, ...agentPrivateHosts()]);
 }
 
 export interface WebRequest {

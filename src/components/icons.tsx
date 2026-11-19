@@ -2,6 +2,7 @@ import type { SVGProps } from "react";
 
 type IconName =
   | "server"
+  | "browser"
   | "overview"
   | "providers"
   | "models"
@@ -221,6 +222,12 @@ const paths: Record<IconName, React.ReactNode> = {
       <rect x="3.5" y="4" width="17" height="6.5" rx="1.5" />
       <rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5" />
       <path d="M7 7.25h.01M7 16.75h.01M11 7.25h5.5M11 16.75h5.5" />
+    </>
+  ),
+  browser: (
+    <>
+      <rect x="3" y="4.5" width="18" height="15" rx="2" />
+      <path d="M3 9h18M6.5 6.75h.01M9.5 6.75h.01" />
     </>
   ),
 };
