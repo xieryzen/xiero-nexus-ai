@@ -5,7 +5,9 @@ import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { getClientMeta } from "@/lib/request";
-import { loadOwnedProject } from "@/lib/project-access";
+import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
+import { checkedServerIds, setProjectServers } from "@/lib/ssh/servers";
+import { users } from "@/db/schema";
 import { projectUpdateSchema } from "@/lib/validation";
 import { serializeProject } from "@/lib/workforce";
 import { projectFor } from "@/lib/for-viewer";
@@ -18,12 +20,20 @@ export const GET = handle(async (_req, { params }) => {
   return json({ project: projectFor(user.role, serializeProject(p, { withTasks: true })) });
 });
 
-/** Change a project's title, its goal, or whether it remembers earlier runs. */
+/** Change a project's title, its goal, whether it remembers earlier runs, or the servers it works on. */
 export const PATCH = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
-  const p = loadOwnedProject(params.id!, user);
+  const p = loadOperableProject(params.id!, user);
   const body = await parseBody(req, projectUpdateSchema);
+  if (body.serverIds !== undefined) {
+    // Servers this account may use, and that the account the project belongs
+    // to may use as well: its runs work for that account.
+    const ids = checkedServerIds(user, body.serverIds);
+    const owner = p.createdBy ? db.select({ role: users.role }).from(users).where(eq(users.id, p.createdBy)).get() : undefined;
+    checkedServerIds({ role: owner?.role ?? "user" }, ids);
+    setProjectServers(p.id, ids);
+  }
   const updated = db
     .update(projects)
     .set({

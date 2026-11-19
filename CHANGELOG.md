@@ -5,6 +5,77 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.8.0-rc.4] - 2026-11-19
+
+The fourth candidate for 1.8: agents work on your servers over SSH, on one
+connection that stays open until the work is done.
+
+### Added
+
+- **Servers over SSH.** An agent that has the new tool **Work on servers**
+  runs shell commands on the servers its project names, and reads each
+  command's exit code and what it printed.
+- **One connection per run and server, kept open until the run has ended.**
+  It is opened with the first command and used by every command after it, in
+  every task of the run. Every 15 seconds it says that it is still there
+  (`SSH_KEEPALIVE_SECONDS`), so that a firewall or a router on the way does
+  not forget it while a model thinks or a command works in silence. When the
+  run has ended, however it ended, it is closed.
+- **A connection that is lost is opened again** with the next command: three
+  tries, 2 and 5 seconds apart. The agent is told that the command that was
+  running may or may not have finished.
+- **Only machines an owner registered** on the new **Servers** page. The
+  app reads the machine's host key without signing in and shows its
+  fingerprint to compare; registering accepts that key, and from then on
+  nothing is sent to a machine that shows another one. Before anything is
+  saved the app signs in once and runs one harmless command. A password or
+  a private key, with its passphrase, is stored encrypted and never shown
+  again. A machine can be checked, switched off, changed and removed; when
+  it was set up again, its new key is shown and accepted there.
+- **Every command is logged**: the command, how it ended, what it printed,
+  how long it took, and the project, task, agent and account it was for.
+  Every connection is logged too: opened, lost, opened again, closed. The
+  Servers page shows the log; it stays when the project or the machine is
+  deleted.
+- **A project names its servers** (up to 5) in its form and on its page.
+  An owner's projects may work on any machine; an administrator's on the
+  ones the owner opened to administrators; a user's on none. A project that
+  names servers is run, changed, scheduled and approved only by an account
+  whose own projects may use them.
+- **The project's page says which of its agents can work there**, and warns
+  when none has the tool. The AI Manager is told which servers a project
+  has and which agents can run commands on them, and gives those tasks to
+  them: to look first, then to change, then to check.
+- **A command whose time is up, or whose run is stopped, is ended on the
+  machine**, with everything it started. A command may take 300 seconds, or
+  what the agent asks for, up to an hour. On a machine that opens only one
+  session per connection the command is ended through its own channel, and
+  the agent is told to look whether anything of it still runs.
+- **A machine has to run commands with `sh`.** The check when a machine is
+  registered says so when it signs in to something else, such as the command
+  line of a router, and the machine is not registered.
+- **A task that starts over is told what it already ran** on the machines,
+  and that it is not undone: when its model failed and the next one takes
+  over, and when the app was restarted in the middle.
+- `GET /api/servers`, `POST /api/servers/host-key`, `POST /api/servers`,
+  `PATCH` and `DELETE /api/servers/{id}`, `POST /api/servers/{id}/test`,
+  `GET /api/servers/commands`; `serverIds` on a project.
+- The release bundle is started in CI with a machine to sign in to over SSH,
+  and has to run a command there.
+
+### Changed
+
+- A release bundle holds `ssh2`, without its optional compiled parts: it
+  does its work with Node's own crypto, the same on every server.
+
+### Not there
+
+- No file transfer (an agent writes a file with a here-document), no port
+  forwarding, no terminal for programs that need one, and no signing in
+  through another machine.
+- Tested against an SSH server on the machine of the tests, with a password
+  and with a key: not against a real server.
+
 ## [1.8.0-rc.3] - 2026-11-16
 
 The third candidate for 1.8: a user is shown their own work, and nothing of

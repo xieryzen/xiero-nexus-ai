@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { loadOwnedProject } from "@/lib/project-access";
+import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
 import { RequestError } from "@/lib/public-api/openai-format";
 import { runJson } from "@/lib/public-api/runs";
 import { readOptionalJsonBody, v1 } from "@/lib/public-api/server";
@@ -21,7 +21,7 @@ export const GET = v1("projects", (_req, { params, caller }) => {
  * (`failed`, with the reason, or `needs_approval`).
  */
 export const POST = v1("projects", async (req, { params, caller }) => {
-  const project = loadOwnedProject(params.id!, caller.user);
+  const project = loadOperableProject(params.id!, caller.user);
   let input: string | undefined;
   const body = await readOptionalJsonBody(req);
   if (body !== undefined) {

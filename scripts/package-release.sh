@@ -62,13 +62,26 @@ if [ ! -f "${BINDING}" ]; then
   exit 1
 fi
 # Packages that are loaded while the server runs, not when it is built: the
-# build only brings them along because next.config.mjs names them.
-for needed in node_modules/unpdf/package.json assets/fonts/NotoSans-Bold.ttf; do
+# build only brings them along because next.config.mjs names them. ssh2 (the
+# connections to servers) comes with what it is written with.
+for needed in node_modules/unpdf/package.json assets/fonts/NotoSans-Bold.ttf \
+  node_modules/ssh2/package.json node_modules/ssh2/lib/client.js \
+  node_modules/asn1/package.json node_modules/bcrypt-pbkdf/package.json \
+  node_modules/tweetnacl/package.json node_modules/safer-buffer/package.json; do
   if [ ! -f "${OUT}/${needed}" ]; then
     echo "error: ${needed} is missing from the bundle" >&2
     exit 1
   fi
 done
+# ssh2 has two optional parts that are compiled on the machine that installs
+# it. They are left out: compiled here they need this machine's glibc, and
+# without them ssh2 does the same work with Node's own crypto, on every server
+# alike.
+rm -rf "${OUT}/node_modules/cpu-features" "${OUT}/node_modules/ssh2/lib/protocol/crypto/build" "${OUT}/node_modules/nan"
+if find "${OUT}/node_modules/ssh2" "${OUT}/node_modules/asn1" "${OUT}/node_modules/bcrypt-pbkdf" "${OUT}/node_modules/tweetnacl" -name '*.node' | grep -q .; then
+  echo "error: a compiled part of ssh2 is in the bundle" >&2
+  exit 1
+fi
 GLIBC=""
 if [ "$(uname -s)" = "Linux" ] && command -v objdump >/dev/null 2>&1; then
   GLIBC="$(objdump -T "${BINDING}" | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | cut -d_ -f2 | sort -uV | tail -n 1 || true)"

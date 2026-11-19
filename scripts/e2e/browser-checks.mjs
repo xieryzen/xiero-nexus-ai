@@ -517,7 +517,7 @@ try {
   // ─── A phone ───────────────────────────────────────────────────────────────
   begin("Browser: on a phone");
   await page.setViewport({ width: 390, height: 780, isMobile: true, hasTouch: true });
-  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
+  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", "/dashboard/servers", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
     await open(path);
     const overflow = await sideways();
     check(`${path.replace(/[0-9a-f-]{36}/, "<id>")} does not scroll sideways`, overflow <= 1, `${overflow}px`);
@@ -540,6 +540,7 @@ try {
     "/dashboard/skills",
     "/dashboard/providers",
     "/dashboard/models",
+    "/dashboard/servers",
     "/dashboard/usage",
     "/dashboard/observability",
     "/dashboard/audit",
@@ -682,8 +683,8 @@ try {
   check("a user signs in", viewerMade.status === 201 && page.url().endsWith("/dashboard"), [viewerMade.status, page.url()]);
   const menu = await page.$$eval("nav a[href^='/dashboard']", (links) => [...new Set(links.map((a) => a.getAttribute("href")))]);
   check(
-    "the menu of a user has no Providers, Models, Skills, Users, Audit and Observability",
-    ["/dashboard/providers", "/dashboard/models", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
+    "the menu of a user has no Providers, Models, Servers, Skills, Users, Audit and Observability",
+    ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
       ["/dashboard/projects", "/dashboard/chat", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
     menu,
   );
@@ -691,6 +692,8 @@ try {
   await snap("user-overview");
   await open("/dashboard/models");
   check("the Models page sends a user back to the overview", page.url().endsWith("/dashboard"), page.url());
+  await open("/dashboard/servers");
+  check("  and so does the Servers page", page.url().endsWith("/dashboard"), page.url());
 
   await open("/dashboard/chat");
   check("Chat has no model to choose", (await page.$("main select")) === null && (await page.$("textarea[placeholder^='Message']")) !== null, null);
@@ -724,7 +727,7 @@ try {
   await open("/dashboard/projects");
   if (!(await page.$("#p-title"))) await clickText(/New project/);
   await page.waitForSelector("#p-title");
-  check("a new project has no model to choose", (await page.$("#p-mgr")) === null && (await page.$("#p-wf")) !== null, null);
+  check("a new project has no model to choose, and no server", (await page.$("#p-mgr")) === null && (await page.$("#p-wf")) !== null && (await page.$("#p-servers")) === null, null);
   const plainFlow = await page.$$eval("#p-wf option", (options) => options.find((o) => o.textContent.includes("Seen by users"))?.value);
   await fill("#p-title", "A user's project");
   await fill("#p-goal", "Two lines about lamps.");
@@ -777,6 +780,150 @@ try {
   check("the owner signs in again", page.url().endsWith("/dashboard") && (await page.$('a[href="/dashboard/models"]')) !== null, page.url());
   const viewerId = ((await api("/api/admin/users")).data?.users ?? []).find((u) => u.username === VIEWER.name)?.id;
   eq("the account of these checks is deleted", (await api(`/api/admin/users/${viewerId}`, { method: "DELETE" })).status, 200);
+
+
+  // ─── Servers over SSH ─────────────────────────────────────────────────────
+  // The machine is the mock SSH server of these checks; the checks before
+  // left one registered ("vps-1"), an agent that has the tool, and projects.
+  begin("Browser: servers");
+  const SSH_CONTROL = process.env.E2E_SSH_CONTROL_URL ?? "http://127.0.0.1:4013";
+  const SSH_PORT = process.env.E2E_SSH_PORT ?? "4012";
+  const machine = async (path = "/__state") => (await fetch(`${SSH_CONTROL}${path}`)).json();
+  const card = (name) => `[data-server="${name}"]`;
+  const inCard = (name) => page.$eval(card(name), (el) => el.closest("section")?.innerText ?? "").catch(() => "");
+  const clickIn = (name, label) =>
+    page.evaluate(
+      (selector, wanted) => {
+        const root = document.querySelector(selector)?.closest("section");
+        const button = [...(root?.querySelectorAll("button") ?? [])].find((b) => (b.innerText.trim() === wanted || b.getAttribute("aria-label") === wanted) && !b.disabled);
+        button?.scrollIntoView({ block: "center" });
+        button?.click();
+        return Boolean(button);
+      },
+      card(name),
+      label,
+    );
+  const logRows = () => page.$$eval('[data-testid="server-log"] li', (rows) => rows.map((li) => li.innerText.replace(/\s+/g, " ")));
+
+  check("the owner's menu has Servers", (await page.$('a[href="/dashboard/servers"]')) !== null, null);
+  await machine("/__reset");
+  await open("/dashboard/servers");
+  const before = await machine();
+  const vpsText = await inCard("vps-1");
+  check("the page shows the machine that is registered: where it is, how it is signed in to, and its host key", vpsText.includes(`root@127.0.0.1:${SSH_PORT}`) && vpsText.includes("signs in with a password") && vpsText.includes(before.fingerprint) && vpsText.includes("Owners only"), vpsText.slice(0, 300));
+  check("  and nothing that signs in", !(await text()).includes(before.password), null);
+  check("  it says how agents work on a server: one connection, kept open until the run has ended", (await has("one connection")) && (await has("until the run has ended")) && (await has("any command the registered account can")), null);
+  check("  the log lists what the runs before did, with the project, the task and the agent", (await logRows()).some((row) => row.includes("echo reached") && row.includes("Ops, plain") && row.includes("by Operator") && row.includes("for admin")), (await logRows()).slice(0, 3));
+  await snap("servers");
+
+  await clickText(/New server/);
+  await page.waitForSelector("#sv-name");
+  const registerDisabled = () => page.$eval('[data-testid="server-form"] button[type="submit"]', (b) => b.disabled);
+  await fill("#sv-name", "browser-box");
+  await fill("#sv-host", "127.0.0.1");
+  await fill("#sv-port", SSH_PORT);
+  await fill("#sv-user", "root");
+  await fill("#sv-password", before.password);
+  await fill("#sv-notes", "The mock of the checks.");
+  check("a machine cannot be registered before its host key was read", (await registerDisabled()) === true && (await page.$('[data-testid="host-key"]')) === null, null);
+  await clickText(/Read host key/);
+  await page.waitForSelector('[data-testid="host-key"]', { timeout: 20_000 }).catch(() => undefined);
+  const shownKey = await page.$eval('[data-testid="host-key"]', (el) => el.innerText).catch(() => "");
+  check("the key the machine shows is put on the page, with how to compare it", shownKey.includes(`ssh-ed25519 ${before.fingerprint}`) && shownKey.includes("ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub"), shownKey);
+  eq("  reading it signed in to nothing", [(await machine()).signIns, (await machine()).refused], [0, 0]);
+  await snap("servers-host-key");
+  await fill("#sv-port", "1");
+  check("  another port: the key that was read does not count for it", (await registerDisabled()) === true && (await page.$('[data-testid="host-key"]')) === null, null);
+  await fill("#sv-port", SSH_PORT);
+  await clickText(/Read host key/);
+  await page.waitForSelector('[data-testid="host-key"]', { timeout: 20_000 }).catch(() => undefined);
+  await clickText(/Register server/);
+  check("registering signs in once and says what the one command printed", await waitText(/"browser-box" is registered: the app signed in and ran one command \(\S+ \S+ \S+\)\./), (await text()).slice(0, 400));
+  const boxText = await inCard("browser-box");
+  check("  the machine is in the list, switched on, for owners only, with the notes", boxText.includes("on") && boxText.includes("Owners only") && boxText.includes("The mock of the checks.") && boxText.includes("no project names it"), boxText.slice(0, 300));
+
+  await clickIn("browser-box", "Check");
+  await page.waitForSelector('[data-testid="check-result"]', { timeout: 20_000 }).catch(() => undefined);
+  check("Check signs in and runs one command", /The app signed in and ran one command in [\d.]+ s: \S+ \S+ \S+/.test(await inCard("browser-box")), (await inCard("browser-box")).slice(-200));
+  await page.click(`${card("browser-box")} button[role="switch"]`);
+  check("the switch takes a machine out of use, and says what follows", await waitText('"browser-box" is switched off: no project works on it until it is on again.'), null);
+  check("  the list says so", (await inCard("browser-box")).includes("switched off"), null);
+  await page.click(`${card("browser-box")} button[role="switch"]`);
+  check("  and back", await waitText('"browser-box" is switched on.'), null);
+
+  await page.select('[data-testid="server-log"] select', await page.$$eval('[data-testid="server-log"] select option', (options) => options.find((o) => o.textContent === "browser-box")?.value ?? ""));
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="server-log"] li')].every((li) => li.innerText.includes("browser-box")) && document.querySelectorAll('[data-testid="server-log"] li').length >= 2, { timeout: 10_000 }).catch(() => undefined);
+  const boxLog = await logRows();
+  check("the log of one machine has its registration and its check", boxLog.length === 2 && boxLog[1].includes("Registered: signed in and ran one command") && boxLog[0].includes("Check: signed in and ran one command") && boxLog.every((row) => row.includes("check passed")), boxLog);
+
+  // The machine is set up again: it shows another key.
+  const signedInBefore = (await machine()).signIns;
+  const rekeyed = await machine("/__rekey");
+  await clickIn("browser-box", "Check");
+  check("a machine that shows another host key: the check says so, and that nothing was sent", await waitText(/The machine showed another host key .* Nothing was sent to it\./), (await inCard("browser-box")).slice(-300));
+  check("  with the key it shows now, to compare", (await inCard("browser-box")).includes(`It showed: ${rekeyed.fingerprint}`), null);
+  eq("  nothing was signed in to, and nothing was tried", [(await machine()).signIns - signedInBefore, (await machine()).refused], [0, 0]);
+  await snap("servers-other-key");
+  await clickIn("browser-box", "Accept this key");
+  check("accepting it signs in to the machine that shows it", await waitText('The new host key of "browser-box" is accepted: the app signed in to the machine that shows it.'), null);
+  check("  the list has the new fingerprint", (await inCard("browser-box")).includes(rekeyed.fingerprint), null);
+  const vpsId = ((await api("/api/servers")).data?.servers ?? []).find((s) => s.name === "vps-1")?.id;
+  eq("  (the other machine is the same mock: its new key is accepted too)", (await api(`/api/servers/${vpsId}`, { method: "PATCH", body: JSON.stringify({ hostKey: rekeyed.hostKey }) })).status, 200);
+
+  // A project that works on it, from the form to the log.
+  await open("/dashboard/projects");
+  if (!(await page.$("#p-title"))) await clickText(/New project/);
+  await page.waitForSelector("#p-title");
+  const choices = await page.$$eval("#p-servers li", (items) => items.map((li) => li.innerText.replace(/\s+/g, " ")));
+  check("a new project of the owner can name servers", choices.length === 2 && choices[0].startsWith("browser-box") && choices[1].startsWith("vps-1") && choices[0].includes(`root@127.0.0.1:${SSH_PORT}`), choices);
+  check("  and says what naming one means", (await page.$eval("#p-servers", (el) => el.innerText)).includes("can run any command there"), null);
+  const serverFlow = await page.$$eval("#p-wf option", (options) => options.find((o) => o.textContent === "Server work, plain")?.value);
+  await fill("#p-title", "Browser ops");
+  await fill("#p-goal", "Say that the machine was reached.");
+  if (serverFlow) await page.select("#p-wf", serverFlow);
+  await page.click("#p-server-browser-box");
+  await snap("project-form-servers");
+  await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }), clickText(/Create project/)]);
+  check("  it is made", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && Boolean(serverFlow), [page.url(), serverFlow]);
+  const ticked = await page.$$eval("#project-servers input[type=checkbox]", (boxes) => boxes.map((b) => [b.id, b.checked]));
+  eq("  its page shows which servers it works on", ticked, [["ps-server-browser-box", true], ["ps-server-vps-1", false]]);
+  eq("  and which of its agents can work there", await page.$eval('[data-testid="server-operators"]', (el) => el.innerText.replace(/\s+/g, " ").trim()).catch(() => "not shown"), "Agents that can work there: Operator.");
+  await machine("/__reset");
+  await clickText(/^\s*Run\s*$/);
+  check("  it runs to its end", await waitText("Final deliverable", 60_000), (await text()).slice(0, 300));
+  const reached = await machine();
+  eq("  the agent's command reached the machine, over one connection that is closed now", [reached.commands, reached.connections, reached.open], [["echo reached"], 1, 0]);
+  await snap("project-servers");
+  await page.click("#ps-server-vps-1");
+  await clickText(/Save servers/);
+  await page.waitForFunction(() => ![...document.querySelectorAll("#project-servers button")].some((b) => b.innerText.trim() === "Save servers"), { timeout: 10_000 }).catch(() => undefined);
+  const browserOps = ((await api("/api/projects")).data?.projects ?? []).find((p) => p.title === "Browser ops");
+  eq("  its servers are changed on its page", browserOps?.servers?.map((s) => s.name), ["browser-box", "vps-1"]);
+
+  await open("/dashboard/servers");
+  const opsRows = (await logRows()).filter((row) => row.includes("Browser ops"));
+  check("the Servers page has what that run did: connected, the command, closed", opsRows.length === 3 && /connection .*Browser ops for admin Closed · The run has ended\./.test(opsRows[0]) && opsRows[1].includes("exit 0") && opsRows[1].includes("Tool: ssh plain by Operator for admin echo reached") && opsRows[2].includes("Connected · Signed in as root."), opsRows);
+  await page.evaluate(() => [...document.querySelectorAll('[data-testid="server-log"] li')].find((li) => li.innerText.includes("echo reached") && li.innerText.includes("Browser ops"))?.querySelector("button")?.click());
+  check("  with what the command printed", await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="server-log"] pre')].some((pre) => pre.innerText.trim() === "reached"), { timeout: 5000 }).then(() => true, () => false), null);
+  check("  the machine says that a project names it", (await inCard("browser-box")).includes("1 project names it"), (await inCard("browser-box")).slice(0, 300));
+  await snap("servers-log");
+
+  await open("/dashboard/agents");
+  await clickText(/Add agent/);
+  // The headings of the tool groups are shown in capitals.
+  await waitText(/SERVERS OVER SSH|Servers over SSH/);
+  check("the agent form offers the tool, and says where an agent is handed it", (await has("Work on servers")) && (await has("Only in a project that names a server")), (await text()).slice(0, 300));
+  await snap("agent-form-servers");
+
+  await open("/dashboard/servers");
+  await clickIn("browser-box", "Remove browser-box");
+  check("the owner removes a machine", await waitText('"browser-box" was removed.'), null);
+  check("  it is gone from the list", (await page.$(card("browser-box"))) === null && (await page.$(card("vps-1"))) !== null, null);
+  await page.select('[data-testid="server-log"] select', "removed");
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="server-log"] li').length > 0 && [...document.querySelectorAll('[data-testid="server-log"] li')].every((li) => li.innerText.includes("browser-box")), { timeout: 10_000 }).catch(() => undefined);
+  check("  what was done on it stays in the log", (await logRows()).some((row) => row.includes("browser-box") && row.includes("echo reached")), (await logRows()).slice(0, 3));
+  eq("  the project that named it has the other machine left", ((await api("/api/projects")).data?.projects ?? []).find((p) => p.title === "Browser ops")?.servers?.map((s) => s.name), ["vps-1"]);
+  check("the Servers page holds nothing wider than the screen", (await sideways()) <= 0, await sideways());
 
   // ─── Model checks ─────────────────────────────────────────────────────────
   // Last, since Check all now asks every model of these checks, also the ones made to fail.

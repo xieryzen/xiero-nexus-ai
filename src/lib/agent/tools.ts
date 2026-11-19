@@ -8,6 +8,8 @@ import { safeFetch } from "../http-client";
 import { formatHits, searchKnowledge } from "../knowledge/service";
 import { readBodyCapped } from "../media/http";
 import { SKILLS_PROMPT_TOTAL_CHARS, SKILL_PROMPT_CHARS } from "../skills/prompt";
+import { SERVER_TOOL } from "../ssh/rules";
+import { serverTool, type ServerToolContext } from "../ssh/tool";
 import { readSkillFile, type WorkSkill } from "../skills/service";
 import { htmlToText } from "../text/html";
 import { fetchWeb, isTextContentType } from "../web-fetch";
@@ -51,6 +53,11 @@ export interface ToolContext {
   collectionIds: string[];
   /** The skills the agent has for this task: its own and its team's. */
   skills?: WorkSkill[];
+  /**
+   * The run the task belongs to and the machines it may work on, for the
+   * tool run_on_server. Without machines the agent is not handed the tool.
+   */
+  servers?: Omit<ServerToolContext, "projectId" | "userId" | "taskId" | "agentName">;
 }
 
 // ─── Server configuration ────────────────────────────────────────────────────
@@ -616,7 +623,20 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
     if (name in workspace) tools.push(workspace[name]!);
     else if (name === "run_command") tools.push(commandTool(ctx));
     else if (name === "web_search" && search) tools.push(searchTool(search));
-    else if (name in web) tools.push(web[name]!);
+    else if (name === SERVER_TOOL) {
+      // Only where the project names machines its account may work on.
+      if (ctx.servers && ctx.servers.servers.length > 0) {
+        tools.push(
+          serverTool({
+            ...ctx.servers,
+            projectId: ctx.projectId,
+            userId: ctx.userId,
+            taskId: ctx.taskId,
+            agentName: ctx.agent.name,
+          }),
+        );
+      }
+    } else if (name in web) tools.push(web[name]!);
   }
   if (ctx.collectionIds.length > 0) tools.push(knowledgeTool(ctx));
   if (ctx.agent.memoryEnabled) tools.push(...Object.values(memoryTools(ctx)));

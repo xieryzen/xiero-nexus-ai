@@ -14,8 +14,10 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
+//   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
+//                                                 to over SSH (4012, 4013)
 //   KEEP=1                                        keep the temporary folder
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
 //   E2E_REQUIRE_FFMPEG=1                          stop when there is no usable
@@ -45,6 +47,9 @@ const ports = {
   app: Number(process.env.E2E_APP_PORT ?? 3100),
   mock: Number(process.env.E2E_MOCK_PORT ?? 4010),
   cdn: Number(process.env.E2E_CDN_PORT ?? 4011),
+  // The machine agents sign in to over SSH (mock-ssh.mjs), and what the checks steer it with.
+  ssh: Number(process.env.E2E_SSH_PORT ?? 4012),
+  sshcontrol: Number(process.env.E2E_SSHCONTROL_PORT ?? 4013),
 };
 
 function fail(message) {
@@ -168,6 +173,11 @@ const mock = start("mock provider", [join(here, "mock-provider.mjs"), String(por
 });
 running.push(mock);
 
+// A machine to sign in to over SSH: a real SSH server on this machine, that
+// runs what it is told in a folder of its own.
+const sshMock = start("mock ssh server", [join(here, "mock-ssh.mjs"), String(ports.ssh), String(ports.sshcontrol)], process.env);
+running.push(sshMock);
+
 // Everything the app reads is set here, so that a developer's own .env
 // (which Next.js loads too, without replacing what is already set) has no say.
 const appEnv = {
@@ -211,6 +221,9 @@ const appEnv = {
   // itself is looked at after the last start, below.
   MODEL_HEALTH_INTERVAL_MINUTES: "0",
   MODEL_HEALTH_RETRY_SECONDS: "1",
+  // An open connection to a machine says every second that it is still
+  // there, so that the checks can cut one that says nothing for a few.
+  SSH_KEEPALIVE_SECONDS: "1",
 };
 const startApp = () =>
   start("app", [join(root, "node_modules", "next", "dist", "bin", "next"), "start", "-p", String(ports.app), "-H", HOST], appEnv);
@@ -219,8 +232,10 @@ running.push(app);
 
 const appUrl = `http://${HOST}:${ports.app}`;
 const mockUrl = `http://${HOST}:${ports.mock}`;
+const sshControlUrl = `http://${HOST}:${ports.sshcontrol}`;
 for (const [proc, url] of [
   [mock, `${mockUrl}/__log`],
+  [sshMock, `${sshControlUrl}/__state`],
   [app, `${appUrl}/login`],
 ]) {
   if (!(await ready(proc, url))) {
@@ -234,6 +249,8 @@ const checkEnv = {
   E2E_APP_URL: appUrl,
   E2E_MOCK_URL: mockUrl,
   E2E_CDN_URL: `http://${HOST}:${ports.cdn}`,
+  E2E_SSH_PORT: String(ports.ssh),
+  E2E_SSH_CONTROL_URL: sshControlUrl,
   E2E_MEDIA_DIR: join(folder, "media"),
   // Some checks change the database directly: to make a schedule due now,
   // and to leave a run the way a stopped server would.

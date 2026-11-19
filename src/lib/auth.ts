@@ -53,9 +53,9 @@ export function requireAdmin(): User {
 }
 
 /** Require an owner: the one who manages the accounts. Throws AppError. */
-export function requireOwner(): User {
+export function requireOwner(message = "Only an owner manages accounts"): User {
   const user = requireUser();
-  if (!isOwnerRole(user.role)) throw Errors.forbidden("Only an owner manages accounts");
+  if (!isOwnerRole(user.role)) throw Errors.forbidden(message);
   return user;
 }
 

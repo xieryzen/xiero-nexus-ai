@@ -18,7 +18,7 @@ export const GET = handle(async (_req, { params }) => {
 
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
-  const ws = loadOwnedWorkspace(params.id!, user);
+  const ws = loadOwnedWorkspace(params.id!, user, true);
   const body = await parseBody(req, schema);
   const file = upsertFile(ws.id, body.path, body.content ?? "");
   return json({ file: serializeFileMeta(file) }, { status: 201 });

@@ -13,6 +13,7 @@ export const TOOL_NAMES = [
   "fetch_url",
   "http_request",
   "web_search",
+  "run_on_server",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -21,7 +22,7 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 export const IMPLIED_TOOL_NAMES = ["search_knowledge", "remember", "recall", "read_skill"] as const;
 export type ImpliedToolName = (typeof IMPLIED_TOOL_NAMES)[number];
 
-export type ToolGroup = "workspace" | "execution" | "web";
+export type ToolGroup = "workspace" | "execution" | "web" | "servers";
 
 export interface ToolInfo {
   name: ToolName;
@@ -31,12 +32,15 @@ export interface ToolInfo {
   summary: string;
   /** What must be configured on the server for the tool to work. */
   needs?: "sandbox" | "search";
+  /** What a project must have for the agent to be handed the tool in it. */
+  inProjects?: string;
 }
 
 export const TOOL_GROUP_LABELS: Record<ToolGroup, string> = {
   workspace: "Project workspace",
   execution: "Code execution",
   web: "Web and APIs",
+  servers: "Servers over SSH",
 };
 
 export const TOOL_CATALOG: readonly ToolInfo[] = [
@@ -65,6 +69,14 @@ export const TOOL_CATALOG: readonly ToolInfo[] = [
     group: "web",
     summary: "Search the web through the configured search provider.",
     needs: "search",
+  },
+  {
+    name: "run_on_server",
+    label: "Work on servers",
+    group: "servers",
+    summary:
+      "Run shell commands on the servers a project names. One connection per server stays open for the whole run, and every command is logged.",
+    inProjects: "Only in a project that names a server (Servers page): there the agent can run any command the registered account can.",
   },
 ];
 

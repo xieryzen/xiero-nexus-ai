@@ -11,6 +11,7 @@ import { RelativeTime } from "@/components/time";
 import { Alert, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { StateBadge } from "./status-badge";
+import { ServerChoice, type ServerOption } from "./project-servers";
 
 interface Option {
   id: string;
@@ -37,6 +38,7 @@ export function CommandCenter({
   canRender,
   teams,
   workflows,
+  servers = [],
   chooses = true,
 }: {
   initialProjects: ProjectDTO[];
@@ -55,6 +57,8 @@ export function CommandCenter({
   canRender: boolean;
   teams: Option[];
   workflows: WorkflowOption[];
+  /** The servers the projects of this account may work on over SSH. Empty for an account that may use none. */
+  servers?: ServerOption[];
 }) {
   const router = useRouter();
   const [projects] = useState(initialProjects);
@@ -74,6 +78,7 @@ export function CommandCenter({
   const [videoModelRowId, setVideoModel] = useState("");
   const [speechModelRowId, setSpeechModel] = useState("");
   const [memory, setMemory] = useState(false);
+  const [serverIds, setServerIds] = useState<string[]>([]);
   const [maxMedia, setMaxMedia] = useState(String(DEFAULT_MAX_MEDIA));
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -146,6 +151,7 @@ export function CommandCenter({
           speechModelRowId: speechModelRowId || null,
           maxMedia: Number(maxMedia),
           memory,
+          ...(serverIds.length > 0 ? { serverIds } : {}),
         }),
       });
       router.push(`/dashboard/projects/${res.project.id}`);
@@ -258,6 +264,13 @@ export function CommandCenter({
                     </p>
                   )}
                   {mediaProblem && <Alert tone="warn">{mediaProblem}</Alert>}
+                </div>
+              )}
+
+              {servers.length > 0 && (
+                <div className="space-y-1.5" id="p-servers">
+                  <p className="label">Servers</p>
+                  <ServerChoice options={servers} chosen={serverIds} onChange={setServerIds} />
                 </div>
               )}
 

@@ -1,6 +1,7 @@
 import type { SVGProps } from "react";
 
 type IconName =
+  | "server"
   | "overview"
   | "providers"
   | "models"
@@ -215,6 +216,13 @@ const paths: Record<IconName, React.ReactNode> = {
     </>
   ),
   api: <path d="m8 8-4 4 4 4m8-8 4 4-4 4M13.5 5l-3 14" />,
+  server: (
+    <>
+      <rect x="3.5" y="4" width="17" height="6.5" rx="1.5" />
+      <rect x="3.5" y="13.5" width="17" height="6.5" rx="1.5" />
+      <path d="M7 7.25h.01M7 16.75h.01M11 7.25h5.5M11 16.75h5.5" />
+    </>
+  ),
 };
 
 export function Icon({

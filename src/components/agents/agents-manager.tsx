@@ -59,7 +59,7 @@ export interface SkillOption {
   enabled: boolean;
 }
 
-const GROUPS: ToolGroup[] = ["workspace", "execution", "web"];
+const GROUPS: ToolGroup[] = ["workspace", "execution", "web", "servers"];
 
 function AgentForm({
   models,
@@ -251,6 +251,7 @@ function AgentForm({
                                   : "Not set up on this server: needs a search service (SEARCH_PROVIDER). Until then the agent does not get this tool."}
                               </span>
                             )}
+                            {tool.inProjects && <span className="mt-0.5 block text-xs text-warn">{tool.inProjects}</span>}
                           </span>
                         </label>
                       </li>

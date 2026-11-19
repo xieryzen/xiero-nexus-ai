@@ -15,6 +15,7 @@ import {
 import { Errors } from "@/lib/errors";
 import { validateWorkspacePath } from "./paths";
 import { isAdminRole } from "@/lib/roles";
+import { assertMayOperate } from "@/lib/ssh/servers";
 
 export const FILE_MAX_BYTES = 256 * 1024;
 
@@ -29,8 +30,13 @@ export function ensureWorkspace(projectId: string, userId: string | null): Works
     .get();
 }
 
-/** Load a workspace the user may access (project owner or admin), or throw. */
-export function loadOwnedWorkspace(workspaceId: string, user: User): Workspace {
+/**
+ * Load a workspace the user may access (project owner or admin), or throw.
+ * `toChange`: its files are about to be written. The agents of the project
+ * read them, so where the project names servers, that is for an account
+ * whose own projects may work on them (ssh/servers.ts).
+ */
+export function loadOwnedWorkspace(workspaceId: string, user: User, toChange = false): Workspace {
   const ws = db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).get();
   if (!ws) throw Errors.notFound("Workspace not found");
   if (ws.projectId) {
@@ -38,6 +44,7 @@ export function loadOwnedWorkspace(workspaceId: string, user: User): Workspace {
     if (project && project.createdBy !== user.id && !isAdminRole(user.role)) {
       throw Errors.forbidden();
     }
+    if (project && toChange) assertMayOperate(project, user);
   } else if (!isAdminRole(user.role)) {
     throw Errors.forbidden();
   }

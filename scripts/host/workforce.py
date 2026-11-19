@@ -126,9 +126,13 @@ CAPABILITIES = [
     "image_generation", "video_generation", "speech_generation", "embeddings", "streaming",
 ]
 NON_CHAT = ["image_generation", "video_generation", "speech_generation", "embeddings"]
+# The tool an agent works on servers with (from version 1.8). An owner gives
+# it on the agent's page to the agents that are to have it: an agent that has
+# it keeps it, whether or not the file names it.
+SERVER_TOOL = "run_on_server"
 TOOLS = [
     "list_files", "read_file", "write_file", "edit_file", "delete_file",
-    "run_command", "fetch_url", "http_request", "web_search",
+    "run_command", "fetch_url", "http_request", "web_search", SERVER_TOOL,
 ]
 KINDS = ["text", "image", "video", "audio", "render"]
 ADAPTERS = ["openai-compatible", "anthropic", "gemini", "custom-http"]
@@ -1675,12 +1679,16 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             if tool not in tools:
                 left.setdefault(tool, []).append(wanted["name"])
 
-        def body(wanted=wanted, tools=tools, have=None):
+        def body(wanted=wanted, tools=tools, have=None, have_tools=None):
+            # Working on servers is given by hand, on the agent's page: an
+            # agent that has that tool keeps it. The file adds it and does not
+            # take it away.
+            kept = [SERVER_TOOL] if SERVER_TOOL in (have_tools or []) and SERVER_TOOL not in tools else []
             made = {
                 "name": wanted["name"], "role": wanted["role"], "instructions": wanted["instructions"],
                 "primaryModelRowId": slots[wanted["primary"]]["id"],
                 "fallbackModelRowId": slots[wanted["fallback"]]["id"] if wanted["fallback"] else None,
-                "routingMode": "manual", "temperature": wanted["temperature"], "tools": tools,
+                "routingMode": "manual", "temperature": wanted["temperature"], "tools": tools + kept,
                 "maxSteps": wanted["maxSteps"], "memoryEnabled": wanted["memory"],
             }
             # Skills are said only where the file says them: an agent whose
@@ -1705,7 +1713,7 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             plan.notes.append("%s: the app has %d agents of this name. They are left as they are." % (where, len(found)))
             continue
         agent = found[0]
-        now = body(have=agent.get("skillIds"))
+        now = body(have=agent.get("skillIds"), have_tools=agent.get("tools"))
         differs = []
         for key, value in now.items():
             if key == "name":
@@ -1731,13 +1739,18 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
             plan.same.append('agent "%s"' % wanted["name"])
         elif options.update:
             def update(agent=agent, body=body):
-                api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body(have=agent.get("skillIds")))
+                api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body(have=agent.get("skillIds"), have_tools=agent.get("tools")))
 
             plan.changes.append(Change("agents", "%s: change it to what the file says (%s)." % (where, ", ".join(shown(differs))), update))
         else:
             plan.notes.append("%s is in the app and differs from the file (%s). It is left as it is; --update changes it." % (where, ", ".join(shown(differs))))
     for tool, who in left.items():
-        need = "a sandbox runner (SANDBOX_URL)" if tool == "run_command" else "a search service (SEARCH_PROVIDER)" if tool == "web_search" else "something this server lacks"
+        need = (
+            "a sandbox runner (SANDBOX_URL)" if tool == "run_command"
+            else "a search service (SEARCH_PROVIDER)" if tool == "web_search"
+            else "version 1.8 of the app" if tool == SERVER_TOOL
+            else "something this server lacks"
+        )
         plan.notes.append("%s needs %s, which this server does not have: left out for %s." % (tool, need, ", ".join(who)))
     return names
 

@@ -390,6 +390,10 @@ It adds what is missing and leaves the rest:
 - Nothing is ever deleted. What the file does not name is not touched.
 - A tool the server cannot run (`run_command` without a sandbox runner,
   `web_search` without a search service) is left out of an agent, and said.
+- The tool an agent works on servers with (`run_on_server`, from 1.8) is
+  given by an owner on the agent's page. An agent that has it keeps it,
+  also with `--update`: the file can add that tool and never takes it away.
+  Which server an agent works on is not in the file: a project names it.
 
 **An account** the app is to have:
 
