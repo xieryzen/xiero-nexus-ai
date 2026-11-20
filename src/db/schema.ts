@@ -739,6 +739,12 @@ export const projectRuns = sqliteTable(
     heartbeatAt: integer("heartbeat_at", { mode: "timestamp_ms" }),
     // Times the run was picked up again after a restart.
     resumes: integer("resumes").notNull().default(0),
+    // The run goes on with the tasks of the run before it (v1.9): the tasks
+    // that had succeeded are kept, the others are done again.
+    continued: integer("continued", { mode: "boolean" }).notNull().default(false),
+    // What the tasks it kept had used before it. `tokensUsed` is what the run
+    // used itself: the project's tasks together, without this.
+    tokensBefore: integer("tokens_before").notNull().default(0),
     createdAt: createdAt(),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     finishedAt: integer("finished_at", { mode: "timestamp_ms" }),

@@ -164,7 +164,13 @@ export function usageFor(role: Role, summary: UsageSummary): UsageSummary {
 export function eventFor(role: Role, event: RunEvent): RunEvent {
   if (seesSetup(role)) {
     if (event.type === "progress" && event.full) {
-      return { type: "progress", seq: event.seq, message: event.full, ...(event.link ? { link: event.link } : {}) };
+      return {
+        type: "progress",
+        seq: event.seq,
+        message: event.full,
+        ...(event.link ? { link: event.link } : {}),
+        ...(event.waiting ? { waiting: true } : {}),
+      };
     }
     return event;
   }
@@ -179,7 +185,12 @@ export function eventFor(role: Role, event: RunEvent): RunEvent {
     case "final":
       return { type: "final", deliverable: deliverableFor(role, event.deliverable) ?? "" };
     case "progress":
-      return { type: "progress", seq: event.seq, message: textFor(role, event.message, WORKING) ?? WORKING };
+      return {
+        type: "progress",
+        seq: event.seq,
+        message: textFor(role, event.message, WORKING) ?? WORKING,
+        ...(event.waiting ? { waiting: true } : {}),
+      };
     case "error":
       return { type: "error", message: textFor(role, event.message) ?? NOT_NOW };
     default:

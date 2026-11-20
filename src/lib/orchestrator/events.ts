@@ -52,7 +52,9 @@ export type RunEvent =
   // `full` says the same with the model that does it, for those who are shown
   // the setup; the stream hands out one of the two (for-viewer.ts).
   // `link`: a page of the dashboard where a person does what the task waits for.
-  | { type: "progress"; seq: number; message: string; full?: string; link?: string }
+  // `waiting`: the task does nothing but wait, for the limits of its models to
+  // end (limit-wait.ts), and the note says for how long.
+  | { type: "progress"; seq: number; message: string; full?: string; link?: string; waiting?: boolean }
   // A tool call an agent made in a running task.
   | { type: "tool"; seq: number; call: ToolCallNote }
   | { type: "final"; deliverable: string }

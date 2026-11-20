@@ -413,7 +413,9 @@ function chatAnswer(body) {
  * Models that the checks switch: /__force?model=<id>&status=<code> makes the
  * chat requests to that model fail with that status, &times=<n> only the next
  * n of them, &after=<m> only once m more have been answered; status=200 lets
- * it answer again.
+ * it answer again. &say=<words> is what the answer says in place of the usual
+ * sentence, and &code=<code> the error's code and type, as a provider sets
+ * them ("insufficient_quota").
  */
 const forced = new Map();
 
@@ -425,7 +427,9 @@ function chat(req, res, body) {
   } else if (force) {
     force.left -= 1;
     if (force.left <= 0) forced.delete(model);
-    return send(res, force.status, { error: { message: `The checks made ${model} answer ${force.status}.` } });
+    return send(res, force.status, {
+      error: { message: force.say || `The checks made ${model} answer ${force.status}.`, ...(force.code ? { type: force.code, code: force.code } : {}) },
+    });
   }
   if (/^(img|vid|tts|embed)-/.test(model)) {
     return send(res, 404, { error: { message: `The model \`${body.model}\` does not support chat completions`, type: "invalid_request_error" } });
@@ -801,6 +805,39 @@ function anthropic(req, res, url, body) {
 
 const GEMINI_KEY = "AIzaSyMOCK-0123456789-not-a-real-key";
 
+/**
+ * What the Gemini API answers when a quota is used up (429), as its public
+ * documentation, its forum and the tools that call it show it: a message that
+ * names two addresses, then the quotas, then a wait; and details that name
+ * each quota by its id, which alone says whether it is counted per day or per
+ * minute. `retry` is the wait as the message writes it ("17h18m5.924610153s").
+ */
+function geminiQuota(model, { id, limit, retry, seconds }) {
+  const metric = "generativelanguage.googleapis.com/generate_content_free_tier_requests";
+  return {
+    error: {
+      code: 429,
+      message:
+        "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: " +
+        "https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. " +
+        `\n* Quota exceeded for metric: ${metric}, limit: ${limit}, model: ${model}\nPlease retry in ${retry}.`,
+      status: "RESOURCE_EXHAUSTED",
+      details: [
+        { "@type": "type.googleapis.com/google.rpc.Help", links: [{ description: "Learn more about Gemini API quotas", url: "https://ai.google.dev/gemini-api/docs/rate-limits" }] },
+        {
+          "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{ quotaMetric: metric, quotaId: id, quotaDimensions: { location: "global", model }, quotaValue: String(limit) }],
+        },
+        { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: `${seconds}s` },
+      ],
+    },
+  };
+}
+// "gemini-quota-minute" is limited for a little more than a second from the
+// first time it is asked, and says for how long; then it answers.
+let minuteLimitUntil = 0;
+const MINUTE_LIMIT_MS = 1200;
+
 function gemini(req, res, url, body) {
   if (req.headers["x-goog-api-key"] !== GEMINI_KEY) {
     return send(res, 400, { error: { code: 400, message: "API key not valid. Please pass a valid API key.", status: "INVALID_ARGUMENT" } });
@@ -853,6 +890,18 @@ function gemini(req, res, url, body) {
   }
   if (model === "gemini-blocked") {
     return send(res, 200, { promptFeedback: { blockReason: "SAFETY" }, usageMetadata });
+  }
+  // The quota of the free tier for the day is used up: nothing ends that today.
+  if (model === "gemini-quota-day") {
+    return send(res, 429, geminiQuota(model, { id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier", limit: 20, retry: "17h18m5.924610153s", seconds: 62285 }));
+  }
+  if (model === "gemini-quota-minute") {
+    const now = Date.now();
+    if (!minuteLimitUntil) minuteLimitUntil = now + MINUTE_LIMIT_MS;
+    if (now < minuteLimitUntil) {
+      const left = (minuteLimitUntil - now) / 1000;
+      return send(res, 429, geminiQuota(model, { id: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", limit: 5, retry: `${left.toFixed(9)}s`, seconds: Math.ceil(left) }));
+    }
   }
   // The same script as the OpenAI-style chat, translated.
   const contents = Array.isArray(body?.contents) ? body.contents : [];
@@ -987,7 +1036,17 @@ const api = http.createServer(async (req, res) => {
     const times = Number(url.searchParams.get("times") ?? 0);
     const after = Number(url.searchParams.get("after") ?? 0);
     if (status === 200) forced.delete(model);
-    else forced.set(model, { status, left: times > 0 ? times : Infinity, skip: after > 0 ? after : 0 });
+    else {
+      forced.set(model, {
+        status,
+        left: times > 0 ? times : Infinity,
+        skip: after > 0 ? after : 0,
+        say: url.searchParams.get("say") ?? "",
+        code: url.searchParams.get("code") ?? "",
+      });
+    }
+    // A limit of the Gemini-style API that is counted per minute starts anew.
+    if (model === "gemini-quota-minute") minuteLimitUntil = 0;
     return send(res, 200, { ok: true });
   }
 

@@ -116,8 +116,10 @@ export function snapshotEvents(projectId: string): RunEvent[] {
         kind: t.kind,
       })),
     });
+    // Every task, the ones that wait to start among them: a run that continues
+    // an earlier one keeps its tasks, and a page that showed one of them as
+    // failed has to be told that it waits once more.
     for (const t of tasks) {
-      if (t.status === "queued") continue;
       events.push({
         type: "task",
         seq: t.seq,

@@ -17,7 +17,11 @@ export function runJson(run: ProjectRun, role: string | null | undefined, opts: 
     status: run.status,
     trigger: run.trigger,
     input: run.input,
+    // True for a run that went on with the tasks of the run before it and
+    // kept the ones that had succeeded.
+    continued: run.continued,
     error: textFor(role, run.error),
+    // What the run used itself: for one that continued, without the tasks it kept.
     tokens_used: run.tokensUsed,
     created_at: unixSeconds(run.createdAt),
     started_at: unixSeconds(run.startedAt),
@@ -26,7 +30,8 @@ export function runJson(run: ProjectRun, role: string | null | undefined, opts: 
   if (!opts.detail) return base;
 
   // The tasks belong to the project's latest run: an earlier run keeps what
-  // it delivered, but not its tasks.
+  // it delivered, but not its tasks. A run that continued has the tasks it
+  // kept from the run before it among them.
   const latest = db
     .select({ id: projectRuns.id })
     .from(projectRuns)

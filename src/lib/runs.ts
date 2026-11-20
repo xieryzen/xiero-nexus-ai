@@ -1,8 +1,8 @@
 import { textFor } from "./shown";
 import "server-only";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, ne } from "drizzle-orm";
 import { db } from "@/db";
-import { agentRuns, projectRuns, projects, projectTasks, type Project, type ProjectRun } from "@/db/schema";
+import { agentRuns, projectRuns, projects, projectTasks, toolCalls, type Project, type ProjectRun } from "@/db/schema";
 import { AppError } from "./errors";
 import { notify } from "./notifications";
 import { prepareRun } from "./orchestrator";
@@ -17,6 +17,13 @@ import { kickWorker } from "./worker";
  * Starting a run does not execute it: it puts the run in the queue, and the
  * background worker picks it up within moments. The run then goes on whether
  * or not the page that started it stays open.
+ *
+ * A run starts anew, with a plan of its own, or it continues the run before
+ * it: the tasks that succeeded there are kept with what they made, and only
+ * the others are done. That is for a run that stopped half way, at a
+ * provider's limit, at the account's tokens, or because someone stopped it:
+ * doing all of it again spends the same allowance a second time, and may
+ * well stop at the same place.
  */
 
 export const MAX_RUN_INPUT_CHARS = 4000;
@@ -29,6 +36,28 @@ export interface StartRunOptions {
   input?: string | null;
   scheduleId?: string | null;
   apiKeyId?: string | null;
+  /**
+   * Go on with the tasks of the last run instead of planning anew: the ones
+   * that succeeded are kept, the others are done again. Refused (409) when
+   * there is nothing to go on with.
+   */
+  continueLast?: boolean;
+}
+
+/** The tasks a project has from its last run. */
+export interface Continuation {
+  total: number;
+  /** The tasks that succeeded: a run that continues keeps them. */
+  done: number;
+  /** The tasks it would do. */
+  left: number;
+}
+
+/** What a run that continues would find: the project's tasks, and how many of them succeeded. */
+export function tasksToContinue(projectId: string): Continuation {
+  const states = db.select({ status: projectTasks.status }).from(projectTasks).where(eq(projectTasks.projectId, projectId)).all();
+  const done = states.filter((t) => t.status === "succeeded").length;
+  return { total: states.length, done, left: states.length - done };
 }
 
 export interface StartRunResult {
@@ -46,12 +75,22 @@ function link(projectId: string): string {
   return `/dashboard/projects/${projectId}`;
 }
 
-/** Queue a run of a project. Throws 409 when one is waiting or in progress. */
+/**
+ * Queue a run of a project. Throws 409 when one is waiting or in progress,
+ * and, for a run that is to continue the last one, when there is nothing to
+ * go on with.
+ */
 export function startRun(project: Project, opts: StartRunOptions): StartRunResult {
   // A run spends the tokens of the account the project belongs to: with none
   // left it is refused (402), and nothing about the project changes.
   assertTokensLeft(project.createdBy, opts.requestedBy === project.createdBy ? "yours" : "project");
-  const input = opts.input?.trim() ? opts.input.trim().slice(0, MAX_RUN_INPUT_CHARS) : null;
+  const continues = opts.continueLast === true;
+  let input = opts.input?.trim() ? opts.input.trim().slice(0, MAX_RUN_INPUT_CHARS) : null;
+  if (continues && input === null) {
+    // The tasks were planned with the instruction of the run they are from,
+    // and the ones that are left are done with it too, unless a new one is given.
+    input = listRuns(project.id, 1)[0]?.input ?? null;
+  }
   const base = {
     projectId: project.id,
     trigger: opts.trigger,
@@ -59,6 +98,7 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
     apiKeyId: opts.apiKeyId ?? null,
     requestedBy: opts.requestedBy ?? null,
     input,
+    continued: continues,
   };
   // A run nobody is watching ends in the owner's notifications.
   const unattended = opts.trigger !== "manual";
@@ -70,6 +110,24 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
       .where(and(eq(projectRuns.projectId, project.id), inArray(projectRuns.status, ["queued", "running"])))
       .get();
     if (active) throw new AppError(409, "run_active", "This project is already running");
+
+    // What a run that continues goes on with. Looked at before anything is
+    // written: a request that cannot be met leaves no run behind.
+    const tasks = continues
+      ? tx
+          .select({ status: projectTasks.status, promptTokens: projectTasks.promptTokens, completionTokens: projectTasks.completionTokens })
+          .from(projectTasks)
+          .where(eq(projectTasks.projectId, project.id))
+          .all()
+      : [];
+    if (continues) {
+      if (tasks.length === 0) {
+        throw new AppError(409, "nothing_to_continue", "This project has no tasks from an earlier run to go on with. Run it.");
+      }
+      if (project.status === "succeeded" && tasks.every((t) => t.status === "succeeded")) {
+        throw new AppError(409, "nothing_to_continue", "Every task of the last run succeeded: there is nothing left to do. Run the project again to start anew.");
+      }
+    }
 
     const now = new Date();
     try {
@@ -102,10 +160,46 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
       return { run, outcome: "needs_approval" };
     }
 
-    // The last run's tasks make way for this one's. What the last run
-    // delivered stays in the run history.
-    tx.delete(agentRuns).where(eq(agentRuns.projectId, project.id)).run();
-    tx.delete(projectTasks).where(eq(projectTasks.projectId, project.id)).run();
+    // What the tasks that are kept used: the project goes on counting it, the
+    // new run counts what it uses itself.
+    let kept = 0;
+    if (continues) {
+      // The tasks that succeeded stay as they are, with what they made. The
+      // others go back in the queue and start over: what went wrong, and what
+      // each model said, is of the run that ended. (What a task did on a
+      // server or in a browser is not undone, and stays on record: its agent
+      // is told of it when it starts.)
+      for (const t of tasks) if (t.status === "succeeded") kept += (t.promptTokens ?? 0) + (t.completionTokens ?? 0);
+      const again = tx
+        .select({ id: projectTasks.id })
+        .from(projectTasks)
+        .where(and(eq(projectTasks.projectId, project.id), ne(projectTasks.status, "succeeded")))
+        .all()
+        .map((t) => t.id);
+      if (again.length > 0) {
+        tx.delete(agentRuns).where(inArray(agentRuns.taskId, again)).run();
+        tx.delete(toolCalls).where(inArray(toolCalls.taskId, again)).run();
+        tx.update(projectTasks)
+          .set({
+            status: "queued",
+            error: null,
+            artifact: null,
+            attempts: 0,
+            promptTokens: null,
+            completionTokens: null,
+            steps: 0,
+            toolCallCount: 0,
+            updatedAt: now,
+          })
+          .where(inArray(projectTasks.id, again))
+          .run();
+      }
+    } else {
+      // The last run's tasks make way for this one's. What the last run
+      // delivered stays in the run history.
+      tx.delete(agentRuns).where(eq(agentRuns.projectId, project.id)).run();
+      tx.delete(projectTasks).where(eq(projectTasks.projectId, project.id)).run();
+    }
     tx.update(projects)
       .set({
         status: "queued",
@@ -114,14 +208,14 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
         error: null,
         finalDeliverable: null,
         reviewNotes: null,
-        tokensUsed: 0,
+        tokensUsed: kept,
         startedAt: null,
         finishedAt: null,
         updatedAt: now,
       })
       .where(eq(projects.id, project.id))
       .run();
-    const run = tx.insert(projectRuns).values({ ...base, status: "queued" }).returning().get();
+    const run = tx.insert(projectRuns).values({ ...base, status: "queued", tokensBefore: kept }).returning().get();
     return { run, outcome: "queued" };
   });
 
@@ -191,6 +285,8 @@ export interface RunDTO {
   input: string | null;
   error: string | null;
   tokensUsed: number;
+  /** The run went on with the tasks of the run before it, and kept the ones that had succeeded. */
+  continued: boolean;
   hasDeliverable: boolean;
   createdAt: number;
   startedAt: number | null;
@@ -206,6 +302,7 @@ export function serializeRun(run: ProjectRun, role: string | null | undefined): 
     input: run.input,
     error: textFor(role, run.error),
     tokensUsed: run.tokensUsed,
+    continued: run.continued,
     hasDeliverable: Boolean(run.deliverable),
     createdAt: run.createdAt.getTime(),
     startedAt: run.startedAt ? run.startedAt.getTime() : null,

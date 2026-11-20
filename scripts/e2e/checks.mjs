@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,visibility,servers,browser
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,visibility,servers,browser
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
@@ -115,10 +115,11 @@ async function settle(user, id, { tries = 10, gapMs = 3200 } = {}) {
 }
 
 /** POST a run and collect its server-sent events. `input` is the run's extra instruction. */
-async function runProject(user, projectId, { onEvent, input } = {}) {
+/** Start a run and follow it to its end. `goOn`: one that continues the last run instead of starting anew. */
+async function runProject(user, projectId, { onEvent, input, goOn } = {}) {
   const res = await user.raw(`/api/projects/${projectId}/run`, {
     method: "POST",
-    body: input === undefined ? undefined : JSON.stringify({ input }),
+    body: input === undefined && !goOn ? undefined : JSON.stringify({ ...(input === undefined ? {} : { input }), ...(goOn ? { continue: true } : {}) }),
   });
   const events = [];
   if (!res.ok || !res.body) return { status: res.status, events, error: await res.text() };

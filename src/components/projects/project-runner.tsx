@@ -34,6 +34,8 @@ interface TaskLive {
   progress?: string | null;
   /** Where a person does what the task waits for: a page of the dashboard. */
   progressLink?: string | null;
+  /** The task only waits, for a limit to end: the note says for how long. */
+  waiting?: boolean;
   /** The media the task generated. */
   assets?: MediaAssetDTO[];
   /** Model calls and tool calls the task took (an agent with tools). */
@@ -162,6 +164,8 @@ export function ProjectRunner({
   const [approving, setApproving] = useState(false);
   const [runInput, setRunInput] = useState("");
   const [showInput, setShowInput] = useState(false);
+  // The run that waits for an approval was one that continues the last run: so is the one started after it.
+  const [toContinue, setToContinue] = useState(() => initialRuns[0]?.status === "needs_approval" && initialRuns[0]?.continued === true);
   // Counts the runs that ended while this page was open: the history reads again.
   const [finishedRuns, setFinishedRuns] = useState(0);
   const [traces, setTraces] = useState<Record<number, TraceCall[] | "loading" | undefined>>({});
@@ -231,13 +235,14 @@ export function ProjectRunner({
           artifact: evt.artifact,
           error: evt.error,
           progress: null,
+          waiting: false,
           ...(Array.isArray(evt.assets) ? { assets: evt.assets } : {}),
           ...(evt.steps ? { steps: evt.steps } : {}),
           ...(evt.toolCalls ? { toolCalls: evt.toolCalls } : {}),
         });
         break;
       case "progress":
-        upsert({ seq: evt.seq, progress: evt.message, progressLink: evt.link ?? null });
+        upsert({ seq: evt.seq, progress: evt.message, progressLink: evt.link ?? null, waiting: evt.waiting === true });
         break;
       case "tool":
         setTasks((prev) =>
@@ -335,7 +340,12 @@ export function ProjectRunner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function run() {
+  /**
+   * Start a run. `goOn`: one that continues the last run, which keeps the
+   * tasks that succeeded and does the others again; otherwise one that starts
+   * anew, with a plan of its own.
+   */
+  async function run(goOn = false) {
     if (following.current) return;
     setRunning(true);
     setError(null);
@@ -344,9 +354,12 @@ export function ProjectRunner({
       const res = await fetch(`/api/projects/${project.id}/run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(instruction ? { input: instruction } : {}),
+        body: JSON.stringify({ ...(instruction ? { input: instruction } : {}), ...(goOn ? { continue: true } : {}) }),
       });
       if (res.status === 409) {
+        const data = await res.json().catch(() => null);
+        // Nothing is left to continue: said as it is.
+        if (data?.error?.code === "nothing_to_continue") throw new Error(data.error.message ?? "There is nothing to continue");
         // Already running (started in another tab, by a schedule, through the API).
         setRunning(false);
         await follow();
@@ -356,14 +369,30 @@ export function ProjectRunner({
         const data = await res.json().catch(() => null);
         throw new Error(data?.error?.message ?? "Run failed to start");
       }
-      // A new run replaces the tasks; what they generated stays in the library.
+      setToContinue(goOn);
       setDeliverable(null);
       setReview(null);
-      setEarlierMedia((n) => n + countAssets(tasks, "ready") + countAssets(tasks, "pending"));
-      setTasks([]);
-      setTraces({});
-      setOpenTraces(new Set());
-      setTokensUsed(0);
+      if (goOn) {
+        // The tasks that succeeded stay as they are. The others wait again,
+        // without what went wrong the last time.
+        const again = new Set(tasks.filter((t) => t.status !== "succeeded").map((t) => t.seq));
+        setTasks((prev) =>
+          prev.map((t) =>
+            again.has(t.seq)
+              ? { ...t, status: "queued", error: null, artifact: null, progress: null, progressLink: null, waiting: false, steps: undefined, toolCalls: undefined, calls: undefined }
+              : t,
+          ),
+        );
+        setTraces((prev) => Object.fromEntries(Object.entries(prev).filter(([seq]) => !again.has(Number(seq)))));
+        setOpenTraces((prev) => new Set([...prev].filter((seq) => !again.has(seq))));
+      } else {
+        // A new run replaces the tasks; what they generated stays in the library.
+        setEarlierMedia((n) => n + countAssets(tasks, "ready") + countAssets(tasks, "pending"));
+        setTasks([]);
+        setTraces({});
+        setOpenTraces(new Set());
+        setTokensUsed(0);
+      }
       setStatus("queued");
       setRunInput("");
       setShowInput(false);
@@ -420,7 +449,7 @@ export function ProjectRunner({
     try {
       await apiFetch(`/api/projects/${project.id}/approve`, { method: "POST" });
       setApproving(false);
-      await run();
+      await run(toContinue && tasksLeft > 0);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Approval failed");
       setApproving(false);
@@ -428,6 +457,10 @@ export function ProjectRunner({
   }
 
   const isRunning = running || RUNNING_STATES.has(status);
+  // What the last run left undone: a run that continues does only that.
+  const tasksDone = tasks.filter((t) => t.status === "succeeded").length;
+  const tasksLeft = tasks.length - tasksDone;
+  const canContinue = !isRunning && tasks.length > 0 && tasksLeft > 0;
   const hasMediaModels = Boolean(imageModelLabel || videoModelLabel || speechModelLabel);
   const readyMedia = countAssets(tasks, "ready");
   const pendingMedia = countAssets(tasks, "pending");
@@ -450,8 +483,25 @@ export function ProjectRunner({
                 <Button variant="ghost" onClick={() => setShowInput((v) => !v)} disabled={!canRun} aria-expanded={showInput} title="Give this run an extra instruction">
                   <Icon name="plus" /> Instruction
                 </Button>
-                <Button onClick={run} loading={running} disabled={!canRun}>
-                  <Icon name="test" /> {tasks.length > 0 ? "Re-run" : "Run"}
+                {canContinue && (
+                  <Button
+                    onClick={() => void run(true)}
+                    loading={running}
+                    disabled={!canRun}
+                    data-testid="continue-run"
+                    title="Do only the tasks that did not succeed, and keep the others with what they made"
+                  >
+                    <Icon name="test" /> Continue
+                  </Button>
+                )}
+                <Button
+                  variant={canContinue ? "ghost" : "primary"}
+                  onClick={() => void run()}
+                  loading={running && !canContinue}
+                  disabled={!canRun || (running && canContinue)}
+                  title={tasks.length > 0 ? "Start anew: plan again and do every task again" : undefined}
+                >
+                  <Icon name={canContinue ? "refresh" : "test"} /> {tasks.length > 0 ? "Re-run" : "Run"}
                 </Button>
               </>
             )}
@@ -472,10 +522,13 @@ export function ProjectRunner({
             placeholder="Optional, for this run only. e.g. Focus on the mobile layout this time."
             className="mt-1.5"
             onKeyDown={(e) => {
-              if (e.key === "Enter") void run();
+              if (e.key === "Enter") void run(canContinue);
             }}
           />
-          <p className="mt-1.5 text-xs text-ink-3">It is added to the goal for this run. The goal itself stays as it is.</p>
+          <p className="mt-1.5 text-xs text-ink-3">
+            It is added to the goal for this run. The goal itself stays as it is.
+            {canContinue ? " Enter continues the last run with it; Re-run starts anew with it." : ""}
+          </p>
         </div>
       )}
 
@@ -532,6 +585,21 @@ export function ProjectRunner({
         </div>
       )}
 
+      {canContinue && status !== "needs_approval" && (
+        <div className="mb-4" data-testid="continue-note">
+          <Alert tone="info">
+            {tasksDone === 0
+              ? `None of the ${tasks.length} tasks is done.`
+              : `${tasksDone} of ${tasks.length} tasks ${tasksDone === 1 ? "is" : "are"} done.`}{" "}
+            <strong>Continue</strong> does the {tasksLeft === 1 ? "one that is left" : `${tasksLeft} that are left`} and keeps{" "}
+            {tasksDone === 0 ? "the plan" : "what is done"}; <strong>Re-run</strong> plans anew and does everything again.
+            {tasks.some((t) => t.status === "failed" && /\b429\b|quota|rate limit|too many requests/i.test(t.error ?? ""))
+              ? " A task that stopped at a limit of its model can be continued when the limit is over, or after its agent was given another model."
+              : ""}
+          </Alert>
+        </div>
+      )}
+
       {!canRun && mayOperate && (
         <Alert tone="warn">
           {chooses
@@ -582,7 +650,12 @@ export function ProjectRunner({
                         </button>
                       )}
                     </div>
-                    {t.status === "running" && t.progress && !t.progressLink && <p className="mt-2 text-xs text-ink-3">{t.progress}…</p>}
+                    {t.status === "running" && t.progress && !t.progressLink && !t.waiting && <p className="mt-2 text-xs text-ink-3">{t.progress}…</p>}
+                    {t.status === "running" && t.progress && !t.progressLink && t.waiting && (
+                      <p className="mt-2 rounded border border-warn/40 bg-warn/10 px-2.5 py-2 text-xs text-ink" data-testid="task-waits-limit">
+                        {t.progress}. Cancel ends the wait; Continue takes the run up again later.
+                      </p>
+                    )}
                     {t.status === "running" && t.progress && t.progressLink && (
                       <div className="mt-2 flex flex-wrap items-center gap-3 rounded border border-warn/40 bg-warn/10 px-2.5 py-2 text-xs text-ink" data-testid="task-waits">
                         <span className="min-w-0 flex-1">{t.progress}</span>
