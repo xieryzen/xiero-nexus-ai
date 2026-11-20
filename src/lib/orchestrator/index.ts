@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, ne } from "drizzle-orm";
 import { db } from "@/db";
 import {
   agentRuns,
@@ -68,6 +68,8 @@ import { browserConfigured } from "@/lib/browser/service";
 import { closeRunBrowser, closeTaskPages } from "@/lib/browser/sessions";
 import { usedUpMessage } from "@/lib/token-rules";
 import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
+import { limitOf } from "@/lib/upstream";
+import { waitWords } from "@/lib/provider-limits";
 import { computeCost, countTokens, estimateTokens, recordUsage } from "@/lib/usage";
 import { allFiles, ensureWorkspace, latestExecSummary, listFiles, upsertFile } from "@/lib/workspace";
 import { validateWorkspacePath } from "@/lib/workspace/paths";
@@ -81,6 +83,7 @@ import {
   pathsWritten,
   reviewMaterial,
 } from "./deliverable";
+import { failureText, limitWaitMs, limitWaitNote, nextLimitWait, type LimitedModel, type ModelFailure } from "./limit-wait";
 import {
   countMediaTasks,
   dependencyContext,
@@ -382,7 +385,12 @@ function parseDependsOn(raw: string | null): number[] {
  * tasks on this server.
  *
  * A run that was interrupted by a restart is picked up where it was: tasks
- * that had succeeded keep their output, the others are done again.
+ * that had succeeded keep their output, the others are done again. So is a
+ * run that continues the one before it (runs.ts): it finds the tasks of that
+ * run, with the ones that did not succeed waiting to be done.
+ *
+ * A task whose models all say "not now" waits for their limits before it
+ * fails (limit-wait.ts).
  */
 export async function executeRun(runId: string): Promise<void> {
   const run = db.select().from(projectRuns).where(eq(projectRuns.id, runId)).get();
@@ -502,9 +510,23 @@ export async function executeRun(runId: string): Promise<void> {
       ? `${project.goal}\n\nFor this run in particular:\n${instruction}`
       : project.goal;
 
-    // What earlier runs delivered, for a project that remembers them.
+    let existing = db
+      .select()
+      .from(projectTasks)
+      .where(eq(projectTasks.projectId, projectId))
+      .orderBy(asc(projectTasks.seq))
+      .all();
+    // The project has its tasks already: the run was picked up after a
+    // restart, or it continues the run before it.
+    const resumed = existing.length > 0;
+
+    // What earlier runs delivered, for a project that remembers them. A run
+    // that continues another is not told of that one as of an earlier run: it
+    // is the first part of the same work, not something to make anew. So the
+    // earlier runs are those that had ended before these tasks were planned.
     let earlier = "";
     if (project.memory) {
+      const plannedAt = resumed ? new Date(Math.min(...existing.map((t) => t.createdAt.getTime()))) : null;
       const previous = db
         .select({ deliverable: projectRuns.deliverable, finishedAt: projectRuns.finishedAt })
         .from(projectRuns)
@@ -514,6 +536,7 @@ export async function executeRun(runId: string): Promise<void> {
             ne(projectRuns.id, runId),
             inArray(projectRuns.status, ["succeeded", "review"]),
             isNotNull(projectRuns.deliverable),
+            ...(plannedAt ? [lt(projectRuns.finishedAt, plannedAt)] : []),
           ),
         )
         .orderBy(desc(projectRuns.finishedAt))
@@ -534,14 +557,6 @@ export async function executeRun(runId: string): Promise<void> {
       ? "\n\nThis project has been run before. What the earlier runs delivered is below. Do not repeat " +
         `it: build on it, and make this run's result new.\n\n${earlier}`
       : "";
-
-    let existing = db
-      .select()
-      .from(projectTasks)
-      .where(eq(projectTasks.projectId, projectId))
-      .orderBy(asc(projectTasks.seq))
-      .all();
-    const resumed = existing.length > 0;
 
     if (!resumed) {
       setStatus("planning", { startedAt: new Date(), error: null, finalDeliverable: null });
@@ -742,7 +757,9 @@ export async function executeRun(runId: string): Promise<void> {
         ),
       );
     } else {
-      // Picked up after a restart: what was in progress starts again.
+      // Picked up after a restart: what was in progress starts again. (A run
+      // that continues the one before it finds nothing in progress: the tasks
+      // that had not succeeded were put back in the queue when it was started.)
       db.update(projectTasks)
         .set({ status: "queued", error: null, updatedAt: new Date() })
         .where(and(eq(projectTasks.projectId, projectId), eq(projectTasks.status, "running")))
@@ -778,7 +795,15 @@ export async function executeRun(runId: string): Promise<void> {
       })),
     });
 
-    setStatus("running");
+    // A page that had the last run on it shows what that run left: the tasks
+    // this run does again are waiting once more, without what went wrong then.
+    if (run.continued) {
+      for (const t of tasks) {
+        if (t.row.status === "queued") emit({ type: "task", seq: t.seq, title: t.row.title, status: "queued", agent: t.agent?.name ?? null, error: null });
+      }
+    }
+
+    setStatus("running", resumed && !project.startedAt ? { startedAt: new Date(), error: null } : {});
     const workspace = ensureWorkspace(projectId, project.createdBy);
 
     // ── Execute ─────────────────────────────────────────────────────────────
@@ -788,6 +813,9 @@ export async function executeRun(runId: string): Promise<void> {
     let usedTokens = 0;
     // Images, videos and voice-overs started in this run, against the project's media limit.
     let mediaStarted = 0;
+    // What the tasks used that this run kept from the run before it: the
+    // project counts them, the run itself does not.
+    const runTokens = (): number => Math.max(0, usedTokens - run.tokensBefore);
     const pending = new Set<number>();
     for (const t of tasks) {
       usedTokens += (t.row.promptTokens ?? 0) + (t.row.completionTokens ?? 0);
@@ -810,6 +838,43 @@ export async function executeRun(runId: string): Promise<void> {
       return account ? usedUpMessage(account, "project") : "The token balance of the project's account is used up.";
     };
     const maxParallel = Math.max(1, project.maxParallel);
+
+    // How long a task of this run waits for the limits of its models, and
+    // whether one has waited all that time in vain: then no other does.
+    const limitWaits = {
+      totalMs: limitWaitMs(process.env.RUN_LIMIT_WAIT_MINUTES, process.env.RUN_LIMIT_WAIT_SECONDS),
+      inVain: false,
+    };
+    /**
+     * Wait before a task asks its models again, and say so on its card every
+     * quarter of a minute. The wait ends at once when the run is stopped, and
+     * when another task of the run has waited its whole time in vain.
+     */
+    const waitForLimits = async (
+      seq: number,
+      ms: number,
+      models: { limited: number; of: number },
+    ): Promise<{ waitedMs: number; stopped: "cancelled" | "in vain" | null }> => {
+      const started = Date.now();
+      let told = 0;
+      for (;;) {
+        const now = Date.now();
+        if (isCancelled()) return { waitedMs: now - started, stopped: "cancelled" };
+        if (limitWaits.inVain) return { waitedMs: now - started, stopped: "in vain" };
+        const left = ms - (now - started);
+        if (left <= 0) return { waitedMs: ms, stopped: null };
+        if (now - told >= 15_000) {
+          told = now;
+          emit({ type: "progress", seq, waiting: true, ...limitWaitNote(waitWords(left), models) });
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(left, 1000)));
+      }
+    };
+    /** A model by the name it goes by, for a task's error. For one that cannot be asked at all. */
+    const modelName = (id: string): string => {
+      const model = db.select({ modelId: models.modelId, displayName: models.displayName }).from(models).where(eq(models.id, id)).get();
+      return model ? model.displayName || model.modelId : "A model that is no longer there";
+    };
 
     /** The newest media asset a task produced, if any. */
     const assetOfTask = (taskId: string): MediaAsset | undefined =>
@@ -1159,169 +1224,204 @@ export async function executeRun(runId: string): Promise<void> {
         let answered = false;
         let stoppedByCancel = false;
         let outOfTokens = false;
+        // What each model said the last time the task went through them: for
+        // the task's error, and for whether waiting for a limit can help.
+        const failed = new Map<string, ModelFailure>();
+        const limited = new Map<string, LimitedModel>();
+        // What the task has waited for the limits of its models (limit-wait.ts).
+        let waitedMs = 0;
+        let waits = 0;
 
-        for (const mid of candidates) {
-          // Another model is not asked once the account's tokens are used up.
-          if (accountSpent()) {
-            outOfTokens = true;
-            break;
-          }
-          attempt++;
-          let resolved: ResolvedModel;
-          try {
-            resolved = resolveChatModel(mid);
-          } catch (e) {
-            lastError = e instanceof AppError ? e.message : "Model unavailable";
-            db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: mid, status: "error", attempt, error: lastError }).run();
-            continue;
-          }
-          const temperature = agent?.temperature ?? 0.7;
-          const canCallTools =
-            tools.length > 0 && getAdapter(resolved.provider.adapter).supports.includes("tool_calling");
-
-          // With tools first; without them when the model turns the tools down
-          // before it has used one.
-          const modes: ("tools" | "plain")[] = canCallTools ? ["tools", "plain"] : ["plain"];
-          for (const mode of modes) {
-            const started = Date.now();
-            let callSteps = 0;
-            let callTools = 0;
-            let spent = false;
-            // With tools: what the calls of this attempt used so far. Each is
-            // counted on the account as it is answered, so that the tasks of
-            // a run, and whatever else the account does meanwhile, are held
-            // to one balance; the record at the end does not count it again.
-            let loopPrompt = 0;
-            let loopCompletion = 0;
-            const usage = (status: "ok" | "error", p: number, c: number, errorCode?: string) =>
-              recordUsage({
-                userId: project.createdBy,
-                providerId: resolved.provider.id,
-                modelRowId: resolved.model.id,
-                kind: "other",
-                promptTokens: p,
-                completionTokens: c,
-                estimatedCost: status === "ok" || p + c > 0 ? computeCost(resolved.model, p, c) : undefined,
-                status,
-                errorCode,
-                latencyMs: Date.now() - started,
-                counted: mode === "tools",
-              });
-            savedNow.clear();
-            const messages = messagesFor(mode === "tools" ? toolNames : []);
-            try {
-              let content: string;
-              let p: number;
-              let c: number;
-              if (mode === "tools") {
-                const result = await runToolLoop({
-                  chat: (msgs, o) =>
-                    gatewayChat(resolved, msgs, { temperature, tools: o.tools, toolChoice: o.toolChoice }),
-                  messages,
-                  tools,
-                  maxSteps: Math.min(Math.max(1, agent?.maxSteps ?? DEFAULT_MAX_STEPS), MAX_MAX_STEPS),
-                  outOfTokens: accountSpent,
-                  onUsage: (prompt, completion) => {
-                    loopPrompt += prompt;
-                    loopCompletion += completion;
-                    countTokens(project.createdBy, prompt + completion);
-                  },
-                  estimateTokens,
-                  isCancelled,
-                  onStep: (n) => {
-                    callSteps = n;
-                    if (n > 1) emit({ type: "progress", seq, message: `Working (step ${n})` });
-                  },
-                  onToolCall: (event) => {
-                    callTools++;
-                    recordToolCall(event);
-                  },
-                });
-                p = result.promptTokens;
-                c = result.completionTokens;
-                content = result.content;
-                steps += result.steps;
-                toolCallCount += result.toolCalls;
-                taskTokens += p + c;
-                promptTokens += p;
-                completionTokens += c;
-                usage("ok", p, c);
-                spent = true;
-                if (result.stopped === "cancelled") {
-                  stoppedByCancel = true;
-                  db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls, error: "Cancelled" }).run();
-                  break;
-                }
-                // An agent that saved its output file and then said nothing has
-                // still done the work: the file is the deliverable.
-                if (!content.trim() && !ownOutputFile()) {
-                  throw new AppError(
-                    502,
-                    "empty_answer",
-                    result.stopped === "answer"
-                      ? "The agent returned an empty answer"
-                      : result.stopped === "tokens"
-                        ? accountSpentMessage()
-                        : "The agent used all its steps without giving its deliverable",
-                  );
-                }
-                db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls }).run();
-              } else {
-                const r = await invoke(resolved, messages, temperature);
-                p = r.prompt;
-                c = r.completion;
-                steps += 1;
-                taskTokens += p + c;
-                promptTokens += p;
-                completionTokens += c;
-                usage("ok", p, c);
-                spent = true;
-                content =
-                  kind === "text"
-                    ? r.content
-                    : kind === "audio"
-                      ? cleanSpeechText(r.content)
-                      : cleanMediaPrompt(r.content);
-                if (kind !== "text" && !content) {
-                  throw new AppError(502, "empty_prompt", "The agent returned an empty prompt");
-                }
-                db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: 1, toolCallCount: 0 }).run();
-              }
-              answerText = content;
-              answered = true;
+        for (;;) {
+          failed.clear();
+          limited.clear();
+          for (const mid of candidates) {
+            // Another model is not asked once the account's tokens are used up.
+            if (accountSpent()) {
+              outOfTokens = true;
               break;
-            } catch (e) {
-              lastError = e instanceof AppError ? e.message : sanitizeUpstreamError(e);
-              if (!spent) {
-                // The calls that were answered before one failed were used all
-                // the same: they are on the account, and they are the task's.
-                taskTokens += loopPrompt + loopCompletion;
-                promptTokens += loopPrompt;
-                completionTokens += loopCompletion;
-                usage("error", loopPrompt, loopCompletion, e instanceof AppError ? e.code : "error");
-              }
-              db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, ...(!spent && loopPrompt + loopCompletion > 0 ? { promptTokens: loopPrompt, completionTokens: loopCompletion } : {}), latencyMs: Date.now() - started, steps: callSteps || null, toolCallCount: callTools || null, error: lastError }).run();
-              // Only a refusal on the very first request is taken to be about the
-              // tools, and not one that says the provider is limited, busy or down.
-              const refusedTools =
-                mode === "tools" &&
-                callSteps <= 1 &&
-                callTools === 0 &&
-                !isCancelled() &&
-                (!(e instanceof AppError) || mayBeAboutTools(e));
-              if (!refusedTools) break;
-              emit({ type: "progress", seq, message: "Answering without tools", full: "The model did not accept tools; answering without them" });
-              attempt++;
             }
+            attempt++;
+            let resolved: ResolvedModel;
+            try {
+              resolved = resolveChatModel(mid);
+            } catch (e) {
+              lastError = e instanceof AppError ? e.message : "Model unavailable";
+              db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: mid, status: "error", attempt, error: lastError }).run();
+              failed.set(mid, { model: modelName(mid), error: lastError });
+              continue;
+            }
+            const temperature = agent?.temperature ?? 0.7;
+            const canCallTools =
+              tools.length > 0 && getAdapter(resolved.provider.adapter).supports.includes("tool_calling");
+
+            // With tools first; without them when the model turns the tools down
+            // before it has used one.
+            const modes: ("tools" | "plain")[] = canCallTools ? ["tools", "plain"] : ["plain"];
+            for (const mode of modes) {
+              const started = Date.now();
+              let callSteps = 0;
+              let callTools = 0;
+              let spent = false;
+              // With tools: what the calls of this attempt used so far. Each is
+              // counted on the account as it is answered, so that the tasks of
+              // a run, and whatever else the account does meanwhile, are held
+              // to one balance; the record at the end does not count it again.
+              let loopPrompt = 0;
+              let loopCompletion = 0;
+              const usage = (status: "ok" | "error", p: number, c: number, errorCode?: string) =>
+                recordUsage({
+                  userId: project.createdBy,
+                  providerId: resolved.provider.id,
+                  modelRowId: resolved.model.id,
+                  kind: "other",
+                  promptTokens: p,
+                  completionTokens: c,
+                  estimatedCost: status === "ok" || p + c > 0 ? computeCost(resolved.model, p, c) : undefined,
+                  status,
+                  errorCode,
+                  latencyMs: Date.now() - started,
+                  counted: mode === "tools",
+                });
+              savedNow.clear();
+              const messages = messagesFor(mode === "tools" ? toolNames : []);
+              try {
+                let content: string;
+                let p: number;
+                let c: number;
+                if (mode === "tools") {
+                  const result = await runToolLoop({
+                    chat: (msgs, o) =>
+                      gatewayChat(resolved, msgs, { temperature, tools: o.tools, toolChoice: o.toolChoice }),
+                    messages,
+                    tools,
+                    maxSteps: Math.min(Math.max(1, agent?.maxSteps ?? DEFAULT_MAX_STEPS), MAX_MAX_STEPS),
+                    outOfTokens: accountSpent,
+                    onUsage: (prompt, completion) => {
+                      loopPrompt += prompt;
+                      loopCompletion += completion;
+                      countTokens(project.createdBy, prompt + completion);
+                    },
+                    estimateTokens,
+                    isCancelled,
+                    onStep: (n) => {
+                      callSteps = n;
+                      if (n > 1) emit({ type: "progress", seq, message: `Working (step ${n})` });
+                    },
+                    onToolCall: (event) => {
+                      callTools++;
+                      recordToolCall(event);
+                    },
+                  });
+                  p = result.promptTokens;
+                  c = result.completionTokens;
+                  content = result.content;
+                  steps += result.steps;
+                  toolCallCount += result.toolCalls;
+                  taskTokens += p + c;
+                  promptTokens += p;
+                  completionTokens += c;
+                  usage("ok", p, c);
+                  spent = true;
+                  if (result.stopped === "cancelled") {
+                    stoppedByCancel = true;
+                    db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls, error: "Cancelled" }).run();
+                    break;
+                  }
+                  // An agent that saved its output file and then said nothing has
+                  // still done the work: the file is the deliverable.
+                  if (!content.trim() && !ownOutputFile()) {
+                    throw new AppError(
+                      502,
+                      "empty_answer",
+                      result.stopped === "answer"
+                        ? "The agent returned an empty answer"
+                        : result.stopped === "tokens"
+                          ? accountSpentMessage()
+                          : "The agent used all its steps without giving its deliverable",
+                    );
+                  }
+                  db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls }).run();
+                } else {
+                  const r = await invoke(resolved, messages, temperature);
+                  p = r.prompt;
+                  c = r.completion;
+                  steps += 1;
+                  taskTokens += p + c;
+                  promptTokens += p;
+                  completionTokens += c;
+                  usage("ok", p, c);
+                  spent = true;
+                  content =
+                    kind === "text"
+                      ? r.content
+                      : kind === "audio"
+                        ? cleanSpeechText(r.content)
+                        : cleanMediaPrompt(r.content);
+                  if (kind !== "text" && !content) {
+                    throw new AppError(502, "empty_prompt", "The agent returned an empty prompt");
+                  }
+                  db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: 1, toolCallCount: 0 }).run();
+                }
+                answerText = content;
+                answered = true;
+                break;
+              } catch (e) {
+                lastError = e instanceof AppError ? e.message : sanitizeUpstreamError(e);
+                failed.set(mid, { model: `${resolved.model.displayName || resolved.model.modelId} (${resolved.provider.name})`, error: lastError });
+                // A provider's "not now", with what it said about its limit. Any
+                // other failure of the same model is not one that a wait ends.
+                const limit = limitOf(e);
+                if (limit) limited.set(mid, limit);
+                else limited.delete(mid);
+                if (!spent) {
+                  // The calls that were answered before one failed were used all
+                  // the same: they are on the account, and they are the task's.
+                  taskTokens += loopPrompt + loopCompletion;
+                  promptTokens += loopPrompt;
+                  completionTokens += loopCompletion;
+                  usage("error", loopPrompt, loopCompletion, e instanceof AppError ? e.code : "error");
+                }
+                db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, ...(!spent && loopPrompt + loopCompletion > 0 ? { promptTokens: loopPrompt, completionTokens: loopCompletion } : {}), latencyMs: Date.now() - started, steps: callSteps || null, toolCallCount: callTools || null, error: lastError }).run();
+                // Only a refusal on the very first request is taken to be about the
+                // tools, and not one that says the provider is limited, busy or down.
+                const refusedTools =
+                  mode === "tools" &&
+                  callSteps <= 1 &&
+                  callTools === 0 &&
+                  !isCancelled() &&
+                  (!(e instanceof AppError) || mayBeAboutTools(e));
+                if (!refusedTools) break;
+                emit({ type: "progress", seq, message: "Answering without tools", full: "The model did not accept tools; answering without them" });
+                attempt++;
+              }
+            }
+            if (answered || stoppedByCancel) break;
           }
-          if (answered || stoppedByCancel) break;
+          if (answered || stoppedByCancel || outOfTokens) break;
+          // None of them answered. Where one said "not now", its limit can be
+          // over in a while: the task waits, and asks them all again.
+          const wait = limitWaits.inVain
+            ? null
+            : nextLimitWait({ round: waits, waitedMs, totalMs: limitWaits.totalMs, limited: [...limited.values()] });
+          if (wait === null) break;
+          const went = await waitForLimits(seq, wait, { limited: limited.size, of: candidates.length });
+          waitedMs += went.waitedMs;
+          waits++;
+          if (went.stopped === "cancelled") stoppedByCancel = true;
+          if (went.stopped) break;
+        }
+        // The whole time, and no model answered: the other tasks of this run
+        // would wait for the same limits, and do not.
+        if (!answered && !stoppedByCancel && !outOfTokens && limitWaits.totalMs > 0 && waitedMs >= limitWaits.totalMs) {
+          limitWaits.inVain = true;
         }
 
         if (stoppedByCancel) return failTask("Cancelled", undefined, "cancelled");
         // Without tokens for a model: a task that asked none was not started,
         // and one whose model failed is not given its next.
         if (!answered && outOfTokens) return failTask(accountSpentMessage(), undefined, attempt === 0 ? "cancelled" : "failed");
-        if (!answered) return failTask(lastError);
+        if (!answered) return failTask(failureText([...failed.values()], lastError, waitedMs > 0 ? waitWords(waitedMs) : ""));
       }
 
       if (!generated) {
@@ -1508,7 +1608,7 @@ export async function executeRun(runId: string): Promise<void> {
         pending.delete(seq);
       });
       db.update(projects).set({ tokensUsed: usedTokens, updatedAt: new Date() }).where(eq(projects.id, projectId)).run();
-      db.update(projectRuns).set({ tokensUsed: usedTokens }).where(eq(projectRuns.id, runId)).run();
+      db.update(projectRuns).set({ tokensUsed: runTokens() }).where(eq(projectRuns.id, runId)).run();
       emit({ type: "tokens", used: usedTokens, left: tokensLeftFor(project.createdBy) });
     }
 
@@ -1516,7 +1616,7 @@ export async function executeRun(runId: string): Promise<void> {
 
     if (isCancelled()) {
       setStatus("cancelled", { finishedAt: new Date() });
-      endRun("cancelled", { tokensUsed: usedTokens });
+      endRun("cancelled", { tokensUsed: runTokens() });
       return;
     }
 
@@ -1712,7 +1812,7 @@ export async function executeRun(runId: string): Promise<void> {
               : "") + tokenNote;
     endRun(
       finalStatus,
-      { deliverable: deliverable || null, reviewNotes: reviewNotes || null, tokensUsed: usedTokens },
+      { deliverable: deliverable || null, reviewNotes: reviewNotes || null, tokensUsed: runTokens() },
       finalStatus === "succeeded"
         ? { level: "success", title: `Run finished: ${project.title}`, body: `All ${total} tasks succeeded.` }
         : finalStatus === "review"

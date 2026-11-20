@@ -1,5 +1,6 @@
 import "server-only";
 import { AppError } from "../errors";
+import { upstreamError } from "../upstream";
 import { providerFetch } from "../http-client";
 import {
   ANTHROPIC_MODELS_PAGE_SIZE,
@@ -39,11 +40,10 @@ async function readError(res: Response): Promise<never> {
   } catch {
     /* ignore */
   }
-  throw new AppError(
-    502,
-    "upstream_error",
-    upstreamErrorMessage(res.status, body, res.statusText),
-  );
+  throw upstreamError(res.status, upstreamErrorMessage(res.status, body, res.statusText), {
+    body,
+    retryAfter: res.headers.get("retry-after"),
+  });
 }
 
 async function readJson(res: Response): Promise<unknown> {

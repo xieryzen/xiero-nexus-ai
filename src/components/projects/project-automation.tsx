@@ -314,7 +314,7 @@ export function ProjectAutomation({
         </div>
       </Card>
 
-      <Card title="Runs" description="Every run of this project, newest first. A run keeps what it delivered; its tasks are replaced by the next run's.">
+      <Card title="Runs" description="Every run of this project, newest first. A run keeps what it delivered; its tasks are replaced by the next run's, but for a run that continued: it kept the tasks that had succeeded.">
         {runs.length === 0 ? (
           <p className="text-sm text-ink-3">No run yet.</p>
         ) : (
@@ -328,6 +328,7 @@ export function ProjectAutomation({
                       <DateTime at={run.createdAt} className="text-sm text-ink-2" />
                       <span className="text-xs text-ink-3">
                         {TRIGGER[run.trigger]}
+                        {run.continued ? " · continued the run before it" : ""}
                         {duration(run) ? ` · ${duration(run)}` : ""}
                         {run.tokensUsed > 0 ? ` · ${formatNumber(run.tokensUsed)} tokens` : ""}
                       </span>

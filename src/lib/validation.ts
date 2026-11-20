@@ -352,8 +352,12 @@ export const projectUpdateSchema = z
 
 const runInputSchema = z.string().trim().max(4000);
 
-/** The body of a run request. It may be empty. */
-export const runStartSchema = z.object({ input: runInputSchema.optional() });
+/**
+ * The body of a run request. It may be empty. `continue`: go on with the
+ * tasks of the last run and keep the ones that succeeded, instead of
+ * planning anew.
+ */
+export const runStartSchema = z.object({ input: runInputSchema.optional(), continue: z.boolean().optional() });
 
 export const scheduleCreateSchema = z.object({
   cron: z.string().trim().min(9, "Enter five fields, such as: 0 8 * * *").max(120),

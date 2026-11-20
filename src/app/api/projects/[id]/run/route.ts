@@ -13,14 +13,18 @@ export const dynamic = "force-dynamic";
  * before, but the run itself is executed by the background worker: closing
  * the connection does not stop it, and GET …/events follows it again.
  *
- * The body is optional: { "input": "an extra instruction for this run" }.
- * 409 when the project is already running.
+ * The body is optional: { "input": "an extra instruction for this run",
+ * "continue": true }. With `continue` the run goes on with the tasks of the
+ * last run: the ones that succeeded are kept, the others are done again.
+ * 409 when the project is already running, or when there is nothing to
+ * continue.
  */
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
   const project = loadOperableProject(params.id!, user); // throws if not owner/admin, or not allowed on its servers
 
   let input: string | undefined;
+  let continueLast = false;
   const raw = await req.text().catch(() => "");
   if (raw.trim()) {
     let body: unknown;
@@ -34,8 +38,9 @@ export const POST = handle(async (req, { params }) => {
       throw Errors.badRequest(parsed.error.issues[0]?.message ?? "Invalid request");
     }
     input = parsed.data.input;
+    continueLast = parsed.data.continue === true;
   }
 
-  startRun(project, { trigger: "manual", requestedBy: user.id, input });
+  startRun(project, { trigger: "manual", requestedBy: user.id, input, continueLast });
   return new Response(runEventStream(project.id, req.signal, user.role), { headers: SSE_HEADERS });
 });

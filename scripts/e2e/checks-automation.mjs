@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "visibility", "servers", "browser"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "visibility", "servers", "browser"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -3594,7 +3594,237 @@ export async function automation(ctx) {
     eq("the accounts of these checks are deleted, and the model that was made to fail", gone, Array(13).fill(200));
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility, servers, browser };
+
+  // ─── A provider's limit, and a run that goes on ────────────────────────────
+
+  /**
+   * A run that meets the limits of its models: what its task says, whether it
+   * waits, and how the run is taken up again without doing what it had done.
+   *
+   * The app is started for these checks with RUN_LIMIT_WAIT_SECONDS=6: a task
+   * waits six seconds for its models' limits, not an hour, at waits of a
+   * quarter of a second, the same, half a second, one, and one and a half.
+   * PROVIDER_RETRIES is 0, so a request itself is sent once.
+   */
+  async function quota() {
+    const WAIT_MS = 6000;
+    const force = (modelId, query) => fetch(`${MOCK}/__force?model=${encodeURIComponent(modelId)}&${query}`);
+    const free = (...modelIds) => Promise.all(modelIds.map((id) => force(id, "status=200")));
+    const noCredit = "status=429&code=insufficient_quota&say=" + encodeURIComponent("You exceeded your current quota, please check your plan and billing details.");
+    const lastStatus = (events) => events.filter((e) => e.type === "status").at(-1)?.status;
+    const tasksOf = async (id) => (await admin.get(`/api/projects/${id}`)).data?.project?.tasks ?? [];
+    const runsOf = async (id) => (await admin.get(`/api/projects/${id}/runs`)).data?.runs ?? [];
+    const attemptsOf = async (id) => ((await admin.get(`/api/projects/${id}/attempts`)).data?.attempts ?? []).map((a) => [a.seq, a.attempt, a.status, a.modelId]);
+    /** The titles of the tasks a provider was asked to do, in the order it was asked. */
+    const tasksAsked = async () =>
+      (await mockLog())
+        .map((l) => /^Task: (.*)$/m.exec(String((l.body?.messages ?? []).find((m) => m.role === "user")?.content ?? ""))?.[1])
+        .filter(Boolean);
+    const waits = (events, seq) => events.filter((e) => e.type === "progress" && e.seq === seq && e.waiting === true);
+    const spent = (events, seq, status) => {
+      const started = events.find((e) => e.type === "task" && e.seq === seq && e.status === "running")?.at;
+      const ended = events.find((e) => e.type === "task" && e.seq === seq && e.status === status)?.at;
+      return started && ended ? ended - started : null;
+    };
+
+    begin("Limits: a run that stops at the limits of its models");
+    // Models of the mock that answer like any other, until the checks make them say "not now".
+    for (const id of ["lim-a", "lim-b", "lim-c", "lim-d", "lim-e", "lim-f"]) await model(id, openai, id, ["text"]);
+    await agent("Steady", "Steadyworker");
+    await agent("Stuck", "Stuckworker", { primaryModelRowId: state.models["lim-a"], fallbackModelRowId: state.models["lim-b"] });
+    const halfWf = await workflow("Half way", [
+      { title: "First", objective: "One.", role: "Steadyworker" },
+      { title: "Second", objective: "Two.", role: "Stuckworker", dependsOn: [1] },
+      { title: "Third", objective: "Three.", role: "Steadyworker", dependsOn: [1, 2] },
+      { title: "Fourth", objective: "Four.", role: "Steadyworker" },
+    ]);
+    const half = await project(admin, { title: "Half way", workflowId: halfWf, managerModelRowId: state.models["lim-c"], memory: true });
+    eq("a project that was never run has nothing to continue", await admin.post(`/api/projects/${half}/run`, { continue: true }).then((r) => [r.status, r.code]), [409, "nothing_to_continue"]);
+    eq("  and no run is left behind by the request", (await runsOf(half)).length, 0);
+
+    // The agent's first model has no credit left, its second is down, and the
+    // project's manager model, which is asked last, has no credit either.
+    await force("lim-a", noCredit);
+    await force("lim-b", "status=500");
+    await force("lim-c", noCredit);
+    await mockReset();
+    const stopped = await runProject(admin, half, { input: "For the first half." });
+    const stoppedTasks = await tasksOf(half);
+    eq("the tasks that can be done are done; the one whose models all fail fails, and what depends on it is not started", stoppedTasks.map((t) => [t.seq, t.status]), [[1, "succeeded"], [2, "failed"], [3, "blocked"], [4, "succeeded"]]);
+    const said = stoppedTasks[1]?.error ?? "";
+    check(
+      "the failed task says what each of its three models said, not only the last",
+      /^None of the 3 models of this task gave an answer\.\n• lim-a \([^)]+\): Provider responded 429: .*You exceeded your current quota.*\n• lim-b \([^)]+\): Provider responded 500: .*\n• lim-c \([^)]+\): Provider responded 429: .*$/.test(said),
+      said,
+    );
+    eq("  each of them was asked once, in the agent's order", (await attemptsOf(half)).filter((a) => a[0] === 2), [[2, 1, "error", "lim-a"], [2, 2, "error", "lim-b"], [2, 3, "error", "lim-c"]]);
+    check("  an account without credit is not waited for", waits(stopped.events, 2).length === 0 && spent(stopped.events, 2, "failed") < 3000, [waits(stopped.events, 2).length, spent(stopped.events, 2, "failed")]);
+    eq("  the run ends as one to look at", [lastStatus(stopped.events), (await runsOf(half)).map((r) => [r.status, r.continued, r.input, r.tokensUsed])], ["review", [["review", false, "For the first half.", 60]]]);
+    const keptIds = stoppedTasks.map((t) => t.id);
+    const firstOutput = stoppedTasks[0]?.artifact;
+
+    begin("Limits: Continue does what is left, and keeps what is done");
+    eq("another user cannot continue it", (await bob.post(`/api/projects/${half}/run`, { continue: true })).status, 403);
+    eq("the body says true or false", (await admin.post(`/api/projects/${half}/run`, { continue: "yes" })).status, 400);
+    eq("  neither changed the tasks", (await tasksOf(half)).map((t) => t.status), ["succeeded", "failed", "blocked", "succeeded"]);
+    // The limits are over.
+    await free("lim-a", "lim-b", "lim-c");
+    await mockReset();
+    const went = await runProject(admin, half, { goOn: true });
+    const after = await tasksOf(half);
+    eq("the run that continues ends with every task done", [lastStatus(went.events), after.map((t) => [t.seq, t.status])], ["succeeded", [[1, "succeeded"], [2, "succeeded"], [3, "succeeded"], [4, "succeeded"]]]);
+    eq("  only the tasks that were left were asked of a provider", (await tasksAsked()).sort(), ["Second", "Third"]);
+    eq("  the tasks are the same ones, and the first still has what it made", [after.map((t) => t.id), after[0]?.artifact], [keptIds, firstOutput]);
+    check("  a task that was left gets the output of the one that was kept", /^OUTPUT of "Third" \[deps:1\+2\]/.test(after[2]?.artifact ?? ""), after[2]?.artifact);
+    check("  with the instruction of the run it continues", /\[with:run-input\]/.test(after[1]?.artifact ?? "") && /\[with:run-input\]/.test(after[2]?.artifact ?? ""), [after[1]?.artifact, after[2]?.artifact]);
+    check("  and is not told of that run as of an earlier one to build on", !/earlier-runs/.test(after[1]?.artifact ?? "") && !/earlier-runs/.test(after[2]?.artifact ?? ""), [after[1]?.artifact, after[2]?.artifact]);
+    eq("  what went wrong the last time is gone from the task, and from its attempts", [after[1]?.error, (await attemptsOf(half)).filter((a) => a[0] === 2)], [null, [[2, 1, "ok", "lim-a"]]]);
+    const plan = went.events.find((e) => e.type === "plan");
+    check("  the page is told the plan with the same tasks, and that the ones done again wait once more", plan?.tasks?.map((t) => t.id).join() === keptIds.join() && went.events.some((e) => e.type === "task" && e.seq === 2 && e.status === "queued" && !e.error), went.events.filter((e) => e.type === "task").map((e) => [e.seq, e.status]));
+    check("  it has a result, put together from all four tasks", /FINAL DELIVERABLE/.test(went.events.find((e) => e.type === "final")?.deliverable ?? ""), went.events.find((e) => e.type === "final"));
+    const history = await runsOf(half);
+    eq("the history has both runs: the one that continued counts what it used itself", history.map((r) => [r.status, r.continued, r.input, r.tokensUsed]), [["succeeded", true, "For the first half.", 60], ["review", false, "For the first half.", 60]]);
+    eq("  and the project counts all its tasks", (await admin.get(`/api/projects/${half}`)).data?.project?.tokensUsed, 120);
+    eq("with nothing left, there is nothing to continue", await admin.post(`/api/projects/${half}/run`, { continue: true }).then((r) => [r.status, r.code, r.error]), [409, "nothing_to_continue", "Every task of the last run succeeded: there is nothing left to do. Run the project again to start anew."]);
+    eq("  and that request left no run behind", (await runsOf(half)).length, 2);
+
+    await mockReset();
+    const anew = await runProject(admin, half);
+    const fresh = await tasksOf(half);
+    check("Run still starts anew: every task is done again, as new tasks", lastStatus(anew.events) === "succeeded" && fresh.length === 4 && fresh.every((t) => !keptIds.includes(t.id)) && (await tasksAsked()).sort().join() === "First,Fourth,Second,Third", [fresh.map((t) => t.status), await tasksAsked()]);
+    check("  and that run is told what the earlier ones delivered", /earlier-runs/.test(fresh[0]?.artifact ?? ""), fresh[0]?.artifact);
+    eq("  it is not one that continued", (await runsOf(half))[0]?.continued, false);
+
+    begin("Limits: Continue through the API, and with an approval");
+    const key = (await admin.post("/api/account/api-keys", { name: "Limits", scopes: ["projects"], rateLimitPerMinute: 600 })).data?.secret;
+    const gatedWf = await workflow("Two halves", [
+      { title: "Half one", objective: "One.", role: "Steadyworker" },
+      { title: "Half two", objective: "Two.", role: "Stuckworker", dependsOn: [1] },
+    ]);
+    const gated = await project(admin, { title: "Two halves", workflowId: gatedWf, managerModelRowId: state.models["lim-c"], requiresApproval: true });
+    await admin.post(`/api/projects/${gated}/approve`);
+    await force("lim-a", noCredit);
+    await force("lim-b", noCredit);
+    await force("lim-c", noCredit);
+    const firstHalf = await runProject(admin, gated);
+    eq("a run stops half way", [lastStatus(firstHalf.events), (await tasksOf(gated)).map((t) => t.status)], ["review", ["succeeded", "failed"]]);
+    await free("lim-a", "lim-b", "lim-c");
+    const wrong = await v1json(`/projects/${gated}/runs`, { key, method: "POST", body: { continue: "yes" } });
+    eq("the API refuses a continue that is not true or false", [wrong.status, wrong.error?.param], [400, "continue"]);
+    const asked = await v1json(`/projects/${gated}/runs`, { key, method: "POST", body: { continue: true } });
+    eq("a project that asks for an approval asks for one to continue, too", [asked.status, asked.data?.status, asked.data?.continued], [200, "needs_approval", true]);
+    eq("  its tasks stay as they were meanwhile", (await tasksOf(gated)).map((t) => t.status), ["succeeded", "failed"]);
+    await admin.post(`/api/projects/${gated}/approve`);
+    const viaApi = await v1json(`/projects/${gated}/runs`, { key, method: "POST", body: { continue: true } });
+    eq("approved, the API continues it", [viaApi.status, viaApi.data?.status, viaApi.data?.continued, viaApi.data?.trigger], [202, "queued", true, "api"]);
+    const ended = await until(async () => (await v1json(`/runs/${viaApi.data?.id}`, { key })).data, (r) => !["queued", "running"].includes(r?.status), { tries: 40, gapMs: 500 });
+    eq("  and the run says so, with its tasks: the one it kept and the one it did", [ended?.status, ended?.continued, ended?.tokens_used, ended?.tasks?.map((t) => [t.seq, t.status])], ["succeeded", true, 30, [[1, "succeeded"], [2, "succeeded"]]]);
+    const nothing = await v1json(`/projects/${gated}/runs`, { key, method: "POST", body: { continue: true } });
+    eq("  with nothing left: 409, and why", [nothing.status, nothing.error?.code], [409, "nothing_to_continue"]);
+
+    begin("Limits: a task waits for a limit that ends");
+    await agent("Patient", "Patientworker", { primaryModelRowId: state.models["lim-d"] });
+    const patientWf = await workflow("Patience", [{ title: "Worth the wait", objective: "One.", role: "Patientworker" }]);
+    const patient = await project(admin, { title: "Patience", workflowId: patientWf, managerModelRowId: state.models["lim-d"] });
+    // "Too many requests" the next three times it is asked, with nothing said about how long.
+    await force("lim-d", "status=429&times=3");
+    const waited = await runProject(admin, patient);
+    const waitedTask = (await tasksOf(patient))[0];
+    eq("the task is not failed: it waits, asks again, and is done when the model answers", [lastStatus(waited.events), waitedTask?.status, waitedTask?.error], ["succeeded", "succeeded", null]);
+    eq("  the model was asked four times: three in vain, then it answered", await attemptsOf(patient), [[1, 1, "error", "lim-d"], [1, 2, "error", "lim-d"], [1, 3, "error", "lim-d"], [1, 4, "ok", "lim-d"]]);
+    const notes = waits(waited.events, 1);
+    check("  while it waits, its card says so, to someone who is shown the setup with what the model said", notes.length >= 3 && notes.every((n) => /^Its model says "not now" \(limited, or busy\)\. Asking it again in \d+ seconds?$/.test(n.message)), notes.map((n) => n.message));
+    check("  the waits are short ones first", spent(waited.events, 1, "succeeded") >= 900 && spent(waited.events, 1, "succeeded") < 4000, spent(waited.events, 1, "succeeded"));
+
+    begin("Limits: Google's quota for the minute is waited for, its quota for the day is not");
+    const gem = await admin.post("/api/providers", { name: "Quota Gemini", adapter: "gemini", baseUrl: `${MOCK}/gemini/v1beta`, apiKey: GEMINI_KEY });
+    const gemId = gem.data?.provider?.id;
+    await model("gemini-quota-minute", gemId, "gemini-quota-minute", ["text"]);
+    await model("gemini-quota-day", gemId, "gemini-quota-day", ["text"]);
+    await agent("Minutely", "Minuteworker", { primaryModelRowId: state.models["gemini-quota-minute"] });
+    await agent("Daily", "Dayworker", { primaryModelRowId: state.models["gemini-quota-day"] });
+    const minuteWf = await workflow("A minute", [{ title: "Next minute", objective: "One.", role: "Minuteworker" }]);
+    const minute = await project(admin, { title: "A minute", workflowId: minuteWf, managerModelRowId: state.models["gemini-quota-minute"] });
+    await force("gemini-quota-minute", "status=200");
+    const nextMinute = await runProject(admin, minute);
+    eq("a quota that is counted per minute: the task waits as long as Google asks, and is done", [lastStatus(nextMinute.events), await attemptsOf(minute)], ["succeeded", [[1, 1, "error", "gemini-quota-minute"], [1, 2, "ok", "gemini-quota-minute"]]]);
+    check("  one wait, of the second and a bit that the answer named", waits(nextMinute.events, 1).length >= 1 && spent(nextMinute.events, 1, "succeeded") >= 1200 && spent(nextMinute.events, 1, "succeeded") < 5000, [waits(nextMinute.events, 1).map((n) => n.message), spent(nextMinute.events, 1, "succeeded")]);
+    const minuteSaid = ((await admin.get(`/api/projects/${minute}/attempts`)).data?.attempts ?? [])[0]?.error ?? "";
+    check("  what Google said is kept in few words: the quota, its allowance, that it is per minute, and the wait", /^Provider responded 429: You exceeded your current quota, please check your plan and billing details\. Quota exceeded: generate content free tier requests, limit 5 per minute, model gemini-quota-minute\. Please retry in \d+ seconds?\.$/.test(minuteSaid), minuteSaid);
+
+    const dayWf = await workflow("A day", [
+      { title: "Not today", objective: "One.", role: "Dayworker" },
+      { title: "Nor this", objective: "Two.", role: "Dayworker", dependsOn: [1] },
+    ]);
+    const day = await project(admin, { title: "A day", workflowId: dayWf, managerModelRowId: state.models["gemini-quota-day"] });
+    const today = await runProject(admin, day);
+    const dayTasks = await tasksOf(day);
+    eq("a quota that is counted per day: the task fails at once, with the quota in full", [dayTasks.map((t) => t.status), dayTasks[0]?.error], [
+      ["failed", "blocked"],
+      "Provider responded 429: You exceeded your current quota, please check your plan and billing details. Quota exceeded: generate content free tier requests, limit 20 per day, model gemini-quota-day. Please retry in 17 hours and 18 minutes.",
+    ]);
+    check("  nothing was waited for, and the model was asked once", waits(today.events, 1).length === 0 && spent(today.events, 1, "failed") < 3000 && (await attemptsOf(day)).length === 1, [spent(today.events, 1, "failed"), await attemptsOf(day)]);
+    eq("  the run fails: none of its tasks was done", lastStatus(today.events), "failed");
+
+    begin("Limits: a limit that does not end");
+    await agent("Hopeful", "Hopefulworker", { primaryModelRowId: state.models["lim-e"] });
+    const vainWf = await workflow("In vain", [
+      { title: "Waits", objective: "One.", role: "Hopefulworker" },
+      { title: "Does not wait", objective: "Two.", role: "Hopefulworker" },
+      { title: "Is fine", objective: "Three.", role: "Steadyworker" },
+    ]);
+    const vain = await project(admin, { title: "In vain", workflowId: vainWf, managerModelRowId: state.models["lim-e"], maxParallel: 1 });
+    await force("lim-e", "status=429");
+    const inVain = await runProject(admin, vain);
+    const vainTasks = await tasksOf(vain);
+    eq("the task that waited its whole time fails; the tasks that need no limited model are done", vainTasks.map((t) => t.status), ["failed", "failed", "succeeded"]);
+    check("  it waited the time that is set, and says so", spent(inVain.events, 1, "failed") >= WAIT_MS && spent(inVain.events, 1, "failed") < WAIT_MS + 5000 && /^Provider responded 429: .*\n\nThe task waited 6 seconds for the limit to end, and it did not\.$/.test(vainTasks[0]?.error ?? ""), [spent(inVain.events, 1, "failed"), vainTasks[0]?.error]);
+    check("  the next task with the same limit does not wait a second time", spent(inVain.events, 2, "failed") < 2500 && waits(inVain.events, 2).length === 0 && /^Provider responded 429: [^\n]*$/.test(vainTasks[1]?.error ?? ""), [spent(inVain.events, 2, "failed"), vainTasks[1]?.error]);
+    eq("  the run ends as one to look at, and can be continued", [lastStatus(inVain.events), (await runsOf(vain))[0]?.status], ["review", "review"]);
+
+    begin("Limits: stopping a run that waits");
+    const stopWf = await workflow("Stopped", [{ title: "Stopped while waiting", objective: "One.", role: "Hopefulworker" }, { title: "Never started", objective: "Two.", role: "Steadyworker", dependsOn: [1] }]);
+    const toStop = await project(admin, { title: "Stopped", workflowId: stopWf, managerModelRowId: state.models["lim-e"] });
+    let stoppedAt = 0;
+    let busy = null;
+    let later = null;
+    const cancelled = await runProject(admin, toStop, {
+      onEvent: async (event) => {
+        if (event.type !== "progress" || event.waiting !== true || stoppedAt) return;
+        stoppedAt = Date.now();
+        // A page that connects now follows the run to its end.
+        later = sse(admin, `/api/projects/${toStop}/events`);
+        await sleep(300);
+        busy = await admin.post(`/api/projects/${toStop}/run`, { continue: true });
+        await admin.post(`/api/projects/${toStop}/cancel`);
+      },
+    });
+    const endedAt = cancelled.events.at(-1)?.at ?? 0;
+    const seenLater = ((await later)?.events ?? []).filter((e) => e.type === "task").map((e) => [e.seq, e.status]);
+    eq("a page that connects while a task waits is told of every task: the one at work, and the one that has not started", [seenLater.slice(0, 2), seenLater.at(-1)], [[[1, "running"], [2, "queued"]], [2, "cancelled"]]);
+    eq("a run that waits cannot be continued meanwhile: it is still running", [busy?.status, busy?.code], [409, "run_active"]);
+    check("Cancel ends the wait at once", lastStatus(cancelled.events) === "cancelled" && stoppedAt > 0 && endedAt - stoppedAt < 3000, [lastStatus(cancelled.events), endedAt - stoppedAt]);
+    eq("  the task that waited is cancelled, and so is the one behind it", (await tasksOf(toStop)).map((t) => t.status), ["cancelled", "cancelled"]);
+    await free("lim-e");
+    const resumed = await runProject(admin, toStop, { goOn: true });
+    eq("a run that was stopped is continued like one that failed", [lastStatus(resumed.events), (await tasksOf(toStop)).map((t) => t.status), (await runsOf(toStop)).map((r) => [r.status, r.continued])], ["succeeded", ["succeeded", "succeeded"], [["succeeded", true], ["cancelled", false]]]);
+
+    // Left for the checks in the browser: a run that stopped half way, at a
+    // limit that is over by the time someone looks at the page.
+    await agent("Briefly stuck", "Brieflyworker", { primaryModelRowId: state.models["lim-f"] });
+    const pageWf = await workflow("For the page", [
+      { title: "Done before", objective: "One.", role: "Steadyworker" },
+      { title: "Met a limit", objective: "Two.", role: "Brieflyworker", dependsOn: [1] },
+      { title: "Was behind it", objective: "Three.", role: "Steadyworker", dependsOn: [2] },
+    ]);
+    const forPage = await project(admin, { title: "Stops half way", workflowId: pageWf, managerModelRowId: state.models["lim-f"] });
+    await force("lim-f", `${noCredit}&times=1`);
+    const pageRun = await runProject(admin, forPage);
+    eq("(a project is left half done for the browser checks)", [lastStatus(pageRun.events), (await tasksOf(forPage)).map((t) => t.status)], ["review", ["succeeded", "failed", "blocked"]]);
+    await free("lim-a", "lim-b", "lim-c", "lim-d", "lim-e", "lim-f");
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, visibility, servers, browser };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

@@ -1,5 +1,6 @@
 import type { Capability } from "@/lib/capabilities";
 import { AppError, Errors, sanitizeUpstreamError } from "../errors";
+import { limitHint, quotaViolations, waitWords } from "../provider-limits";
 import type { ImageRequest, ParsedImageResponse } from "./media-protocol";
 import type {
   ChatMessage,
@@ -229,19 +230,64 @@ export function modelsListPath(opts: { pageSize: number; pageToken?: string }): 
 
 // ─── Responses ───────────────────────────────────────────────────────────────
 
+/** The two sentences of a quota message that only say where to read more. */
+const READ_MORE = /\s*(?:For more information on this error|To monitor your current usage), head to: \S+/g;
+
+/**
+ * The message for a quota that is used up (429), in fewer words and with what
+ * it leaves out. Google's own message spends its first three hundred
+ * characters on two addresses to read more at, and names the quota only
+ * after them; how the quota is counted (per day, per minute) is not in the
+ * message at all, only in the details that come with it. So: what it says
+ * first, then each quota with its allowance and how it is counted, then the
+ * wait it asks for. Null when the message is not of that kind.
+ */
+function quotaMessage(message: string, body: string): string | null {
+  const head = message.split(/\s*(?:For more information on this error|To monitor your current usage|\n\s*\*|Please retry in)/)[0]?.trim() ?? "";
+  const wait = limitHint(body).waitMs;
+  const asked = wait === null ? "" : ` Please retry in ${waitWords(wait)}.`;
+  const quotas: string[] = [];
+  for (const violation of quotaViolations(body)) {
+    const line =
+      // In words: a name of forty letters and more is taken for a key, and struck out (errors.ts).
+      violation.metric.replace(/_/g, " ") +
+      (violation.limit === null ? "" : `, limit ${violation.limit}`) +
+      (violation.window ? ` per ${violation.window}` : "") +
+      (violation.model ? `, model ${violation.model}` : "");
+    if (line.trim() && !quotas.includes(line)) quotas.push(line);
+  }
+  if (quotas.length > 0) return `${head || "The quota is used up."} Quota exceeded: ${quotas.join("; ")}.${asked}`;
+  // Without the details: the message itself, without the addresses.
+  const shorter = message
+    .replace(READ_MORE, "")
+    .replace(/generativelanguage\.googleapis\.com\//g, "")
+    .replace(/\s*\n\s*/g, " ")
+    .trim();
+  return shorter && shorter !== message.trim() ? shorter : null;
+}
+
 /** Message for a non-2xx response; prefers the API's own `error.message`. */
 export function upstreamErrorMessage(status: number, body: string, statusText = ""): string {
   let detail = body.trim() || statusText || "Unknown upstream error";
+  let max = 300;
   try {
     const parsed = JSON.parse(body) as unknown;
     // Errors come as { error: { code, message, status } }, at times in a list.
     const first = Array.isArray(parsed) ? parsed[0] : parsed;
     const error = isRecord(first) && isRecord(first.error) ? first.error : null;
-    if (error && typeof error.message === "string" && error.message) detail = error.message;
+    if (error && typeof error.message === "string" && error.message) {
+      detail = error.message;
+      const quota = status === 429 ? quotaMessage(error.message, body) : null;
+      if (quota) {
+        detail = quota;
+        // Three quotas at once are named in full.
+        max = 500;
+      }
+    }
   } catch {
     /* not JSON: keep the raw body */
   }
-  return `Provider responded ${status}: ${sanitizeUpstreamError(detail)}`;
+  return `Provider responded ${status}: ${sanitizeUpstreamError(detail, max)}`;
 }
 
 function parseUsage(meta: unknown): ChatUsage | undefined {

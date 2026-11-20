@@ -15,14 +15,18 @@ export const GET = v1("projects", (_req, { params, caller }) => {
 
 /**
  * Start a run of a project. The body is optional: { "input": "an extra
- * instruction for this run" }. Answers at once: 202 with the run `queued`;
- * GET /api/v1/runs/{id} says how it went. 409 when the project is already
- * running. A run that cannot start is answered with 200 and its status
- * (`failed`, with the reason, or `needs_approval`).
+ * instruction for this run", "continue": true }. With `continue` the run
+ * goes on with the tasks of the last run: the ones that succeeded are kept
+ * with their output, the others are done again. Answers at once: 202 with
+ * the run `queued`; GET /api/v1/runs/{id} says how it went. 409 when the
+ * project is already running, or when there is nothing to continue. A run
+ * that cannot start is answered with 200 and its status (`failed`, with the
+ * reason, or `needs_approval`).
  */
 export const POST = v1("projects", async (req, { params, caller }) => {
   const project = loadOperableProject(params.id!, caller.user);
   let input: string | undefined;
+  let continueLast = false;
   const body = await readOptionalJsonBody(req);
   if (body !== undefined) {
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
@@ -36,12 +40,18 @@ export const POST = v1("projects", async (req, { params, caller }) => {
       }
       input = value;
     }
+    const goOn = (body as { continue?: unknown }).continue;
+    if (goOn !== undefined && goOn !== null) {
+      if (typeof goOn !== "boolean") throw new RequestError("continue must be true or false", "continue");
+      continueLast = goOn;
+    }
   }
   const result = startRun(project, {
     trigger: "api",
     requestedBy: caller.user.id,
     apiKeyId: caller.key.id,
     input,
+    continueLast,
   });
   return NextResponse.json(
     { ...runJson(result.run, caller.user.role), message: result.message ?? null },

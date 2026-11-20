@@ -46,14 +46,26 @@ const controlPort = Number(process.argv[3] ?? 4013);
 const home = mkdtempSync(join(tmpdir(), "xiero-mock-ssh-"));
 const PASSPHRASE = "mock-key-passphrase";
 
+/**
+ * A new ed25519 key pair. About one in two hundred of the keys that ssh2
+ * makes is one that ssh2 itself cannot read ("Malformed OpenSSH private
+ * key"), and this server would not start with it: such a key is thrown away.
+ */
+function keyPair(options) {
+  for (;;) {
+    const pair = utils.generateKeyPairSync("ed25519", options);
+    if (!(utils.parseKey(pair.private, options?.passphrase) instanceof Error)) return pair;
+  }
+}
+
 /** The keys of the account "deploy": one without a passphrase and one with. */
-const plainKey = utils.generateKeyPairSync("ed25519");
-const sealedKey = utils.generateKeyPairSync("ed25519", { passphrase: PASSPHRASE, cipher: "aes256-ctr" });
+const plainKey = keyPair();
+const sealedKey = keyPair({ passphrase: PASSPHRASE, cipher: "aes256-ctr" });
 const accepted = [utils.parseKey(plainKey.public), utils.parseKey(sealedKey.public)];
 
 const state = {
   password: "mock-ssh-password",
-  hostKey: utils.generateKeyPairSync("ed25519"),
+  hostKey: keyPair(),
   /** Connections that got as far as the SSH handshake, ever. */
   connections: 0,
   /** Sign-ins that were accepted, and refused. */
@@ -263,7 +275,7 @@ const control = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, cut });
     }
     case "/__rekey":
-      state.hostKey = utils.generateKeyPairSync("ed25519");
+      state.hostKey = keyPair();
       ssh = new Server({ hostKeys: [state.hostKey.private] }, serve);
       for (const socket of sockets) socket.destroy();
       return send(res, 200, { ok: true, hostKey: publicLine(state.hostKey), fingerprint: fingerprint(state.hostKey) });

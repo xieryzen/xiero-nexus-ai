@@ -1,5 +1,6 @@
 import "server-only";
 import { AppError, sanitizeUpstreamError } from "../errors";
+import { upstreamError } from "../upstream";
 import { providerFetch } from "../http-client";
 import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, pcmFormatFromMime } from "../media/files";
 import { readBodyCapped } from "../media/http";
@@ -60,11 +61,10 @@ async function readError(res: Response): Promise<never> {
   } catch {
     /* ignore */
   }
-  throw new AppError(
-    502,
-    "upstream_error",
-    `Provider responded ${res.status}: ${sanitizeUpstreamError(detail || res.statusText)}`,
-  );
+  throw upstreamError(res.status, `Provider responded ${res.status}: ${sanitizeUpstreamError(detail || res.statusText)}`, {
+    body: detail,
+    retryAfter: res.headers.get("retry-after"),
+  });
 }
 
 /** Largest answer accepted for a chat completion or a model list. */

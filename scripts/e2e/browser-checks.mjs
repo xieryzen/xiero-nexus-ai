@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const APP = process.env.E2E_APP_URL ?? "http://127.0.0.1:3100";
+const MOCK = process.env.E2E_MOCK_URL ?? "http://127.0.0.1:4010";
 const MODULES = process.env.BROWSER_MODULES;
 const SHOTS = process.env.SHOTS;
 const HAS_FFMPEG = process.env.E2E_FFMPEG === "1";
@@ -149,6 +150,22 @@ async function clickText(pattern, { within = "main", tag = "button, a, [role=tab
     flags,
   );
   return clicked;
+}
+
+/** Whether the page's content has a button (or link, or tab) with that text that can be clicked. */
+async function clickableText(pattern, { within = "main", tag = "button, a, [role=tab]" } = {}) {
+  return page.evaluate(
+    (scope, selector, src, fl) => {
+      const root = document.querySelector(scope);
+      if (!root) return false;
+      const re = new RegExp(src, fl);
+      return [...root.querySelectorAll(selector)].some((e) => re.test(e.textContent ?? "") && !e.disabled && e.offsetParent !== null);
+    },
+    within,
+    tag,
+    pattern.source,
+    pattern.flags,
+  );
 }
 
 /** Replace what a field holds. */
@@ -357,6 +374,49 @@ try {
     const heldTo = await page.$eval("#project-tokens", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
     check("  with what its tasks used, and that an owner's run is held to no number of tokens", /^· [1-9][\d,]* tokens used by the tasks · no token limit · max \d+× parallel$/.test(heldTo ?? ""), heldTo);
     await snap("project-run");
+  }
+
+  // ─── A run that stopped at a limit ─────────────────────────────────────────
+  begin("Browser: a run that stopped half way is continued");
+  // Left by the checks before: one task done, one that failed at its model's
+  // quota, one behind it that was not started.
+  const halfProject = projects.find((p) => p.title === "Stops half way");
+  if (halfProject) {
+    const tasksNow = async () => (await api(`/api/projects/${halfProject.id}`)).data?.project?.tasks ?? [];
+    const before = await tasksNow();
+    await open(`/dashboard/projects/${halfProject.id}`);
+    const buttons = await page.$$eval("main header button, main button", (list) => list.map((b) => b.textContent.trim()).filter((t) => /^(Continue|Re-run|Run)$/.test(t)));
+    eq("the page offers to continue, and to run again", [...new Set(buttons)], ["Continue", "Re-run"]);
+    const note = await page.$eval('[data-testid="continue-note"]', (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+    eq(
+      "  and says what each of the two does, and what to do about a limit",
+      note,
+      "1 of 3 tasks is done. Continue does the 2 that are left and keeps what is done; Re-run plans anew and does everything again. A task that stopped at a limit of its model can be continued when the limit is over, or after its agent was given another model.",
+    );
+    check("  the task that failed says what its provider said", await has("Provider responded 429: You exceeded your current quota, please check your plan and billing details."), null);
+    await snap("project-continue");
+
+    // Its model says "too many requests" the next five times: the task waits, in sight, and is done.
+    await fetch(`${MOCK}/__force?model=lim-f&status=429&times=5`);
+    await page.click('[data-testid="continue-run"]');
+    const waitsCard = await page.waitForSelector('[data-testid="task-waits-limit"]', { timeout: 15_000 }).catch(() => null);
+    const waitsSays = waitsCard ? await waitsCard.evaluate((el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null) : null;
+    check(
+      "continued, the task whose model is limited waits, and its card says so",
+      /^Its model says "not now" \(limited, or busy\)\. Asking it again in \d+ seconds?\. Cancel ends the wait; Continue takes the run up again later\.$/.test(waitsSays ?? ""),
+      waitsSays,
+    );
+    await snap("project-waits-limit");
+    check("  the task that was done is still done while the others are worked on", (await tasksNow())[0]?.status === "succeeded" && (await has("Cancel")), (await tasksNow()).map((t) => t.status));
+    const result = await waitText("Final deliverable", 60_000);
+    const after = await tasksNow();
+    eq("  the limit over, the run ends with every task done, without a reload", [result, after.map((t) => t.status)], [true, ["succeeded", "succeeded", "succeeded"]]);
+    eq("  the task that was done before was not done again", [after[0]?.id, after[0]?.artifact], [before[0]?.id, before[0]?.artifact]);
+    check("  nothing is left to continue: the page offers to run again only", (await page.$('[data-testid="continue-run"]')) === null && (await page.$('[data-testid="continue-note"]')) === null && (await clickableText(/^\s*Re-run\s*$/)), null);
+    check("  the list of runs says which one continued the one before it", await waitText("continued the run before it", 10_000), null);
+    await snap("project-continued");
+  } else {
+    check("the project that stopped half way exists (run the full checks first)", false);
   }
 
   // ─── Creative Studio ───────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import "server-only";
 import { AppError } from "../errors";
+import { upstreamError } from "../upstream";
 import { providerFetch } from "../http-client";
 import { MAX_AUDIO_BYTES, MAX_IMAGE_BYTES, pcmFormatFromMime } from "../media/files";
 import { readBodyCapped } from "../media/http";
@@ -54,7 +55,10 @@ async function readError(res: Response): Promise<never> {
   } catch {
     /* ignore */
   }
-  throw new AppError(502, "upstream_error", upstreamErrorMessage(res.status, body, res.statusText));
+  throw upstreamError(res.status, upstreamErrorMessage(res.status, body, res.statusText), {
+    body,
+    retryAfter: res.headers.get("retry-after"),
+  });
 }
 
 async function readJson(res: Response, maxBytes = JSON_MAX_BYTES): Promise<unknown> {
