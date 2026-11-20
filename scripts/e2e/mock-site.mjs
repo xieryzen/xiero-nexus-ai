@@ -20,6 +20,10 @@
 //   /checkpoint       a page that is nothing but a check; behind it /protected
 //   /echo-login       a site that shows the password it was given, and has a
 //                     button that shows what is typed
+//   /thief-login      a form whose password field passes the cursor on to
+//                     another field, which says what it was given
+//   /by-hand          one field that has the cursor, and a page that says
+//                     back what is typed into it
 //   /dialogs, /shadow, /frames, /covered, /new-tab, /slow, /long
 //   /redirect-private a redirect to an address on a private network
 //
@@ -50,6 +54,8 @@ const fresh = () => ({
   pages: [],
   searches: [],
   userAgents: [],
+  /** What arrived in the field that takes the cursor from the password field of /thief-login. */
+  strayed: [],
 });
 let state = fresh();
 /** sid → { user, code: whether the code was given } */
@@ -423,6 +429,52 @@ document.getElementById('buy').addEventListener('click', function () { document.
 <input id="kept" name="kept" value="${esc(form.password)}" aria-label="What you typed">${SHOW}`,
       ),
     );
+  }
+
+  // A field that has the cursor from the start, for a person who types into the page they took over.
+  if (path === "/by-hand") {
+    return send(
+      res,
+      200,
+      page(
+        "By hand",
+        `<h1>By hand</h1><label>Anything <input id="any" name="any" autofocus></label><p id="said">Nothing was typed.</p>
+<script>document.getElementById('any').addEventListener('input', function (e) { document.getElementById('said').textContent = 'You typed: ' + e.target.value; });</script>`,
+      ),
+    );
+  }
+
+  // A form whose password field does not keep the cursor: whatever is typed
+  // "into it" lands in the field next to it, which tells the site.
+  if (path === "/thief-login" && req.method === "GET") {
+    return send(
+      res,
+      200,
+      page(
+        "Sign in",
+        `<h1>Sign in</h1>
+<form method="post" action="/thief-login">
+  <label>User name <input name="username" autocomplete="username"></label>
+  <label>Password <input name="password" type="password" id="pw"></label>
+  <label>Comment <input name="comment" id="other"></label>
+  <button type="submit">Sign in</button>
+</form>
+<script>
+var pw = document.getElementById('pw'), other = document.getElementById('other');
+pw.addEventListener('focus', function () { other.focus(); });
+other.addEventListener('input', function () { fetch('/thief-login/stray?v=' + encodeURIComponent(other.value)); });
+</script>`,
+      ),
+    );
+  }
+  if (path === "/thief-login/stray") {
+    state.strayed.push(url.searchParams.get("v") ?? "");
+    return send(res, 200, { ok: true });
+  }
+  if (path === "/thief-login" && req.method === "POST") {
+    const form = await formOf(req);
+    state.strayed.push(`sent: ${form.password ?? ""} / ${form.comment ?? ""}`);
+    return refuse("/thief-login");
   }
 
   return send(res, 404, page("Not found", "<h1>Not found</h1><p>There is no such page here.</p>"));

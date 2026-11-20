@@ -5,132 +5,73 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
-## [Unreleased]
+## [1.8.0] - 2026-11-20
 
-Changes to the host scripts since 1.8.0-rc.5. They are not part of a release
-bundle: the Deploy workflow runs the ones of the branch it is started on.
-
-### Fixed
-
-- `browser-service.sh` could not build the image on a node whose Docker
-  default network does not reach Debian's package servers, while the node
-  itself and the containers on the server's network do: the build ended
-  after eleven minutes with "Unable to locate package chromium". The
-  script now asks first, with the image the build starts from, and builds on
-  the machine's own network where only that gets there;
-  `--build-network host` or `default` says it outright. A list of packages
-  that cannot be fetched ends the build at once, with the reason, and what
-  the package tool said first is shown before the end of the build's output.
-- `browser-service.sh` said of a service that works that it "did not take
-  its own token": it read the first 200 characters of the answer, and a real
-  Chromium says more than that about itself before the gate's part.
-- `over-ssh.sh --help` ended in the middle of the settings, before
-  `DEPLOY_ENV` and the script's own exit codes: it printed the description
-  at the top of the script up to a line number, and the description had
-  grown past it. It prints the description to its end now.
+Five things. The app checks by itself that its models answer, and offers the
+ones that do. Every account has a number of tokens it may use, which an
+owner sets. A user is shown their own work and nothing of how the
+installation is set up: the app chooses the models a user works with. Agents
+work on servers an owner registered, over SSH, on one connection that stays
+open until the run has ended. And agents work in a web browser: they sign in
+with accounts an owner saved, and leave to a person what a site checks of a
+person. Five candidates of this release ran on one real server. What was put
+right since the last of them is under Fixed; what was seen on that server,
+and what was not, is under Notes.
 
 ### Added
 
-- The browser's container looks names up at the DNS servers Wings gave the
-  server's container (else the ones of the Wings configuration, else as
-  Docker does), and the plan says which.
-- `browser-service.sh` checks two more things before it touches the server:
-  that the service's container reaches the outside (a name looked up, a
-  connection made), and that its Chromium opens a page
-  (`https://example.com/`, through the gate; `--skip-page-test` leaves it
-  out).
-- `last-log` shows an earlier run of the node: `--list` names the runs that
-  are kept and how each ended, `--back <n>` shows the run that many before
-  the last. For a run whose output was sealed for a key that is gone, after
-  other runs came in between.
-- CI runs `browser-service.sh` itself with a real Docker, on a made-up
-  server: it builds, starts the container as on a node, and asks a real
-  Chromium behind the real gate. The test on a made-up host asks the
-  questions the script asks with Node for real, of a stand-in that answers
-  at the length a Chromium does.
+Models that answer:
 
-## [1.8.0-rc.5] - 2026-11-19
+- **Models are checked automatically.** The background worker asks every chat
+  model that is switched on for one word: soon after the model is added, then
+  every six hours (`MODEL_HEALTH_INTERVAL_MINUTES`; `0` switches it off). It
+  is the check the Test button of the Models page makes.
+- **A model that fails its check is left out**: of the model lists of chats,
+  projects, agents and settings, of the list of the public API
+  (`GET /api/v1/models`) and of the automatic choice of the cheapest model.
+  When a check passes again it is back. Nothing is switched off or deleted:
+  the Models page shows the model as "left out of the lists", with what its
+  provider said.
+- A failing model is asked again after 15 minutes, then after twice as long
+  each time, up to the interval, so that a model whose limit has passed comes
+  back soon and one without credit is not asked all day. A model that worked
+  and is limited or busy for a moment is asked once more after 20 seconds
+  before it is taken away.
+- **Check all now** on the Models page, and `GET` / `POST /api/models/health`
+  for administrators: how the check is set, what the last round found, and a
+  round on demand (all models, or the ones named).
+- The audit log says when the check took a model away
+  (`model.health.hidden`) and when it gave one back (`model.health.restored`).
 
-The fifth candidate for 1.8: agents work in a web browser, sign in with the
-accounts you saved, and leave to you what a site checks of a person.
+Tokens of an account:
 
-### Added
+- **A token limit for every account.** A new account may use 10,000,000
+  tokens in all (`DEFAULT_TOKEN_LIMIT`), whether it registers or an owner
+  makes it. What its work uses is counted against that: chat, the runs of its
+  projects with every task in them, images, videos, voice-overs, the
+  knowledge base, and the public API with its keys. Nothing is given back by
+  the calendar: there is more when an owner raises the limit.
+- **An owner sets the limit** of each account under **Users & Roles**, which
+  shows every account with what it used and may use, and when making an
+  account. An administrator sees the numbers and changes none. An owner is
+  not held to a limit; what an owner uses is counted all the same.
+- **With no tokens left, new work is refused** with 402 `token_limit_reached`
+  and a sentence that says how much was used, of how much, and who can change
+  that. Nothing is asked of a provider. **A run in progress stops:** the
+  tasks that have not started are not started and say why, nothing more is
+  asked of a model, and the run ends "for a look" with what its finished
+  tasks made. A run of a project spends the tokens of the account the project
+  belongs to, whoever starts it.
+- The account is told in its notifications the moment its last tokens go.
+  Everyone sees their own tokens under **Settings** and, in short, next to
+  their name on every page; an account with none left is told on every page.
+- `tokenLimit`, `tokensUsed` and `tokensLeft` in the answers about accounts
+  (`GET /api/account/me`, `GET /api/admin/users`); `tokenLimit` in
+  `POST /api/admin/users` and `PATCH /api/admin/users/{id}` (owners). The
+  audit log has every change of a limit, from what to what, and each time an
+  account used its last tokens (`account.tokens.used_up`).
 
-- **A browser for agents.** An agent that has the new tool **Work in a
-  browser** opens web pages, reads them, clicks, types, chooses from lists,
-  and reads each page as text with everything it can act on numbered. It
-  works in a real Chromium that runs apart from the app (the browser
-  service, `BROWSER_URL`), in the projects of owners and administrators.
-- **Signing in with a saved account.** On the new **Browser** page an owner
-  saves site accounts: the page where one signs in, the user name and the
-  password. A project names the accounts it works with (up to 5). The app
-  finds the form, types the password and sends it; an agent is never shown
-  the password, also not when a page shows it, and it is typed only on the
-  account's own site.
-- **A CAPTCHA or a code is a person's.** The app does not solve one and
-  does not get around one. When a sign-in form has a CAPTCHA, when a site
-  asks for a code it sent, when a page is nothing but a check, or when the
-  agent asks, the task waits: you are told, open the page in the app, act on
-  it there (a click on the picture is a click on the page, what you type is
-  typed there), and hand it back. The agent goes on from where you left it.
-  A page waits 15 minutes (`BROWSER_WAIT_MINUTES`); then the agent is told
-  that nobody came.
-- **The session is kept.** What a sign-in leaves behind is stored,
-  encrypted, with the account: the next run, of any project that names it,
-  is let in without signing in again. An owner can **sign in by hand** on
-  the Browser page, ahead of the agents, and drop a session.
-- **Every action is logged**: the page, what was clicked, typed and chosen,
-  every sign-in, and every time a person took a page over, with the project,
-  task, agent and account. What goes into a password field is never
-  written down. The Browser page shows the log.
-- **The browser service** (`scripts/host/browser`): a Chromium behind a
-  gate that lets in only who has its token, and refuses private networks
-  for everything a page loads. `scripts/host/browser-service.sh` sets it up
-  next to a Pterodactyl server (a container on the server's network, with a
-  limit on memory, nothing published); the Deploy workflow has the actions
-  `browser-plan` and `browser`.
-- The AI Manager is told which agents can work in a browser and which site
-  accounts a project has; the project's page says which of its agents can
-  sign in, and warns when none can or when there is no browser service.
-- A task that starts over is told what it already did in the browser, and
-  that a form that was sent stays sent.
-- `GET /api/browser`, `GET` and `POST /api/browser/accounts`, `PATCH` and
-  `DELETE /api/browser/accounts/{id}`, `POST` and
-  `DELETE /api/browser/accounts/{id}/session`, `GET /api/browser/live/{id}`
-  with `/screen` and `/input`, `GET /api/browser/actions`;
-  `siteAccountIds` on a project.
-- CI drives a real Chrome through the gate in the end-to-end checks, builds
-  the image of the browser service and runs the same checks against it in
-  its container.
-
-### Changed
-
-- A model that works through many steps with one tool that shows the same
-  thing each time (a page in a browser) is sent the newest answer whole and
-  the older ones in a line: what it reads does not grow with every step.
-- `pterodactyl-upgrade.sh` shows a setting that signs in somewhere (a key, a
-  token, a token inside an address) without what signs in.
-- A release bundle holds `ws`, which the app speaks to the browser service
-  with.
-
-### Not there
-
-- Solving or passing a CAPTCHA, and anything that hides that the browser is
-  automated: a site puts those checks there to turn automated visitors
-  away.
-- Uploads and downloads of files, pictures of a page for the model, what is
-  inside a frame of another site, sessions of sites that keep the sign-in in
-  the page's storage instead of cookies, and a browser for the projects of
-  users.
-- Tested against a site the tests start on their own machine, with a real
-  Chromium: not against the sites it will be used on.
-
-## [1.8.0-rc.4] - 2026-11-19
-
-The fourth candidate for 1.8: agents work on your servers over SSH, on one
-connection that stays open until the work is done.
-
-### Added
+Servers over SSH:
 
 - **Servers over SSH.** An agent that has the new tool **Work on servers**
   runs shell commands on the servers its project names, and reads each
@@ -180,26 +121,88 @@ connection that stays open until the work is done.
 - `GET /api/servers`, `POST /api/servers/host-key`, `POST /api/servers`,
   `PATCH` and `DELETE /api/servers/{id}`, `POST /api/servers/{id}/test`,
   `GET /api/servers/commands`; `serverIds` on a project.
-- The release bundle is started in CI with a machine to sign in to over SSH,
-  and has to run a command there.
 
-### Changed
+The browser:
 
-- A release bundle holds `ssh2`, without its optional compiled parts: it
-  does its work with Node's own crypto, the same on every server.
+- **A browser for agents.** An agent that has the new tool **Work in a
+  browser** opens web pages, reads them, clicks, types, chooses from lists,
+  and reads each page as text with everything it can act on numbered. It
+  works in a real Chromium that runs apart from the app (the browser
+  service, `BROWSER_URL`), in the projects of owners and administrators.
+- **Signing in with a saved account.** On the new **Browser** page an owner
+  saves site accounts: the page where one signs in, the user name and the
+  password. A project names the accounts it works with (up to 5, one of a
+  site). The app finds the form, types the password and sends it. An agent
+  is never shown the password, also not when a page shows it; it is typed
+  only on the account's own site, and only into the password field itself.
+- **A CAPTCHA or a code is a person's.** The app does not solve one and
+  does not get around one. When a sign-in form has a CAPTCHA, when a site
+  asks for a code it sent, when a page is nothing but a check, or when the
+  agent asks, the task waits: you are told, open the page in the app, act on
+  it there (a click on the picture is a click on the page, what you type is
+  typed there), and hand it back. The agent goes on from where you left it.
+  A page waits 15 minutes (`BROWSER_WAIT_MINUTES`); then the agent is told
+  that nobody came.
+- **The session is kept.** What a sign-in leaves behind is stored,
+  encrypted, with the account: the next run, of any project that names it,
+  is let in without signing in again. An owner can **sign in by hand** on
+  the Browser page, ahead of the agents, and drop a session.
+- **Every action is logged**: the page, what was clicked, typed and chosen,
+  every sign-in, and every time a person took a page over, with the project,
+  task, agent and account. What goes into a password field is never
+  written down. The Browser page shows the log.
+- **The browser service** (`scripts/host/browser`): a Chromium behind a
+  gate that lets in only who has its token, and refuses private networks
+  for everything a page loads. `scripts/host/browser-service.sh` sets it up
+  next to a Pterodactyl server (a container on the server's network, with a
+  limit on memory, nothing published); the Deploy workflow has the actions
+  `browser-plan` and `browser`.
+- The AI Manager is told which agents can work in a browser and which site
+  accounts a project has; the project's page says which of its agents can
+  sign in, and warns when none can or when there is no browser service.
+- A task that starts over is told what it already did in the browser, and
+  that a form that was sent stays sent.
+- `GET /api/browser`, `GET` and `POST /api/browser/accounts`, `PATCH` and
+  `DELETE /api/browser/accounts/{id}`, `POST` and
+  `DELETE /api/browser/accounts/{id}/session`, `GET /api/browser/live/{id}`
+  with `/screen` and `/input`, `GET /api/browser/actions`;
+  `siteAccountIds` on a project.
 
-### Not there
+For what a user is shown:
 
-- No file transfer (an agent writes a file with a here-document), no port
-  forwarding, no terminal for programs that need one, and no signing in
-  through another machine.
-- Tested against an SSH server on the machine of the tests, with a password
-  and with a key: not against a real server.
+- `forUsers` on a model (`POST /api/models`, `PATCH /api/models/{id}`), and
+  `users` in `GET /api/models`: what users work with, kind by kind.
+- 503 `not_set_up` when the installation has no model that can do what a
+  user asked for.
 
-## [1.8.0-rc.3] - 2026-11-16
+The host scripts (they are not part of a release bundle: the Deploy workflow
+runs the ones of the branch it is started on):
 
-The third candidate for 1.8: a user is shown their own work, and nothing of
-how the installation is set up. Providers and models are for administrators.
+- `workforce.py --skill-url <address>`: a skill file at an https address is
+  fetched and uploaded as the Skills page does; the address of a file's
+  page at MediaFire is followed to the file. `workforce.sh` also takes the
+  address sealed for the node (`--skill-url-sealed`). A dry run fetches the
+  file and names the skills it holds.
+- The inventory of `workforce.py` says how the app checks its models, what
+  its last round found, and how many models it leaves out of its lists now.
+- The browser's container looks names up at the DNS servers Wings gave the
+  server's container (else the ones of the Wings configuration, else as
+  Docker does), and the plan says which.
+- `browser-service.sh` checks two more things before it touches the server:
+  that the service's container reaches the outside (a name looked up, a
+  connection made), and that its Chromium opens a page
+  (`https://example.com/`, through the gate; `--skip-page-test` leaves it
+  out).
+- `last-log` shows an earlier run of the node: `--list` names the runs that
+  are kept and how each ended, `--back <n>` shows the run that many before
+  the last. For a run whose output was sealed for a key that is gone, after
+  other runs came in between.
+- `check` says how the browser service is: where `BROWSER_URL` of the
+  server's `.env` points, which container is there and whether it runs, how
+  old its image is (its Chromium is as old), and whether the server's
+  container reaches the service and the service takes the token of `.env`.
+  That is asked inside the server's container, where the app asks: the token
+  is not shown, and not handed to a program of the node.
 
 ### Changed
 
@@ -254,22 +257,153 @@ how the installation is set up. Providers and models are for administrators.
   workflows say what they make and which team goes with which workflow, and
   no longer which models a project needs. The workforce action with
   `--update` brings them to an installation that has the older ones.
+- An agent that is set to a model which is not offered (switched off, or
+  failing) shows that model in its form, with the reason, in place of an
+  empty field. Saving the form changes nothing about it.
+- What the app left out of an uploaded skill is said by its reason, with
+  how many files and the first of them by name (host scripts).
+- An image, a video and a voice-over are recorded with the tokens of their
+  prompt where the provider counts none for them, as a chat already was.
+  Usage shows those tokens.
+- A model that works through many steps with one tool that shows the same
+  thing each time (a page in a browser) is sent the newest answer whole and
+  the older ones in a line: what it reads does not grow with every step.
+- `pterodactyl-upgrade.sh` shows a setting that signs in somewhere (a key, a
+  token, a token inside an address) without what signs in.
+- A release bundle holds `ws`, which the app speaks to the browser service
+  with.
+- A release bundle holds `ssh2`, without its optional compiled parts: it
+  does its work with Node's own crypto, the same on every server.
 
-### Added
+### Fixed
 
-- `forUsers` on a model (`POST /api/models`, `PATCH /api/models/{id}`), and
-  `users` in `GET /api/models`: what users work with, kind by kind.
-- 503 `not_set_up` when the installation has no model that can do what a
-  user asked for.
+Since the fifth candidate, in the browser. None of it was in a release that
+is not a candidate.
 
-### As it was
+- **A password that a page shows was not hidden in every form the page is
+  read in.** The app takes a password it typed out of what an agent reads.
+  It looked for it letter for letter, while a page is read with its white
+  space drawn together and with `'` for every `"` in the value of a field:
+  a password with a double quote or two spaces in it got through when a
+  page showed it (a button that shows what is typed, an error that says it
+  back). And a long page is read in pieces: the password was taken out of
+  each piece, so a piece that began inside it showed the rest of it. A page
+  is now cleared whole, before it is cut, of every form the reading gives a
+  password, and of the form an address holds it in. The log and the notes
+  on the page of a run are cleared the same way. And the passwords of a
+  project's accounts are kept from its agents from the start of a run,
+  whoever types them: also a person who takes a page over and signs in by
+  hand.
+- **A project could name two accounts of one site, and one could then be
+  let in as the other.** A run has one browser. What the sign-in of one
+  account left in it was kept as the session of every account of that site
+  the project named, and a later project that named only the other account
+  was let in with it: as another account, whatever its own was to be. A
+  project names one account of a site now; the form says which account is
+  in the way, and a project that names two does not run and says why. A
+  cookie that two accounts of a run could both call theirs (two sites under
+  one domain, and a cookie for that domain) is kept for neither. **The
+  sessions that were kept so far are dropped once, at the upgrade**: nothing
+  says which of them are another account's, so each account signs in anew.
+- **A session of a sign-in that an account no longer has is not kept.** A
+  run keeps the sessions of its accounts when a page is handed back to it
+  and a moment after it has ended. An owner who changes an account (another
+  user name, another site, a new password) drops the session that was kept.
+  A run that was at work during the change, or had only just ended, then
+  kept what its browser still held: the session of the old sign-in, as the
+  session of the account as it is now. A session is kept only when the
+  account still signs in as it did when the run's browser was given it. The
+  same holds for a sign-in an owner does by hand.
+- **A password is typed into the password field, or not at all.** The app
+  put the cursor into the password field and typed. A field that passes the
+  cursor on (to the field next to it, to a keyboard of the site's own) had
+  the password typed into whatever held the cursor then: on the site of the
+  tests into a field for a comment, which was sent with it. The app now
+  looks where the cursor is before it types a password. Where it is not in
+  the password field, nothing is typed, the agent is told so, and an owner
+  can sign in by hand.
 
-- Only an owner changes a role or a token limit. An administrator sees the
-  accounts and their tokens, and is answered 403 when changing one. That is
-  how 1.7 and the second candidate already worked; this candidate adds checks
-  that hold it.
+In the host scripts, on the first real node:
 
-### Not hidden
+- `browser-service.sh` could not build the image on a node whose Docker
+  default network does not reach Debian's package servers, while the node
+  itself and the containers on the server's network do: the build ended
+  after eleven minutes with "Unable to locate package chromium". The
+  script now asks first, with the image the build starts from, and builds on
+  the machine's own network where only that gets there;
+  `--build-network host` or `default` says it outright. A list of packages
+  that cannot be fetched ends the build at once, with the reason, and what
+  the package tool said first is shown before the end of the build's output.
+- `browser-service.sh` said of a service that works that it "did not take
+  its own token": it read the first 200 characters of the answer, and a real
+  Chromium says more than that about itself before the gate's part.
+- `over-ssh.sh --help` ended in the middle of the settings, before
+  `DEPLOY_ENV` and the script's own exit codes: it printed the description
+  at the top of the script up to a line number, and the description had
+  grown past it. It prints the description to its end now.
+
+### Notes
+
+- **On the real server.** The upgrades from 1.7.0 through the five
+  candidates, each by the upgrade action with its backup; after each the
+  app answered at its port and at its public address. The browser service
+  was set up there by the `browser` action: the image built on the node, a
+  container on the server's network with nothing published, a Chromium
+  behind the gate that opened a page of the web, and the server's container
+  reaching it.
+- **Not seen there: what the five parts do.** Since the first candidate the
+  app on that server no longer takes the password of its first
+  administrator that its `.env` holds, so the host scripts do not sign in
+  to it. A round of the model check, an account without tokens, a user's
+  pages, a command on a server and a page in the browser were therefore not
+  looked at there.
+- **What they were tested against.** Mock providers; an SSH server on the
+  machine of the tests, with a password and with a key; and a web site the
+  tests start on their own machine, in a real Chromium behind the real
+  gate. Not a real provider, not a real server, not the sites the browser
+  will be used on. CI also starts the release bundle with a machine to sign
+  in to over SSH, builds the image of the browser service, runs
+  `browser-service.sh` itself with a real Docker on a made-up server, and
+  runs the checks of the browser against the service in its container.
+- Three of the four faults of the browser under Fixed were found by reading
+  the code of the fifth candidate, not by a test and not on the server. The
+  fourth, the session of a sign-in an account no longer has, showed once in
+  CI: a check that changes an account right after a run found the session
+  back. The checks have a password with quotes and spaces, a page read from
+  its middle, a password a person types by hand, a form that passes the
+  cursor on, projects with two accounts of one site, and an account that is
+  changed while a run works with it since; each of them fails against the
+  fifth candidate.
+- Only an owner changes a role or a token limit, as in 1.7: an
+  administrator sees the accounts and their tokens, and is answered 403
+  when changing one. Checks hold that now.
+- **Who sees a password of a site account.** An agent never does. A person
+  who takes a page over sees what the site shows: where a site has a button
+  that shows what is typed, a form the app filled in shows the password to
+  that person. An owner knows it anyway; an administrator takes over the
+  pages of their own projects, so open to administrators only the accounts
+  whose password they may know. A password shorter than four characters is
+  not taken out of what an agent reads when a page shows it.
+
+What the check of models leaves alone:
+
+- Image, video, speech and embedding models are not checked: a check would
+  generate, and bill, a picture, a clip or a recording each time. They stay
+  in the lists as before.
+- An agent that is set to a failing model still asks it first, then its
+  fallback: what an administrator chose by name is not overruled.
+
+Tokens, what is not counted and what is not exact:
+
+- A check of a model, by the worker or by an administrator, is counted for
+  nobody. A request that the provider failed is not counted.
+- The request in progress when the last tokens go is finished and counted in
+  full, so an account can end somewhat above its limit; tasks of a run that
+  work side by side can each use what was left.
+- An image or a video costs its prompt in tokens, which is little: a limit in
+  tokens does not hold media back the way it holds chat and runs back.
+
+What is not hidden from a user:
 
 - What a model wrote is the user's own work and is shown as it is, also when
   a model names itself in it.
@@ -281,120 +415,49 @@ how the installation is set up. Providers and models are for administrators.
   delivered. What a task was told is not on the pages, and for a project that
   runs a workflow it is not in the API either.
 
-## [1.8.0-rc.2] - 2026-11-16
+Not there, for servers:
 
-The second candidate for 1.8: every account has a number of tokens it may
-use, and an owner sets it.
+- No file transfer (an agent writes a file with a here-document), no port
+  forwarding, no terminal for programs that need one, and no signing in
+  through another machine.
 
-### Added
+Not there, for the browser:
 
-- **A token limit for every account.** A new account may use 10,000,000
-  tokens in all (`DEFAULT_TOKEN_LIMIT`), whether it registers or an owner
-  makes it. What its work uses is counted against that: chat, the runs of its
-  projects with every task in them, images, videos, voice-overs, the
-  knowledge base, and the public API with its keys. Nothing is given back by
-  the calendar: there is more when an owner raises the limit.
-- **An owner sets the limit** of each account under **Users & Roles**, which
-  shows every account with what it used and may use, and when making an
-  account. An administrator sees the numbers and changes none. An owner is
-  not held to a limit; what an owner uses is counted all the same.
-- **With no tokens left, new work is refused** with 402 `token_limit_reached`
-  and a sentence that says how much was used, of how much, and who can change
-  that. Nothing is asked of a provider. **A run in progress stops:** the
-  tasks that have not started are not started and say why, nothing more is
-  asked of a model, and the run ends "for a look" with what its finished
-  tasks made. A run of a project spends the tokens of the account the project
-  belongs to, whoever starts it.
-- The account is told in its notifications the moment its last tokens go.
-  Everyone sees their own tokens under **Settings** and, in short, next to
-  their name on every page; an account with none left is told on every page.
-- `tokenLimit`, `tokensUsed` and `tokensLeft` in the answers about accounts
-  (`GET /api/account/me`, `GET /api/admin/users`); `tokenLimit` in
-  `POST /api/admin/users` and `PATCH /api/admin/users/{id}` (owners). The
-  audit log has every change of a limit, from what to what, and each time an
-  account used its last tokens (`account.tokens.used_up`).
-- The inventory of `workforce.py` says how the app checks its models, what
-  its last round found, and how many models it leaves out of its lists now.
-  (The host scripts are not part of a release bundle: the Deploy workflow
-  runs the ones of the branch it is started on.)
+- Solving or passing a CAPTCHA, and anything that hides that the browser is
+  automated: a site puts those checks there to turn automated visitors
+  away.
+- Uploads and downloads of files, pictures of a page for the model, what is
+  inside a frame of another site, sessions of sites that keep the sign-in in
+  the page's storage instead of cookies, two accounts of one site in one
+  project (a run has one browser, which is signed in to a site as one
+  account at a time), and a browser for the projects of users.
 
-### Changed
+### Upgrading
 
-- An image, a video and a voice-over are recorded with the tokens of their
-  prompt where the provider counts none for them, as a chat already was.
-  Usage shows those tokens.
-
-### Not counted, and not exact
-
-- A check of a model, by the worker or by an administrator, is counted for
-  nobody. A request that the provider failed is not counted.
-- The request in progress when the last tokens go is finished and counted in
-  full, so an account can end somewhat above its limit; tasks of a run that
-  work side by side can each use what was left.
-- An image or a video costs its prompt in tokens, which is little: a limit in
-  tokens does not hold media back the way it holds chat and runs back.
-
-### Upgrade notes
-
-- At its first start this version adds two columns to the database. Every
-  account that is there gets a limit of 10,000,000 tokens and starts at 0
-  used: what it used before the upgrade is not counted against it.
-- The account the host scripts sign in with spends its own tokens on
-  `--test` and `--try-run`, unless it is an owner.
-
-## [1.8.0-rc.1] - 2026-11-16
-
-The first candidate for 1.8: the app checks by itself that its models answer,
-and offers only the ones that do. More of 1.8 follows in further candidates.
-
-### Added
-
-- **Models are checked automatically.** The background worker asks every chat
-  model that is switched on for one word: soon after the model is added, then
-  every six hours (`MODEL_HEALTH_INTERVAL_MINUTES`; `0` switches it off). It
-  is the check the Test button of the Models page makes.
-- **A model that fails its check is left out**: of the model lists of chats,
-  projects, agents and settings, of the list of the public API
-  (`GET /api/v1/models`) and of the automatic choice of the cheapest model.
-  When a check passes again it is back. Nothing is switched off or deleted:
-  the Models page shows the model as "left out of the lists", with what its
-  provider said.
-- A failing model is asked again after 15 minutes, then after twice as long
-  each time, up to the interval, so that a model whose limit has passed comes
-  back soon and one without credit is not asked all day. A model that worked
-  and is limited or busy for a moment is asked once more after 20 seconds
-  before it is taken away.
-- **Check all now** on the Models page, and `GET` / `POST /api/models/health`
-  for administrators: how the check is set, what the last round found, and a
-  round on demand (all models, or the ones named).
-- The audit log says when the check took a model away
-  (`model.health.hidden`) and when it gave one back (`model.health.restored`).
-- `workforce.py --skill-url <address>`: a skill file at an https address is
-  fetched and uploaded as the Skills page does; the address of a file's
-  page at MediaFire is followed to the file. `workforce.sh` also takes the
-  address sealed for the node (`--skill-url-sealed`). A dry run fetches the
-  file and names the skills it holds.
-
-### Changed
-
-- An agent that is set to a model which is not offered (switched off, or
-  failing) shows that model in its form, with the reason, in place of an
-  empty field. Saving the form changes nothing about it.
-- What the app left out of an uploaded skill is said by its reason, with
-  how many files and the first of them by name (host scripts).
-
-### Not in it
-
-- Image, video, speech and embedding models are not checked: a check would
-  generate, and bill, a picture, a clip or a recording each time. They stay
-  in the lists as before.
-- An agent that is set to a failing model still asks it first, then its
-  fallback: what an administrator chose by name is not overruled.
-
-### Database
-
-- One column, `models.check_failures`, added at the first start
-  (`drizzle/0009_model_health.sql`).
+- Nothing has to be configured. At its first start 1.8 brings the database
+  up to date: one column for the check of models
+  (`drizzle/0009_model_health.sql`), two for the tokens of an account, one
+  for the models that are for users, and the tables of the servers and of
+  the browser. What each part asks of you is in RELEASING.md, "From 1.7 to
+  1.8".
+- Every account that is there gets a limit of 10,000,000 tokens and starts
+  at 0 used: what it used before the upgrade is not counted against it. An
+  owner is not limited. The account the host scripts sign in with spends
+  its own tokens on `--test` and `--try-run`, unless it is an owner.
+- **Mark the models that are for users** on the Models page. Until then the
+  app takes the cheapest model of each kind that is switched on.
+- An API client with a user's key sends `"model": "auto"`.
+- Servers and the browser are off until an owner registers a server, and
+  until there is a browser service (`BROWSER_URL`; on a Pterodactyl node
+  the Deploy workflow's action `browser`).
+- **From a candidate with the browser (1.8.0-rc.5):** the sessions that
+  were kept for site accounts are dropped at the first start
+  (`drizzle/0014_site_sessions_anew.sql`), and every account signs in anew
+  with its next run: a CAPTCHA or a code that a kept session spared is asked
+  for once more. A project that names two accounts of one site does not run
+  until it names one of them.
+- Going back to 1.7 needs nothing: 1.7 does not read the new columns and
+  tables.
 
 ## [1.7.0] - 2026-11-16
 

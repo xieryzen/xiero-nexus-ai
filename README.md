@@ -760,7 +760,9 @@ turn automated visitors away. What the app does instead:
 - **The session is kept, so you are not asked often.** What a sign-in leaves
   behind (the site's cookies) is kept, encrypted, with the account. The next
   run, of this project or another one, is let in without signing in again:
-  no form, no CAPTCHA, no code, until the site ends the session.
+  no form, no CAPTCHA, no code, until the site ends the session. A new
+  password, another user name or another site drops it; a run that was at
+  work with the account as it was does not bring it back.
 - **Sign in by hand, once.** On the **Browser** page an owner opens the site
   of an account in the same browser: the app fills in the form, you do what
   the site asks of a person, and keep the session. Agents then find the site
@@ -775,14 +777,28 @@ How signing in works:
   "sign in with `shop-admin`", and the app finds the form, fills it in and
   sends it. The password is typed only on the account's own site (the host
   of its address and what is under it), never on a plain-http page of a
-  site that was saved with https. No answer of the tool holds it: if a page
-  shows it (a "show password" button, an error that repeats it), the agent
-  reads `[hidden]` in its place. An agent presses no key that copies or
-  pastes.
+  site that was saved with https, and only into the password field itself
+  with the cursor in it: where a page passes the cursor on to something
+  else, nothing is typed, the agent is told, and an owner signs in by hand.
+  No answer of the tool holds the password: if a page shows it (a "show
+  password" button, an error that repeats it), the agent reads `[hidden]`
+  in its place, in whatever form the page is read (with its white space
+  drawn together, as the value of a field, inside an address), from
+  wherever in a long page the agent reads on, and whoever typed it: also a
+  person who took the page over and signed in by hand. An agent presses no
+  key that copies or pastes.
 - **A project names its site accounts**, up to 5, in the project form or on
   its page; and an agent has to be given the tool **Work in a browser** on
   the Agents page. The project's page says which of its agents can sign in,
   and the AI Manager is told the same when it plans.
+- **One account of a site in a project.** A run has one browser, and a
+  browser is signed in to a site as one account at a time: what the sign-in
+  of one account leaves is what another account of that site would be let
+  in with. So a project names one of them (the host of the address, with
+  everything under it, is the site), and the other gets a project of its
+  own. Where two accounts of a run are on sites under one domain
+  (`app.example.com`, `shop.example.com`), each keeps the cookies of its
+  own host, and a cookie for the domain above them is kept for neither.
 - **Whose projects.** Agents work in the browser in the projects of owners
   and administrators. An owner's projects may sign in with any account; an
   administrator's with the ones the owner opened to administrators; a
@@ -792,6 +808,12 @@ How signing in works:
 - **What an agent can do on a site** is whatever the account can. Save an
   account with the rights the work needs, and say in its notes what to
   leave alone: agents are told.
+- **Who sees a password.** An agent never does. A person who takes a page
+  over sees what the site shows: where a site has a button that shows what
+  is typed, a form the app filled in shows the password to that person. An
+  owner knows it anyway; an administrator takes over the pages of their own
+  projects, so open to administrators only the accounts whose password they
+  may know.
 
 What an agent is given:
 
@@ -847,8 +869,10 @@ Not there: solving or passing a CAPTCHA, by the app or by a service;
 anything that hides that the browser is automated; uploads and downloads of
 files; pictures of a page for the model (agents read pages as text); what is
 inside a frame of another site; sessions of sites that keep the sign-in in
-the page's storage instead of cookies (they sign in again each run); a
-browser for the projects of users. It was tested against a site the tests
+the page's storage instead of cookies (they sign in again each run); two
+accounts of one site in one project; a browser for the projects of users. A
+password shorter than four characters is not taken out of what an agent
+reads when a page shows it. It was tested against a site the tests
 start on their own machine, with a real Chromium, **not against the sites
 you will use it on**: how a site's form is recognised differs from site to
 site, and where the app does not find a form, signing in by hand is the way.
@@ -1104,7 +1128,7 @@ links in the answers to be right.
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
-| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | 🚧 release candidate: all five parts of 1.8 |
+| 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | ✅ implemented (five candidates ran on one real server, where the browser service was set up; what the parts do was tested against mock providers, an SSH server and a web site of the tests, and not seen on that server) |
 
 ---
 

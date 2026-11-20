@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { apiFetch, ApiError } from "@/lib/client";
-import { ACCOUNTS_PER_PROJECT } from "@/lib/browser/rules";
+import { ACCOUNTS_PER_PROJECT, ofOneSite } from "@/lib/browser/rules";
 import { Alert, Button, Card } from "@/components/ui";
 import { Icon } from "@/components/icons";
 
@@ -12,6 +12,8 @@ export interface AccountOption {
   label: string;
   /** Who it signs in as, and where, for the one who chooses. */
   where: string;
+  /** The site it signs in to: its host. A project names one account of a site. */
+  site: string;
   /** Switched off on the Browser page: a project that names it does not run. */
   off: boolean;
 }
@@ -19,7 +21,13 @@ export interface AccountOption {
 const WHAT_IT_MEANS =
   "The agents of this project that have the tool “Work in a browser” can sign in to these sites, and do there whatever the account can. " +
   "The app fills in the password; an agent is never shown it. Where a site asks for a CAPTCHA or a code, the task waits for you. " +
+  "One account of a site: a run has one browser, which is signed in to a site as one account at a time. " +
   "Everything that is done is written down on the Browser page.";
+
+/** The account that is chosen already for the site of this one, if any: a project names one account of a site. */
+function chosenOfSite(option: AccountOption, options: AccountOption[], chosen: string[]): AccountOption | undefined {
+  return options.find((other) => other.id !== option.id && chosen.includes(other.id) && ofOneSite(`https://${other.site}/`, `https://${option.site}/`));
+}
 
 /** Names in one line: the first ones, and how many more there are. */
 function namesOf(names: string[], shown = 6): string {
@@ -46,6 +54,8 @@ export function AccountChoice({
       <ul className="grid gap-2 sm:grid-cols-2">
         {options.map((option) => {
           const checked = chosen.includes(option.id);
+          // Another account of the same site is chosen: this one waits until that one is taken out.
+          const taken = checked ? undefined : chosenOfSite(option, options, chosen);
           return (
             <li key={option.id}>
               <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-line bg-surface-2/40 px-3 py-2">
@@ -54,7 +64,7 @@ export function AccountChoice({
                   id={`${idPrefix}-${option.label}`}
                   className="mt-0.5"
                   checked={checked}
-                  disabled={disabled || (!checked && full)}
+                  disabled={disabled || (!checked && (full || Boolean(taken)))}
                   onChange={(e) => onChange(e.target.checked ? [...chosen, option.id] : chosen.filter((id) => id !== option.id))}
                 />
                 <span className="min-w-0">
@@ -63,6 +73,7 @@ export function AccountChoice({
                     {option.off && <span className="text-warn"> · switched off</span>}
                   </span>
                   <span className="mono block break-all text-xs text-ink-3">{option.where}</span>
+                  {taken && <span className="block text-xs text-ink-3">The same site as {taken.label}: one of them.</span>}
                 </span>
               </label>
             </li>

@@ -422,6 +422,28 @@ export const PAGE_SCRIPT = String.raw`
     return { ok: true };
   }
 
+  /** What holds the cursor now: through the parts of their own that elements keep, and through the frames of the same site. */
+  function deepActive() {
+    var a = document.activeElement;
+    for (var depth = 0; depth < 12 && a; depth++) {
+      if (a.shadowRoot && a.shadowRoot.activeElement) { a = a.shadowRoot.activeElement; continue; }
+      if (a.tagName === 'IFRAME' || a.tagName === 'FRAME') {
+        var inner = null;
+        try { inner = a.contentDocument; } catch (e) { inner = null; }
+        if (inner && inner.activeElement) { a = inner.activeElement; continue; }
+      }
+      break;
+    }
+    return a;
+  }
+  /** Whether what is typed now goes into this element. */
+  function holds(key) {
+    var el = target(key);
+    if (!el || !el.isConnected) return { gone: true };
+    var active = deepActive();
+    return { focused: !!active && (active === el || within(active, el)), password: (el.getAttribute('type') || '').toLowerCase() === 'password', url: location.href };
+  }
+
   /** Put the cursor into a field with everything in it selected, and empty it. */
   function ready(key) {
     var el = target(key);
@@ -448,8 +470,8 @@ export const PAGE_SCRIPT = String.raw`
       sel.addRange(range);
       try { el.ownerDocument.execCommand('delete'); } catch (e) {}
     }
-    var active = el.ownerDocument.activeElement;
-    return { ok: true, focused: active === el || within(active, el), password: (el.getAttribute('type') || '').toLowerCase() === 'password', label: cut(labelOf(el), 80), url: location.href };
+    var active = deepActive();
+    return { ok: true, focused: !!active && (active === el || within(active, el)), password: (el.getAttribute('type') || '').toLowerCase() === 'password', label: cut(labelOf(el), 80), url: location.href };
   }
 
   function changed(el) {
@@ -560,6 +582,7 @@ export const PAGE_SCRIPT = String.raw`
     locate: locate,
     press: press,
     ready: ready,
+    holds: holds,
     choose: choose,
     signIn: signIn,
     quiet: function () { return { since: Date.now() - lastChange, ready: document.readyState, url: location.href }; }

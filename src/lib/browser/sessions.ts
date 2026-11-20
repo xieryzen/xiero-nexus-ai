@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { SiteAccount } from "@/db/schema";
 import { notify } from "../notifications";
-import { cookiesOfAccount, logAction, noteUse, passwordOf, saveSession, sessionOf, type SavedCookie } from "./accounts";
+import { cookiesOfAccount, keepSessionOf, logAction, noteUse, passwordOf, sessionOf, type SavedCookie } from "./accounts";
 import { CdpError, type CdpConnection } from "./cdp";
 import { BrowserPage, PageProblem } from "./page";
 import {
@@ -72,7 +72,7 @@ export interface RunBrowser {
   contextId: string;
   spec: RunSpec;
   accounts: Map<string, { row: SiteAccount; touched: boolean }>;
-  /** Passwords that were typed into a page of this run: never shown to an agent, whatever the page does with them. */
+  /** The passwords of the run's accounts: never shown to an agent, whatever a page does with them and whoever typed them. */
   secrets: Set<string>;
   tasks: Map<string, TaskPages>;
   closed: boolean;
@@ -243,13 +243,30 @@ async function newContext(conn: CdpConnection, cookies: SavedCookie[]): Promise<
   return browserContextId;
 }
 
+/**
+ * The password of an account is kept from an agent from the start of the
+ * run, whoever types it: the app when it signs in, or a person who takes a
+ * page over and signs in by hand.
+ */
+function keepSecret(secrets: Set<string>, account: SiteAccount): void {
+  try {
+    secrets.add(passwordOf(account));
+  } catch {
+    // It cannot be read (another SECRET_ENCRYPTION_KEY): signing in with it says so.
+  }
+}
+
 /** The browser of a run: the one it has, or a new one with the sessions of its accounts put back. */
 export async function runBrowser(spec: RunSpec): Promise<RunBrowser> {
   listen();
   const s = store();
   const existing = s.runs.get(spec.runId);
   if (existing && !existing.closed && !existing.conn.closed) {
-    for (const row of spec.accounts) if (!existing.accounts.has(row.id)) existing.accounts.set(row.id, { row, touched: false });
+    for (const row of spec.accounts) {
+      if (existing.accounts.has(row.id)) continue;
+      existing.accounts.set(row.id, { row, touched: false });
+      keepSecret(existing.secrets, row);
+    }
     return existing;
   }
   if (existing) s.runs.delete(spec.runId);
@@ -271,6 +288,7 @@ export async function runBrowser(spec: RunSpec): Promise<RunBrowser> {
         tasks: new Map(),
         closed: false,
       };
+      for (const row of spec.accounts) keepSecret(browser.secrets, row);
       s.runs.set(spec.runId, browser);
       return browser;
     } catch (err) {
@@ -335,9 +353,20 @@ export async function keepSessions(browser: RunBrowser): Promise<void> {
   } catch {
     return;
   }
+  // Every account whose session this browser was given, used or not: a cookie
+  // that two of them could call theirs is kept for neither.
+  const all = [...browser.accounts.values()].map((entry) => entry.row);
   for (const entry of used) {
     try {
-      saveSession(entry.row.id, cookiesOfAccount(cookies, entry.row));
+      // Not when the account signs in as someone else by now: this browser holds the old sign-in.
+      keepSessionOf(
+        entry.row,
+        cookiesOfAccount(
+          cookies,
+          entry.row,
+          all.filter((row) => row.id !== entry.row.id),
+        ),
+      );
     } catch {
       // The account was removed in the meantime.
     }
@@ -360,6 +389,7 @@ export async function signInOn(browser: RunBrowser, page: BrowserPage, account: 
   try {
     outcome = await signIn(page, account, password);
   } catch (err) {
+    if (err instanceof PageProblem && err.kind === "secret") noteUse(account.id, err.message);
     return lost(err);
   }
   if (outcome.state === "signed_in" || outcome.state === "no_form") {
@@ -572,13 +602,17 @@ export async function ownerSession(account: SiteAccount, user: { id: string }): 
       s.live.delete(id);
       void (async () => {
         let kept = 0;
+        // The account was changed while the owner signed in: what was signed in to is not what it is now.
+        let changed = false;
         const page = front();
         const url = page ? shownUrl(page.lastUrl) : null;
         if (outcome === "save" && !conn.closed) {
           try {
             const { cookies } = await conn.send<{ cookies: Record<string, unknown>[] }>("Storage.getCookies", { browserContextId: contextId });
-            kept = saveSession(account.id, cookiesOfAccount(cookies, account));
-            noteUse(account.id, null);
+            const saved = keepSessionOf(account, cookiesOfAccount(cookies, account));
+            changed = saved === null;
+            kept = saved ?? 0;
+            if (!changed) noteUse(account.id, null);
           } catch {
             kept = 0;
           }
@@ -594,7 +628,9 @@ export async function ownerSession(account: SiteAccount, user: { id: string }): 
             outcome === "save"
               ? kept > 0
                 ? `The session was kept: ${kept} ${kept === 1 ? "cookie" : "cookies"} of the site.`
-                : "The site left no cookie to keep: there is no session to come back to."
+                : changed
+                  ? "The account was changed while this sign-in went on: what was signed in to is not what the account is now, and nothing was kept."
+                  : "The site left no cookie to keep: there is no session to come back to."
               : outcome === "timeout"
                 ? `Nothing was done for ${OWNER_SESSION_MINUTES} minutes: the page was closed, and nothing was kept.`
                 : "The page was closed, and nothing was kept.",
@@ -613,7 +649,12 @@ export async function ownerSession(account: SiteAccount, user: { id: string }): 
       const outcome = await signIn(first, account, passwordOf(account));
       live.note = ownerNote(outcome);
     } catch (err) {
-      live.note = err instanceof PageProblem || err instanceof BrowserProblem ? err.message : "The app could not fill in the form. Sign in here by hand.";
+      live.note =
+        err instanceof PageProblem && err.kind === "secret"
+          ? `${err.message} Type it here yourself, send the form, and keep the session when you are in.`
+          : err instanceof PageProblem || err instanceof BrowserProblem
+            ? err.message
+            : "The app could not fill in the form. Sign in here by hand.";
     } finally {
       live.busy = false;
     }

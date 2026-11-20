@@ -7,6 +7,7 @@ import {
   ACCOUNTS_PER_PROJECT,
   AGENT_KEYS,
   BROWSER_TOOL,
+  FIELD_VALUE_CHARS,
   HIDDEN,
   PAGE_CHARS,
   UNTRUSTED,
@@ -15,6 +16,7 @@ import {
   agentKey,
   callSummary,
   captchaProvider,
+  cookieKeptFor,
   cookieOfSite,
   earlierNote,
   hostOfSite,
@@ -22,10 +24,14 @@ import {
   mayFillPassword,
   mayUseAccount,
   mayUseBrowser,
+  ofOneSite,
   oneLine,
+  oneSiteProblem,
   pagePiece,
+  pairOfOneSite,
   personKey,
   redact,
+  secretForms,
   shortened,
   shownUrl,
   siteHost,
@@ -37,6 +43,7 @@ import {
   waitMinutes,
   type PageSignals,
 } from "../src/lib/browser/rules";
+import { PAGE_SCRIPT } from "../src/lib/browser/page-script";
 // The gate of the browser service is a script of its own, without TypeScript: what it decides is tested here.
 import * as gateModule from "../scripts/host/browser/gate.mjs";
 
@@ -135,6 +142,69 @@ test("the cookies that are kept as an account's session are the site's own", () 
   assert.ok(!cookieOfSite({ name: "sid", domain: "other.example.co.id" }, shop));
 });
 
+test("two accounts are of one site when the host is the same or one is under the other", () => {
+  const same: [string, string][] = [
+    ["https://example.com/login", "https://example.com/admin/login"],
+    ["https://www.example.com/login", "https://example.com/"],
+    ["https://example.com/login", "https://app.example.com/login"],
+    ["https://a.b.example.com/", "https://example.com/"],
+    // A port is no other site to a browser: its cookies are the host's.
+    ["http://127.0.0.1:4014/login", "http://127.0.0.1:5000/echo-login"],
+    ["https://EXAMPLE.com/", "https://example.com/"],
+  ];
+  for (const [a, b] of same) {
+    assert.ok(ofOneSite(a, b), `${a} and ${b}`);
+    assert.ok(ofOneSite(b, a), `${b} and ${a}`);
+  }
+  const apart: [string, string][] = [
+    ["https://example.com/", "https://example.org/"],
+    ["https://example.com/", "https://badexample.com/"],
+    // Two sites beside each other under one name: each has a host of its own.
+    ["https://app.example.com/", "https://shop.example.com/"],
+    ["https://one.vercel.app/", "https://two.vercel.app/"],
+    ["https://shop.example.co.id/", "https://other.example.co.id/"],
+    ["https://example.com/", "not an address"],
+    ["", ""],
+  ];
+  for (const [a, b] of apart) {
+    assert.ok(!ofOneSite(a, b), `${a} and ${b}`);
+    assert.ok(!ofOneSite(b, a), `${b} and ${a}`);
+  }
+
+  const shop = { name: "shop", siteUrl: "https://example.com/login" };
+  const admin = { name: "shop-admin", siteUrl: "https://www.example.com/admin" };
+  const mail = { name: "mail", siteUrl: "https://mail.example.org/" };
+  assert.equal(pairOfOneSite([]), null);
+  assert.equal(pairOfOneSite([shop]), null);
+  assert.equal(pairOfOneSite([shop, mail]), null);
+  assert.deepEqual(pairOfOneSite([mail, shop, admin]), [shop, admin]);
+  assert.equal(
+    oneSiteProblem(shop, admin),
+    'The site accounts "shop" and "shop-admin" are of one site (example.com). A project names one account of a site: ' +
+      "its run has one browser, and a browser is signed in to a site as one account at a time. Take one of them out, or give the other its own project.",
+  );
+});
+
+test("a cookie that two accounts of a browser could both call theirs is kept for neither", () => {
+  const app = "https://app.example.com/login";
+  const shop = "https://shop.example.com/login";
+  const kept = (domain: string, site: string, others: string[]) => cookieKeptFor({ name: "sid", domain }, site, others);
+  // Alone in its browser, an account keeps what its own domain allows.
+  assert.ok(kept(".example.com", app, []));
+  assert.ok(kept("app.example.com", app, []));
+  // With a site beside it: each keeps the cookies of its own host, and neither the one of the domain above them.
+  assert.ok(kept("app.example.com", app, [shop]));
+  assert.ok(kept("shop.example.com", shop, [app]));
+  assert.ok(!kept(".example.com", app, [shop]));
+  assert.ok(!kept(".example.com", shop, [app]));
+  assert.ok(!kept("shop.example.com", app, [shop]), "a cookie of the other site was never this one's");
+  // Two accounts of one site, which a project cannot name together: nothing of the site is kept for either.
+  assert.ok(!kept("example.com", "https://example.com/login", ["https://example.com/admin"]));
+  assert.ok(!kept("www.example.com", "https://example.com/login", ["https://www.example.com/admin"]));
+  // A site somewhere else takes nothing away.
+  assert.ok(kept(".example.com", app, ["https://example.org/login"]));
+});
+
 test("an address is written down without what follows the question mark", () => {
   assert.equal(shownUrl("https://example.com/search?q=secret&token=abc#part"), "https://example.com/search?…");
   assert.equal(shownUrl("https://example.com/a/b"), "https://example.com/a/b");
@@ -150,6 +220,45 @@ test("a password is taken out of whatever a page makes of it", () => {
   assert.equal(redact("nothing of it here", [secret]), "nothing of it here");
   assert.equal(redact("a b c", ["a", "abc"]), "a b c", "what is too short to be a password is left alone");
   assert.equal(redact("one-secret and two-secret", new Set(["one-secret", "two-secret"])), `${HIDDEN} and ${HIDDEN}`);
+});
+
+test("a password is taken out in the forms the reading of a page gives it", () => {
+  // White space is drawn together, and the value of a field is written with ' for ".
+  const odd = 'Kunci "Rahasia"  Tokonya-Zebra';
+  const parts = ["Kunci", "Rahasia", "Tokonya", "Zebra"];
+  const clean = (text: string) => {
+    const out = redact(text, [odd]);
+    for (const part of parts) assert.ok(!out.includes(part), `${part} is left in: ${out}`);
+    return out;
+  };
+  assert.equal(clean(`The password "${odd}" is wrong.`), `The password "${HIDDEN}" is wrong.`);
+  assert.equal(clean('The password "Kunci "Rahasia" Tokonya-Zebra" is wrong.'), `The password "${HIDDEN}" is wrong.`);
+  assert.equal(clean(`[3: field "Password" (text) = "Kunci 'Rahasia' Tokonya-Zebra"]`), `[3: field "Password" (text) = "${HIDDEN}"]`);
+  // In an address: as a form sends it, and as a script writes it.
+  assert.equal(clean("URL: https://example.com/login?user=budi&password=Kunci+%22Rahasia%22++Tokonya-Zebra"), `URL: https://example.com/login?user=budi&password=${HIDDEN}`);
+  assert.equal(clean(`URL: https://example.com/login?password=${encodeURIComponent(odd)}&x=1`), `URL: https://example.com/login?password=${HIDDEN}&x=1`);
+  // White space around it, as a text node keeps it and a field's value does not.
+  assert.equal(redact('[1: field "x" (text) = "tepi kiri kanan"]', ["  tepi kiri kanan "]), `[1: field "x" (text) = "${HIDDEN}"]`);
+
+  // The value of a field is cut when it is long: what is shown of a long password is taken out too.
+  const long = `${"panjang-".repeat(30)}akhir`;
+  assert.ok(long.length > FIELD_VALUE_CHARS);
+  const shown = `${long.slice(0, FIELD_VALUE_CHARS - 1)}…`;
+  assert.equal(redact(`[2: field "Password" (text) = "${shown}"]`, [long]), `[2: field "Password" (text) = "${HIDDEN}…"]`);
+  assert.equal(redact(`The password ${long} is wrong.`, [long]), `The password ${HIDDEN} is wrong.`, "the whole of it goes first, not the part that a field shows");
+  // The reading cuts the value of a field where this says it does.
+  assert.ok(PAGE_SCRIPT.includes(`value = quote(cut(raw, ${FIELD_VALUE_CHARS}));`), "page-script.ts cuts the value of a field at another length than rules.ts takes it to");
+
+  // The forms: none shorter than four characters, the longest first, and none twice.
+  const forms = secretForms(odd);
+  assert.ok(forms.includes(odd) && forms.includes('Kunci "Rahasia" Tokonya-Zebra') && forms.includes("Kunci 'Rahasia' Tokonya-Zebra"));
+  assert.deepEqual([...forms].sort((a, b) => b.length - a.length), forms);
+  assert.equal(new Set(forms).size, forms.length);
+  assert.deepEqual(secretForms("abc"), []);
+  assert.deepEqual(new Set(secretForms("a  b")), new Set(["a  b", "a++b", "a%20%20b"]), "what is drawn together to less than four characters is no form, in an address or elsewhere");
+  assert.deepEqual(secretForms("abcd"), ["abcd"]);
+  // Half a character cannot be written into an address: the other forms are there all the same.
+  assert.ok(secretForms("abcd\ud800").includes("abcd\ud800"));
 });
 
 // ─── What checks that a person is there ──────────────────────────────────────

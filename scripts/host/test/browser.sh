@@ -8,7 +8,8 @@
 #
 # Nothing is built and no container is started: that the image builds and the
 # service in it works is checked with a real Docker in CI (release.yml).
-# SHOW=1 prints what the script said each time.
+# What node-check.sh says of the service is tested here too, on the same
+# made-up host. SHOW=1 prints what the script said each time.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -81,6 +82,12 @@ printf '%s\n' "$*" >> "${FAKE}/log"
 address_of() { cat "${FAKE}/containers/$1" 2> /dev/null || true; }
 case "${1:-}" in
   info) [ "${FAKE_NO_DOCKER:-}" != "yes" ] ;;
+  # What node-check.sh asks besides: which containers there are, and of a container how it is.
+  version) echo "29.9.9" ;;
+  ps)
+    echo "${FAKE_UUID}"
+    ls "${FAKE}/containers" 2> /dev/null || true
+    ;;
   network)
     [ "${2:-}" = "inspect" ] || exit 1
     name="${*: -1}"
@@ -92,9 +99,20 @@ case "${1:-}" in
     ;;
   inspect)
     name="${*: -1}"
+    case " $* " in
+      *"{{.Name}}"*)
+        # Every container that was named, with its addresses: one in a line.
+        shift 3
+        for one in "$@"; do
+          if [ "${one}" = "${FAKE_UUID}" ]; then echo "/${one} 172.18.0.5"; else echo "/${one} $(address_of "${one}")"; fi
+        done
+        exit 0
+        ;;
+    esac
     if [ "${name}" = "${FAKE_UUID}" ]; then
       [ "${FAKE_SERVER:-running}" != "none" ] || exit 1
       case " $* " in
+        *"{{.Config.Image}}"*) echo "ghcr.io/ptero-eggs/yolks:nodejs_22" ;;
         *"NetworkSettings.Networks}}{{"*) printf 'pterodactyl_nw\n' ;;
         *"State.Running"*) if [ "${FAKE_SERVER:-running}" = "running" ]; then echo true; else echo false; fi ;;
         # The DNS servers Wings gave the server's container, one in a line.
@@ -103,7 +121,11 @@ case "${1:-}" in
       exit 0
     fi
     [ -f "${FAKE}/containers/${name}" ] || exit 1
-    case " $* " in *"IPAddress"*) address_of "${name}" ;; esac
+    case " $* " in
+      *"IPAddress"*) address_of "${name}" ;;
+      *"{{.State.Status}}"*) echo "${FAKE_BROWSER_STATE:-running}" ;;
+      *"{{.Config.Image}}"*) echo "xiero-browser" ;;
+    esac
     ;;
   pull) [ "${FAKE_PULL:-ok}" = "ok" ] ;;
   build)
@@ -134,7 +156,13 @@ case "${1:-}" in
     fi
     [ -f "${*: -1}/Dockerfile" ] && [ -f "${*: -1}/gate.mjs" ] && [ -f "${*: -1}/policy.json" ]
     ;;
-  image) printf ' (612345678 bytes)' ;;
+  image)
+    # When the image was built, for node-check.sh; how large it is, for browser-service.sh.
+    case " $* " in
+      *"{{.Created}}"*) echo "${FAKE_BUILT:-$(date -u +%Y-%m-%d)}T09:30:00.123456789Z" ;;
+      *) printf ' (612345678 bytes)' ;;
+    esac
+    ;;
   rm)
     rm -f "${FAKE}/containers/${*: -1}"
     ;;
@@ -168,6 +196,17 @@ case "${1:-}" in
     echo "0123456789abcdef"
     ;;
   exec)
+    # node-check.sh asks from inside the server's container, with the address
+    # its .env has: the program it hands over is run for real, by the Node of
+    # this machine, on the .env of the made-up server.
+    for word in "$@"; do
+      case "${word}" in
+        XN_ENV_FILE=/home/container/*)
+          XN_ENV_FILE="${FAKE_VOLUME}/${word#XN_ENV_FILE=/home/container/}" node -e "${*: -1}"
+          exit 0
+          ;;
+      esac
+    done
     # What is asked from inside a container: the address in XN_URL, with the token when XN_TOKEN_ENV says so.
     url="" token="" name=""
     words=("$@")
@@ -570,6 +609,73 @@ is "--container-only ends well" "0" "${CODE}"
 check_not "  the server is left alone" test -e "${FAKE}/upgrade"
 check "  and it is said where the line for its .env is" said "The line for the server's .env is in ${STATE}/${UUID}/browser-url"
 check_not "  not the line itself" said "$(token)"
+
+# ── What node-check.sh says of it ────────────────────────────────────────────
+
+begin "node-check.sh says how the browser service is"
+run --server "${UUID}" --yes
+is "(the service is set up)" "0" "${CODE}"
+app="${WORK}/volumes/${UUID}/xiero-nexus-ai"
+echo "// start" > "${app}/start.js"
+echo "// server" > "${app}/server.js"
+# The stand-in for the gate listens on this machine: that is where the made-up server's .env points, and where the container "is".
+gate_at="127.0.0.1:$(cat "${FAKE}/gate-port")"
+printf '127.0.0.1' > "${FAKE}/containers/xiero-browser"
+env_with() { printf 'APP_URL=https://nexus.example.com\nSECRET_ENCRYPTION_KEY=kept\n%s\n' "$1" > "${app}/.env"; }
+looked() { # settings of the stand-in for docker, then nothing: node-check.sh on the made-up server
+  CODE=0
+  : > "${FAKE}/log"
+  FAKE_VOLUME="${WORK}/volumes/${UUID}" XIERO_RELEASES_URL="http://127.0.0.1:1/releases" bash "${here}/../node-check.sh" --server "${UUID}" --wings-config "${WORK}/wings.yml" --backup-dir "${WORK}/backups" > "${OUT}" 2>&1 < /dev/null || CODE=$?
+  if [ -n "${SHOW:-}" ]; then sed 's/^/     /' "${OUT}"; fi
+}
+env_with "BROWSER_URL=http://${gate_at}/?token=$(token)"
+looked
+is "it ends well" "0" "${CODE}"
+check "where BROWSER_URL of .env points, without what signs in" line "^  Browser +BROWSER_URL in \.env names ${gate_at}$"
+check "the container that is there, how it is, and when its image was built" said "container xiero-browser: running, image xiero-browser (built $(date -u +%Y-%m-%d))"
+check "the server's container reaches it and its token is taken: asked for real, from where the app asks" said "the server's container reaches it, and it takes the token of .env: Chrome/120.0.1"
+check "  that it keeps pages from private networks" said "it keeps pages from private networks"
+check_not "  an image of today is not called old" said "as old as the image"
+check_not "the token is not shown" said "$(token)"
+check_not "  nor handed to a program of this machine" asked "$(token)"
+check_not "nothing was started, stopped, built or removed" asked '^(run|rm|build|pull|stop|start|restart) '
+check ".env still names it among what it sets, and no value" line '^  \.env +sets: APP_URL BROWSER_URL SECRET_ENCRYPTION_KEY$'
+
+env_with "BROWSER_URL=\"http://${gate_at}/?token=not-the-token-of-the-service\""
+looked
+check "a token the service does not take is said, and what puts it right" said "the server's container reaches it, and it does NOT take the token of .env: the action \"browser\" writes the one it has"
+check_not "  without the token" said "not-the-token-of-the-service"
+# Another address of this machine, and a port that was free a moment ago: nothing answers there, and no container is there.
+free_port="$(node -e 'const s = require("net").createServer().listen(0, "127.0.0.1", () => { console.log(s.address().port); s.close(); });')"
+env_with "BROWSER_URL=http://127.0.0.2:${free_port}/?token=$(token)"
+looked
+check "an address where nothing answers: the server does not reach it, and why" said "the server's container does NOT reach it (ECONNREFUSED): agents have no browser until it does"
+check "  and no container has that address" said "no container of this machine has that address"
+check_not "  nothing is said of a token that was never asked for" said "the token of .env"
+env_with "BROWSER_URL=http://${gate_at}/?token=$(token)"
+FAKE_BUILT="2026-01-05" looked
+check "an image that is old: how old, and how its Chromium gets its updates" line "Its Chromium is as old as the image, [0-9]+ days: the action \"browser\" with --rebuild in options builds it anew"
+FAKE_BROWSER_STATE=exited looked
+check "a container that does not run is said" said "container xiero-browser: exited"
+check "  with what starts it" said "It does not run: the action \"browser\" starts it again."
+FAKE_SERVER=stopped looked
+check "a server that is not running is not asked" said "The server is not running: whether it reaches the service is seen when it runs."
+check_not "  " said "takes the token"
+env_with "BROWSER_URL=ws://${gate_at}/devtools/browser/0123"
+looked
+check "a DevTools address is named, and not asked" said "BROWSER_URL is a DevTools address (ws://), which is not asked here"
+env_with "BROWSER_URL="
+looked
+check "a server without a browser service: said, with what sets one up" said "none: .env names no browser service (BROWSER_URL), so agents have no browser to work in"
+check "  " said "The action \"browser\" sets one up next to the server (browser-service.sh)."
+check_not "  the server's container is not asked for it" asked 'XN_ENV_FILE'
+env_with "#BROWSER_URL=http://${gate_at}/?token=$(token)"
+looked
+check "  a line that is commented out names none either" said "none: .env names no browser service"
+# As it was for the checks that follow.
+printf 'APP_URL=https://nexus.example.com\nSECRET_ENCRYPTION_KEY=kept\n' > "${app}/.env"
+printf '172.18.255.250' > "${FAKE}/containers/xiero-browser"
+rm -f "${app}/start.js" "${app}/server.js"
 
 begin "Taking it away"
 run --server "${UUID}" --remove --dry-run

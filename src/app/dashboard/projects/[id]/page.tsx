@@ -68,7 +68,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
   // The same for the site accounts its agents sign in with.
   const accountOptions = accountsFor(user)
     .filter((a) => mayUseAccount(owner?.role, a.access))
-    .map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, off: a.status !== "enabled" }));
+    .map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, site: siteHost(a.siteUrl), off: a.status !== "enabled" }));
   const mayOperate =
     serversOfProject(project.id).every((s) => mayUseServer(user.role, s.access)) &&
     accountsOfProject(project.id).every((a) => mayUseAccount(user.role, a.access));

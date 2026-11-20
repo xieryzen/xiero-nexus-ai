@@ -505,6 +505,7 @@ check "  of the other settings only that they exist" said "also set, values not 
 check_not "  not what they are" said "a-token-that-must-stay-hidden"
 check "says who owns the server's files" said "owned by $(id -un)"
 check "says that there are no backups yet" said "none yet"
+check "says that its .env names no browser service" said "none: .env names no browser service (BROWSER_URL)"
 check "says when the releases cannot be reached" said "cannot be reached"
 check_not "names nothing of the other server's files" said "world.dat"
 code=0

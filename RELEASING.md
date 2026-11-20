@@ -351,7 +351,8 @@ server.
   `--rebuild` every few weeks: that is how its Chromium gets its updates.
 - To have agents sign in to a site: an owner saves the account on the
   **Browser** page, ticks **Work in a browser** on the agents that should
-  have the tool, and names the account in a project. Where a site asks for
+  have the tool, and names the account in a project: one account of a site
+  in a project, since its run has one browser. Where a site asks for
   a CAPTCHA or a code, the task waits for you; **Sign in by hand** on the
   Browser page lets you do that once, ahead of the agents, and keeps the
   session. Save an account with the rights the work needs, and no more: on
@@ -359,6 +360,13 @@ server.
 - The password of a site account and the session that is kept for it are
   encrypted with `SECRET_ENCRYPTION_KEY`, like the keys of the providers
   and of the servers.
+- **From the candidate 1.8.0-rc.5:** the sessions that were kept for site
+  accounts are dropped at the first start of 1.8.0, once, and each account
+  signs in anew with its next run (a CAPTCHA or a code that a kept session
+  spared is asked for once more). With that candidate a project could name
+  two accounts of one site, and one of them could be let in with what the
+  other's sign-in left. Such a project does not run until it names one of
+  them.
 - Going back to 1.7 needs nothing: 1.7 does not read the new columns and
   tables. An agent that was given the tool "Work on servers" or "Work in a
   browser" keeps the name of the tool in its row; 1.7 does not know it and
