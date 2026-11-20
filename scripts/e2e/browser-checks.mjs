@@ -760,7 +760,9 @@ try {
   eq("  and its page names nothing of the setup", await namedOnPage(), []);
   await snap("user-knowledge");
   await open("/dashboard/usage");
-  check("Usage counts a user's tokens, without providers, models and costs", /[1-9][\d.,]* /.test(await text()) && !(await has("Cost")) && (await namedOnPage()).length === 0, await namedOnPage());
+  // The number under "Tokens (all time)": more than nothing. (A digit followed by a space is not it: the version of a candidate at the foot of the menu has one, "rc.5 · rc".)
+  const usageText = await text();
+  check("Usage counts a user's tokens, without providers, models and costs", /tokens \(all time\)\s+[1-9][\d.,]*/i.test(usageText) && /requests \(all time\)\s+[1-9]/i.test(usageText) && !(await has("Cost")) && (await namedOnPage()).length === 0, [usageText.replace(/\s+/g, " ").slice(0, 300), await namedOnPage()]);
   await snap("user-usage");
   await open("/dashboard/settings");
   await clickText(/New key/);
@@ -1034,6 +1036,8 @@ try {
     const waitingOption = await page.$$eval("#p-wf option", (options) => options.find((o) => o.textContent === "Browser: waiting")?.value);
     if (waitingOption) await page.select("#p-wf", waitingOption);
     await page.click("#p-account-browser-shop");
+    const sameSite = await page.$eval("#p-account-shop", (box) => ({ disabled: box.disabled, says: (box.closest("li")?.innerText ?? "").replace(/\s+/g, " ") }));
+    check("  an account of the same site cannot be ticked with it, and says why", sameSite.disabled === true && sameSite.says.includes("The same site as browser-shop: one of them."), sameSite);
     await snap("project-form-accounts");
     await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2" }), clickText(/Create project/)]);
     check("  it is made", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && Boolean(waitingOption) && Boolean(surfer), [page.url(), waitingOption]);

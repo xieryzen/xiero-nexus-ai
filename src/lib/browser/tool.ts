@@ -66,6 +66,11 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
   const task: TaskSpec = { taskId: ctx.taskId, taskTitle: ctx.taskTitle, agentName: ctx.agentName };
   // The attempt at the task that made the last call: null before the first.
   let attempt: number | null = null;
+  // The passwords the app typed in this run's browser. What a page makes of one is kept out of
+  // what the agent reads, and equally out of the log and of the notes on the page of the run.
+  let secrets: Iterable<string> = [];
+  const clear = (text: string) => redact(text, secrets);
+  const say = (message: string, link?: string) => ctx.progress?.(clear(message), link);
 
   const entry = (kind: string, extra: Partial<Parameters<typeof logAction>[0]> & { status: Parameters<typeof logAction>[0]["status"] }) =>
     logAction({
@@ -78,10 +83,14 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
       agentName: ctx.agentName,
       userId: ctx.userId,
       ...extra,
+      ...(extra.detail ? { detail: clear(extra.detail) } : {}),
+      ...(extra.note ? { note: clear(extra.note) } : {}),
     });
 
   /** Hand the page to a person, and say afterwards what became of it. */
-  async function person(browser: RunBrowser, reason: string, account: SiteAccount | null): Promise<string> {
+  async function person(browser: RunBrowser, asked: string, account: SiteAccount | null): Promise<string> {
+    // The reason is shown to the person, written down and sent as a notification.
+    const reason = clear(asked);
     const pages = await taskPages(browser, ctx.taskId);
     if (pages.handovers >= HANDOVERS_PER_TASK) {
       throw new ToolError(`This task has handed its page to a person ${HANDOVERS_PER_TASK} times, which is as often as it may. ${NOBODY}`);
@@ -92,9 +101,9 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
       reason,
       account,
       isCancelled: ctx.isCancelled,
-      onWaiting: (link) => ctx.progress?.(`Waiting for a person${site ? ` on ${site}` : ""}: ${oneLine(reason, 90)}`, link),
+      onWaiting: (link) => say(`Waiting for a person${site ? ` on ${site}` : ""}: ${oneLine(reason, 90)}`, link),
     });
-    ctx.progress?.("Working in the browser");
+    say("Working in the browser");
     if (result.outcome === "cancelled") throw new ToolError("The run was stopped.");
     if (result.outcome === "closed") throw new ToolError("The page was closed while it waited for a person. Open it again if the task still needs it.");
     if (result.outcome === "timeout") return `Nobody took the page over within ${took(result.waitMs)}. ${NOBODY}`;
@@ -157,13 +166,16 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
       throw new ToolError(`The page led to ${host}, which is not among the hosts this server lets agents reach. It was closed.`);
     }
     visited(browser, shot.url);
-    pages.text = shot.text;
+    // Cleared whole, before it is cut into the pieces an agent reads: a piece
+    // that began or ended inside a password would show the rest of it.
+    const text = redact(shot.text, browser.secrets);
+    pages.text = text;
     const notes = pages.notes.splice(0);
     const open = pages.pages.filter((p) => !p.closed).length;
     return viewText({
       url: shot.url,
       title: shot.title,
-      text: shot.text,
+      text,
       tab: { index: open, count: open },
       verification,
       dialogs: page.takeDialogs(),
@@ -237,6 +249,7 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
         if (err instanceof BrowserProblem) throw new ToolError(`The browser cannot be used just now: ${err.message} A later call tries again.`);
         throw err;
       }
+      secrets = browser.secrets;
       const started = Date.now();
       const finish = (text: string) => redact(before ? `${before}\n\n${text}` : text, browser.secrets);
       const failed = (kind: string, err: unknown, detail: string, url: string | null): never => {
@@ -268,7 +281,7 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
           } catch (err) {
             return failed("open", err instanceof AppError ? new ToolError(`${err.message}.`) : err, shownUrl(address), null);
           }
-          ctx.progress?.(`Opening ${url.hostname}`);
+          say(`Opening ${url.hostname}`);
           try {
             const opened = await page.goto(url.toString());
             if (opened.error) throw new ToolError(`${shownUrl(url.toString())} was not opened: ${opened.error}.`);
@@ -303,7 +316,7 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
           try {
             const acted = await page.click(element);
             const what = `${acted.kind} "${oneLine(acted.label, 80)}"`;
-            ctx.progress?.(`Clicking ${what}`);
+            say(`Clicking ${what}`);
             const text = await after(browser, `Clicked ${what}.`);
             done("click", acted, what);
             return finish(text);
@@ -391,7 +404,7 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
             );
           }
           const site = siteHost(account.siteUrl);
-          ctx.progress?.(`Signing in to ${site} as ${account.username}`);
+          say(`Signing in to ${site} as ${account.username}`);
           const log = (status: "ok" | "failed" | "refused" | "waited", note: string) =>
             entry("sign_in", { account, status, url: shownUrl(page.lastUrl), detail: `${account.name} (${account.username})`, note, durationMs: Date.now() - started });
           try {
@@ -435,6 +448,12 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
             }
           } catch (err) {
             if (err instanceof ToolError) throw new ToolError(redact(before ? `${before}\n\n${err.message}` : err.message, browser.secrets));
+            if (err instanceof PageProblem && err.kind === "secret") {
+              // The password would not have gone into the password field: it was not typed at all.
+              const message = `${err.message} An owner can sign in to "${account.name}" by hand (Browser page).`;
+              log("failed", err.message);
+              throw new ToolError(redact(before ? `${before}\n\n${message}` : message, browser.secrets));
+            }
             return failed("sign_in", err, `${account.name} (${account.username})`, shownUrl(page.lastUrl));
           }
           return finish("");

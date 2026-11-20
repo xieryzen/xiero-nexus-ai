@@ -75,7 +75,7 @@ export default async function ProjectsPage() {
       // The machines the projects of this account may work on: none for a user.
       servers={serversFor(user).map((s) => ({ id: s.id, label: s.name, where: `${s.username}@${s.host}:${s.port}`, off: s.status !== "enabled" }))}
       // The same for the site accounts its agents may sign in with.
-      siteAccounts={accountsFor(user).map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, off: a.status !== "enabled" }))}
+      siteAccounts={accountsFor(user).map((a) => ({ id: a.id, label: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}`, site: siteHost(a.siteUrl), off: a.status !== "enabled" }))}
     />
   );
 }

@@ -13,7 +13,8 @@ import { NAVIGATION_TIMEOUT_MS, VIEWPORT, captchaProvider, type KeySpec, type Pa
 /** Something about the page stands in the way of an action. The message is for the agent. */
 export class PageProblem extends Error {
   constructor(
-    readonly kind: "gone" | "covered" | "disabled" | "wrong" | "closed" | "failed",
+    /** "secret": a password the app was to type was not typed, because it would not have gone into the password field. */
+    readonly kind: "gone" | "covered" | "disabled" | "wrong" | "closed" | "failed" | "secret",
     message: string,
   ) {
     super(message);
@@ -79,6 +80,9 @@ export interface Acted {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Said when a password was not typed, because it would not have gone into the password field. */
+export const NOT_TYPED = "The page did not let its password field be entered, so the password was not typed: it would have gone somewhere else on the page.";
 
 /** The CAPTCHA widgets a page shows, from its frames and marked elements. */
 function captchasOf(raw: RawSnapshot["signals"]): string[] {
@@ -425,8 +429,18 @@ export class BrowserPage {
     return acted;
   }
 
-  /** Empty a field and type into it. With `submit`, Enter is pressed after it. */
-  async type(ref: number | string, text: string, submit = false): Promise<Acted & { password: boolean }> {
+  /**
+   * Empty a field and type into it. With `submit`, Enter is pressed after it.
+   *
+   * What is typed goes where the cursor is. Usually that is the field; a
+   * page can see to it that it is not (a field that passes the cursor on,
+   * something in front of it). For what an agent types that is the page's
+   * own business, as it is for a person at a keyboard. With `secret`, the
+   * text is a password the app types for an account: it is typed only when
+   * the cursor is in that very field and the field is one for passwords,
+   * and otherwise not at all.
+   */
+  async type(ref: number | string, text: string, submit = false, opts: { secret?: boolean } = {}): Promise<Acted & { password: boolean }> {
     const field = await this.call<{ gone?: boolean; wrong?: string; fixed?: boolean; ok?: boolean; focused?: boolean; password?: boolean; label?: string; url?: string }>("ready", [ref]);
     if (field.gone) throw new PageProblem("gone", "That field is not on the page any more. Use the numbers of the latest answer.");
     if (field.wrong) throw new PageProblem("wrong", `That is a ${field.wrong}, not a field to type in.`);
@@ -435,6 +449,10 @@ export class BrowserPage {
       // The page did not let the field be entered directly: it is clicked, as a person would.
       const found = await this.call<Located>("locate", [ref]);
       if (found.clear && found.x !== undefined && found.y !== undefined) await this.clickAt(found.x, found.y);
+    }
+    if (opts.secret) {
+      const held = await this.call<{ gone?: boolean; focused?: boolean; password?: boolean }>("holds", [ref]);
+      if (held.gone || !held.focused || !held.password) throw new PageProblem("secret", NOT_TYPED);
     }
     if (text) await this.insert(text);
     if (submit) {

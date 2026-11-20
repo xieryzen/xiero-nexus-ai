@@ -3100,24 +3100,104 @@ export async function automation(ctx) {
     const twoStep = (await admin.post("/api/browser/accounts", { name: "two-step", siteUrl: `${SITE}/two-step`, username: "sari", password: SARI })).data?.account;
     // A site that is nowhere, on a machine with a way out to the web and on one without.
     const elsewhere = (await admin.post("/api/browser/accounts", { name: "elsewhere", siteUrl: "https://no-such-site.invalid/login", username: "budi", password: BUDI })).data?.account;
-    const bad = await web(admin, "refused", [{ action: "sign_in", account: "shop-wrong" }, { action: "sign_in", account: "careless" }, { action: "click", find: 'button "Show password"' }, { action: "sign_in", account: "two-step" }, { action: "sign_in", account: "nobody" }], { siteAccountIds: [wrong?.id, careless?.id, twoStep?.id] });
+    // A project names one account of a site, so each of these signs in from a project of its own.
+    const bad = await web(admin, "refused", [{ action: "sign_in", account: "shop-wrong" }, { action: "sign_in", account: "nobody" }], { siteAccountIds: [wrong?.id] });
+    const echo = await web(admin, "careless", [{ action: "sign_in", account: "careless" }, { action: "click", find: 'button "Show password"' }], { siteAccountIds: [careless?.id] });
+    const steps = await web(admin, "two steps", [{ action: "sign_in", account: "two-step" }], { siteAccountIds: [twoStep?.id] });
     await site("/__reset");
     await mockReset();
     await runProject(admin, bad.id);
-    const b = await results(admin, bad.id);
+    await runProject(admin, echo.id);
+    await runProject(admin, steps.id);
+    const b = [(await results(admin, bad.id))[0], ...(await results(admin, echo.id)).slice(0, 2), (await results(admin, steps.id))[0], (await results(admin, bad.id))[1]];
     check("a password the site does not take: the agent is told that the form is still there, and what the page says", b[0]?.isError === true && b[0]?.result.startsWith('127.0.0.1 did not take the sign-in of "shop-wrong": the form is still there after it was sent. Trying again does not help; an owner has to look at the account (Browser page).') && b[0]?.result.includes("Wrong user name or password."), b[0]?.result);
     check("  the account says so", /did not take the sign-in/.test((await admin.get(`/api/browser/accounts/${wrong?.id}`)).data?.account?.lastProblem ?? ""), null);
     check("a site that shows the password it was given: the agent reads [hidden] in its place", b[1]?.isError === true && b[1]?.result.includes('The password "[hidden]" is not right for budi.') && b[1]?.result.includes('field "What you typed" (text) = "[hidden]"') && b[1]?.result.includes('field "Password" (password) = [hidden]') && !b[1]?.result.includes(BUDI), b[1]?.result);
     check("  also after a button of the page that shows what its password field holds", b[2]?.isError === false && !b[2]?.result.includes(BUDI) && b[2]?.result.includes('field "Password" (text) = "[hidden]"'), b[2]?.result);
     check("  and the model was sent none of it", !JSON.stringify(await mockLog()).includes(BUDI) && !JSON.stringify(await mockLog()).includes("not-the-password-9"), null);
     check("a site that asks for the name on one page and the password on the next", b[3]?.isError === false && b[3]?.result.startsWith("Signed in to 127.0.0.1 as sari") && b[3]?.result.includes("Signed in as sari.") && (await site("/__state")).signIns.some((s) => s.user === "sari" && s.from === "/two-step"), b[3]?.result);
-    check("an account the project does not have is said so, with the ones it has", b[4]?.isError === true && b[4]?.result === 'This project has no account "nobody". Its accounts: careless, shop-wrong, two-step.', b[4]?.result);
+    check("an account the project does not have is said so, with the ones it has", b[4]?.isError === true && b[4]?.result === 'This project has no account "nobody". Its accounts: shop-wrong.', b[4]?.result);
+    {
+      // What the one sign-in left is not what another account is let in with.
+      const sessions = async (...accounts) => Promise.all(accounts.map(async (account) => (await admin.get(`/api/browser/accounts/${account?.id}`)).data?.account?.hasSession));
+      eq("the session of the account that signed in is kept with that account, and with no other of the same site", await sessions(twoStep, wrong, careless), [true, false, false]);
+    }
     const away = await web(admin, "elsewhere", [{ action: "sign_in", account: "elsewhere" }], { siteAccountIds: [elsewhere?.id] });
     await runProject(admin, away.id);
     check("an account whose page cannot be opened is said so", (await results(admin, away.id))[0]?.isError === true && /^The sign-in page of "elsewhere" was not opened: the browser service did not open it: the address is on a private network, or its name could not be found\.$/.test((await results(admin, away.id))[0]?.result ?? ""), (await results(admin, away.id))[0]?.result);
     const typed = await web(admin, "typing a password", [{ action: "open", url: `${SITE}/login` }, { action: "type", find: 'field "Password"', text: "typed-by-the-agent-77" }]);
     await runProject(admin, typed.id);
     check("what an agent types into a password field itself is not shown back, and not written down", (await results(admin, typed.id))[1]?.result.includes('field "Password" (password) = [hidden]') && (await log(admin)).some((a) => a.kind === "type" && a.detail === 'field "Password": (not written down: a password field)') && !JSON.stringify(await log(admin)).includes("typed-by-the-agent-77"), (await results(admin, typed.id))[1]?.result);
+
+    begin("Browser: a password with quotes and spaces in it, and a page that is read from its middle");
+    // A page is not read letter for letter: white space is drawn together, and the value of a field is written with ' for ".
+    const ODD = 'Kunci "Rahasia"  Tokonya-Zebra';
+    const noPart = (text) => !["Kunci", "Rahasia", "Tokonya", "Zebra"].some((part) => String(text).includes(part));
+    const odd = (await admin.post("/api/browser/accounts", { name: "careless-odd", siteUrl: `${SITE}/echo-login`, username: "budi", password: ODD })).data?.account;
+    // The page says the password back at characters 14 to 42 of its text: it is read on from inside of that.
+    const oddly = await web(admin, "an odd password", [{ action: "sign_in", account: "careless-odd" }, { action: "click", find: 'button "Show password"' }, { action: "read", offset: 20 }, { action: "read", offset: 27 }, { action: "read", offset: 33 }], { siteAccountIds: [odd?.id] });
+    await mockReset();
+    const oddRun = await runProject(admin, oddly.id);
+    const o = await results(admin, oddly.id);
+    check("it is hidden in the text of the page and as the value of a field, as the page is read", o[0]?.isError === true && o[0]?.result.includes('The password "[hidden]" is not right for budi.') && o[0]?.result.includes('field "What you typed" (text) = "[hidden]"') && noPart(o[0]?.result), o[0]?.result);
+    check("  also when a button of the page shows what its password field holds", o[1]?.isError === false && o[1]?.result.includes('field "Password" (text) = "[hidden]"') && noPart(o[1]?.result), o[1]?.result);
+    check("a page that is read on from where the password stands shows no part of it", o.length === 5 && o.slice(2).every((call) => call.isError === false && /\(from character \d+\)/.test(call.result) && noPart(call.result)), o.slice(2).map((call) => call.result.slice(0, 200)));
+    {
+      const sent = JSON.stringify(await mockLog());
+      const db = database();
+      const kept = JSON.stringify({
+        calls: db.prepare("SELECT arguments, result FROM tool_calls WHERE project_id = ?").all(oddly.id),
+        tasks: db.prepare("SELECT artifact, error FROM project_tasks WHERE project_id = ?").all(oddly.id),
+        log: db.prepare("SELECT detail, note, url FROM browser_actions").all(),
+        notifications: db.prepare("SELECT title, body FROM notifications").all(),
+      });
+      db.close();
+      check("  no part of it is in what the model was sent, or in what is kept of the run", noPart(sent) && noPart(kept) && noPart(JSON.stringify(oddRun.events)) && sent.includes("is not right for budi"), null);
+    }
+
+    {
+      // The run never signs in: a person takes the page over and types the password of the project's account by hand.
+      const byHandTyped = await web(admin, "typed by a person", [{ action: "open", url: `${SITE}/by-hand` }, { action: "ask_person", reason: "Type what is needed." }, { action: "read", offset: 30 }], { siteAccountIds: [odd?.id] });
+      await mockReset();
+      const typedRun = await runWithPerson(admin, byHandTyped.id, async (id) => {
+        const me = person(admin, id);
+        await me.text(ODD);
+        await until(async () => (await me.screen()).status, (status) => status === 200, { tries: 10, gapMs: 200 });
+        await me.done("continue");
+      });
+      const h = await results(admin, byHandTyped.id);
+      check("a password that a person types into a page by hand is kept from the agent too", typedRun.links.length === 1 && h[1]?.isError === false && h[1]?.result.includes("You typed: [hidden]") && h[1]?.result.includes('field "Anything" (text) = "[hidden]"') && noPart(h[1]?.result) && noPart(h[2]?.result) && noPart(JSON.stringify(await mockLog())), h.map((call) => call.result.slice(0, 300)));
+    }
+
+    begin("Browser: a password is typed into the password field, or not at all");
+    const thief = (await admin.post("/api/browser/accounts", { name: "thief", siteUrl: `${SITE}/thief-login`, username: "budi", password: BUDI })).data?.account;
+    const stolen = await web(admin, "a field that passes the cursor on", [{ action: "sign_in", account: "thief" }], { siteAccountIds: [thief?.id] });
+    await site("/__reset");
+    await mockReset();
+    await runProject(admin, stolen.id);
+    const NOT_TYPED = "The page did not let its password field be entered, so the password was not typed: it would have gone somewhere else on the page.";
+    const taken = await results(admin, stolen.id);
+    eq("a password field that passes the cursor on to the field next to it: the password is not typed", [taken[0]?.isError, taken[0]?.result], [true, `${NOT_TYPED} An owner can sign in to "thief" by hand (Browser page).`]);
+    eq("  the field next to it was given nothing, and no form was sent", (await site("/__state")).strayed, []);
+    check("  the account and the log say what stood in the way", (await admin.get(`/api/browser/accounts/${thief?.id}`)).data?.account?.lastProblem === NOT_TYPED && (await log(admin)).some((x) => x.kind === "sign_in" && x.status === "failed" && x.accountName === "thief" && x.note === NOT_TYPED), (await log(admin)).filter((x) => x.accountName === "thief"));
+    const byThief = await admin.post(`/api/browser/accounts/${thief?.id}/session`);
+    const thiefLive = await until(async () => (await person(admin, byThief.data?.id).state()).data?.live, (live) => live && live.busy === false, { tries: 40, gapMs: 250 });
+    eq("  an owner who signs in to it by hand is told to type the password there", thiefLive?.note, `${NOT_TYPED} Type it here yourself, send the form, and keep the session when you are in.`);
+    eq("  (that page is closed, and still nothing arrived)", [(await person(admin, byThief.data?.id).done("discard")).status, (await until(use, (u) => u?.pages === 0 && u?.waiting === 0, { tries: 20, gapMs: 250 }))?.pages, (await site("/__state")).strayed], [200, 0, []]);
+
+    begin("Browser: a project names one account of a site");
+    const ONE = (a, b) => `The site accounts "${a}" and "${b}" are of one site (127.0.0.1). A project names one account of a site: its run has one browser, and a browser is signed in to a site as one account at a time. Take one of them out, or give the other its own project.`;
+    const two = await admin.post("/api/projects", { ...base, title: "Two of one site", siteAccountIds: [wrong?.id, careless?.id] });
+    const widened = await admin.patch(`/api/projects/${bad.id}`, { siteAccountIds: [wrong?.id, careless?.id] });
+    eq("two accounts of one site are refused, with why", [[two.status, two.error], [widened.status, widened.error]], [[400, ONE("shop-wrong", "careless")], [400, ONE("shop-wrong", "careless")]]);
+    const apart = await web(admin, "two sites", [{ action: "open", url: `${SITE}/` }], { siteAccountIds: [wrong?.id, elsewhere?.id] });
+    eq("accounts of two sites are named together", [apart.status, apart.project?.siteAccounts?.map((x) => x.name)], [201, ["elsewhere", "shop-wrong"]]);
+    // An account that is moved to the site of another one the project names.
+    const moved = await admin.patch(`/api/browser/accounts/${elsewhere?.id}`, { siteUrl: `${SITE}/login` });
+    await runProject(admin, apart.id);
+    const stuck = (await admin.get(`/api/projects/${apart.id}`)).data?.project;
+    eq("an account that is moved to the site of another one of the project: the project does not run, and says why", [moved.status, stuck?.status, stuck?.error], [200, "failed", ONE("elsewhere", "shop-wrong")]);
+    eq("  (the account is put back where it was)", (await admin.patch(`/api/browser/accounts/${elsewhere?.id}`, { siteUrl: "https://no-such-site.invalid/login" })).status, 200);
 
     begin("Browser: a CAPTCHA on the sign-in form is a person's, in the same browser");
     const captcha = (await admin.post("/api/browser/accounts", { name: "shop-captcha", siteUrl: `${SITE}/captcha-login`, username: "budi", password: BUDI })).data?.account;
@@ -3374,11 +3454,11 @@ export async function automation(ctx) {
     );
     check("  an address is written without what follows the question mark", entries.some((x) => x.kind === "type" && x.url === `${SITE}/`) && entries.some((x) => x.kind === "open" && x.projectTitle === "Web, reading" && x.detail === `${SITE}/`) && !entries.some((x) => /\?q=/.test(x.url ?? "")), entries.filter((x) => x.projectTitle === "Web, reading").map((x) => [x.kind, x.url]));
     check("  what failed is there with why", entries.some((x) => x.kind === "click" && x.status === "failed" && /^Something else is in front of it/.test(x.note ?? "")) && entries.some((x) => x.kind === "open" && x.status === "failed" && /private network/.test(x.note ?? "")) && entries.some((x) => x.kind === "sign_in" && x.status === "refused" && x.accountName === "shop-wrong"), null);
-    check("  and no password, of an account or typed by an agent", ![BUDI, SARI, "not-the-password-9", "another-password-5", "typed-by-the-agent-77"].some((secret) => JSON.stringify(entries).includes(secret)), null);
+    check("  and no password, of an account or typed by an agent", ![BUDI, SARI, "not-the-password-9", "another-password-5", "typed-by-the-agent-77"].some((secret) => JSON.stringify(entries).includes(secret)) && noPart(JSON.stringify(entries)), null);
 
     begin("Browser: removing an account");
     const removed = await admin.del(`/api/browser/accounts/${twoStep?.id}`);
-    eq("the owner removes an account; the project that named it is without it", [removed.status, (await admin.get(`/api/projects/${bad.id}`)).data?.project?.siteAccounts?.map((x) => x.name), (await admin.get(`/api/browser/accounts/${twoStep?.id}`)).status], [200, ["careless", "shop-wrong"], 404]);
+    eq("the owner removes an account; the project that named it is without it", [removed.status, (await admin.get(`/api/projects/${steps.id}`)).data?.project?.siteAccounts?.map((x) => x.name), (await admin.get(`/api/browser/accounts/${twoStep?.id}`)).status], [200, [], 404]);
     check("  what was done with it stays in the log, under the name it had", (await log(admin)).some((x) => x.accountName === "two-step" && x.accountId === null && x.kind === "sign_in"), null);
     const actions = audits();
     check(
@@ -3395,8 +3475,8 @@ export async function automation(ctx) {
     const gone = [];
     for (const id of [samId, sueId]) gone.push((await admin.del(`/api/admin/users/${id}`)).status);
     gone.push((await admin.del(`/api/agents/${state.agents["Surfer again"]}`)).status, (await admin.del(`/api/models/${state.models["chat-web"]}`)).status);
-    for (const id of [wrong?.id, careless?.id, elsewhere?.id, coded?.id, byHand?.id, forAdmins?.id]) gone.push((await admin.del(`/api/browser/accounts/${id}`)).status);
-    eq("the accounts of these checks are deleted, and the model that was made to fail", gone, Array(10).fill(200));
+    for (const id of [wrong?.id, careless?.id, elsewhere?.id, coded?.id, byHand?.id, forAdmins?.id, odd?.id, thief?.id]) gone.push((await admin.del(`/api/browser/accounts/${id}`)).status);
+    eq("the accounts of these checks are deleted, and the model that was made to fail", gone, Array(12).fill(200));
   }
 
   const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility, servers, browser };

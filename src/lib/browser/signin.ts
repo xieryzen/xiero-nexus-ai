@@ -77,7 +77,8 @@ export async function signIn(page: BrowserPage, account: SignInAccount, password
         await page.type("user", account.username);
         named = true;
       }
-      await page.type("pass", password);
+      // Only into the password field itself, with the cursor in it: never into what a page puts in its place.
+      await page.type("pass", password, false, { secret: true });
       // A CAPTCHA on the form: a person ticks it and sends the form.
       if (verification && verification.kind === "captcha") return { state: "needs_person", verification, filled: true };
       await send(page, form);

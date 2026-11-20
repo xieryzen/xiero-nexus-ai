@@ -21,8 +21,10 @@ import {
   BROWSER_TOOL,
   LOG_KEEP,
   accountName,
-  cookieOfSite,
+  cookieKeptFor,
   mayUseAccount,
+  oneSiteProblem,
+  pairOfOneSite,
   siteHost,
   siteUrlProblem,
   type AccountAccess,
@@ -193,14 +195,25 @@ export interface SavedCookie {
 const COOKIES_MAX = 300;
 const SESSION_MAX_BYTES = 400_000;
 
-/** Of what a browser holds, what is part of the sign-in of this account's site. */
-export function cookiesOfAccount(all: readonly Record<string, unknown>[], account: Pick<SiteAccount, "siteUrl">): SavedCookie[] {
+/**
+ * Of what a browser holds, what is part of the sign-in of this account's
+ * site. `others` are the other accounts whose sessions the same browser
+ * held: a cookie that would be one of theirs too is kept for none of them,
+ * since nothing says whose sign-in left it (two sites under one domain, and
+ * a cookie for that domain).
+ */
+export function cookiesOfAccount(
+  all: readonly Record<string, unknown>[],
+  account: Pick<SiteAccount, "siteUrl">,
+  others: readonly Pick<SiteAccount, "siteUrl">[] = [],
+): SavedCookie[] {
   const out: SavedCookie[] = [];
+  const otherSites = others.map((other) => other.siteUrl);
   for (const raw of all) {
     const name = typeof raw.name === "string" ? raw.name : "";
     const domain = typeof raw.domain === "string" ? raw.domain : "";
     if (!name || !domain || typeof raw.value !== "string") continue;
-    if (!cookieOfSite({ name, domain }, account.siteUrl)) continue;
+    if (!cookieKeptFor({ name, domain }, account.siteUrl, otherSites)) continue;
     const cookie: SavedCookie = { name, value: raw.value, domain, path: typeof raw.path === "string" ? raw.path : "/" };
     // A cookie without an end lasts as long as the browser is open: it is kept too, as a browser that is left open keeps it.
     if (typeof raw.expires === "number" && raw.expires > 0) cookie.expires = raw.expires;
@@ -298,10 +311,13 @@ export function checkedAccountIds(user: Pick<User, "role">, asked: readonly stri
   if (ids.length > ACCOUNTS_PER_PROJECT) {
     throw Errors.badRequest(`A project can name ${ACCOUNTS_PER_PROJECT} site accounts at most.`);
   }
-  const usable = new Set(accountsFor(user).map((account) => account.id));
+  const usable = new Map(accountsFor(user).map((account) => [account.id, account]));
   if (!ids.every((id) => usable.has(id))) {
     throw Errors.badRequest("A site account of this project does not exist, or the projects of this account may not sign in with it.");
   }
+  // One account of a site: the run's one browser is signed in to a site as one account at a time.
+  const pair = pairOfOneSite(ids.map((id) => usable.get(id)!));
+  if (pair) throw Errors.badRequest(oneSiteProblem(pair[0], pair[1]));
   return ids;
 }
 
@@ -364,6 +380,10 @@ export function accountsForRun(project: Pick<Project, "id" | "createdBy">): RunA
       problem: `The site account ${off.map((a) => `"${a.name}"`).join(", ")} of this project is switched off (Browser page).`,
     };
   }
+  // Two accounts of one site, named before this was refused or made so by a changed address:
+  // one browser cannot be signed in as both, and what the one leaves must not become the other's session.
+  const pair = pairOfOneSite(named);
+  if (pair) return { accounts: [], problem: oneSiteProblem(pair[0], pair[1]) };
   return { accounts: named, problem: null };
 }
 

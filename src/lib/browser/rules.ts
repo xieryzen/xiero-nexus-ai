@@ -113,6 +113,37 @@ export function mayFillPassword(pageUrl: string, siteUrl: string): boolean {
   return page.protocol === "http:" && site.protocol === "http:";
 }
 
+/**
+ * Whether two accounts are of one site: the same host, or one under the
+ * other. A run has one browser, and a browser is signed in to a site as one
+ * account at a time: what the one account's sign-in leaves is what the other
+ * would be let in with.
+ */
+export function ofOneSite(siteUrlA: string, siteUrlB: string): boolean {
+  const a = siteHost(siteUrlA);
+  const b = siteHost(siteUrlB);
+  if (!a || !b) return false;
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/** Of the accounts a project names, two that are of one site: the first such pair, or null. */
+export function pairOfOneSite<T extends { siteUrl: string }>(accounts: readonly T[]): [T, T] | null {
+  for (let i = 0; i < accounts.length; i++) {
+    for (let j = i + 1; j < accounts.length; j++) {
+      if (ofOneSite(accounts[i]!.siteUrl, accounts[j]!.siteUrl)) return [accounts[i]!, accounts[j]!];
+    }
+  }
+  return null;
+}
+
+/** What is said of a project that names two accounts of one site. */
+export function oneSiteProblem(a: { name: string; siteUrl: string }, b: { name: string }): string {
+  return (
+    `The site accounts "${a.name}" and "${b.name}" are of one site (${siteHost(a.siteUrl)}). A project names one account of a site: ` +
+    "its run has one browser, and a browser is signed in to a site as one account at a time. Take one of them out, or give the other its own project."
+  );
+}
+
 export interface CookieLike {
   name: string;
   domain: string;
@@ -128,6 +159,17 @@ export function cookieOfSite(cookie: CookieLike, siteUrl: string): boolean {
   const domain = cookie.domain.toLowerCase().replace(/^\./, "").replace(/^www\./, "");
   if (!site || !domain) return false;
   return domain === site || domain.endsWith(`.${site}`) || site.endsWith(`.${domain}`);
+}
+
+/**
+ * Whether a cookie is kept as part of an account's session, out of a browser
+ * that held the sessions of other accounts too. A cookie that would be one
+ * of theirs as well is kept for none of them: nothing says whose sign-in
+ * left it (two sites under one domain, and a cookie for that domain), and
+ * the session of one account must not become what another is let in with.
+ */
+export function cookieKeptFor(cookie: CookieLike, siteUrl: string, otherSiteUrls: readonly string[] = []): boolean {
+  return cookieOfSite(cookie, siteUrl) && !otherSiteUrls.some((other) => cookieOfSite(cookie, other));
 }
 
 /** An address as it is written in the log and shown in a list: without what follows "?" and "#", and not too long. */
@@ -146,16 +188,58 @@ export function shownUrl(input: string, max = 200): string {
 
 export const HIDDEN = "[hidden]";
 
+/** Characters of a field's value that the reading of a page writes (page-script.ts): a longer value is cut there. */
+export const FIELD_VALUE_CHARS = 200;
+
 /**
- * A text without the secrets in it. Whatever a page does with a password
- * that was typed into it (a button that shows it, an error that repeats it),
- * the agent does not get to read it.
+ * The forms a secret takes in what is read of a page, the longest first. A
+ * page is not read letter for letter: white space is drawn together, the
+ * value of a field is written between double quotes with ' for every " in
+ * it and cut when it is long, and an address holds it encoded. A password
+ * with a quote or two spaces in it must not get through for that.
+ *
+ * What is shorter than four characters is in none of them: taking "ab" out
+ * of every text would leave little of the text.
+ */
+export function secretForms(secret: string): string[] {
+  const forms = new Set<string>();
+  const add = (form: string) => {
+    if (form.length >= 4) forms.add(form);
+  };
+  const drawn = secret.replace(/\s+/g, " ").trim();
+  for (const base of new Set([secret, drawn])) {
+    if (base.length < 4) continue;
+    for (const text of new Set([base, base.replace(/"/g, "'")])) {
+      add(text);
+      // As the value of a field that is cut: what comes before the "…".
+      if (text.length > FIELD_VALUE_CHARS) add(text.slice(0, FIELD_VALUE_CHARS - 1));
+    }
+    // In an address: as a form sends it, and as a script writes it.
+    add(new URLSearchParams({ v: base }).toString().slice(2));
+    try {
+      add(encodeURIComponent(base));
+    } catch {
+      // Half a character at the end of it: there is no such form.
+    }
+  }
+  return [...forms].sort((a, b) => b.length - a.length);
+}
+
+/**
+ * A text without the secrets in it, in any of the forms the reading of a
+ * page gives them. Whatever a page does with a password that was typed into
+ * it (a button that shows it, an error that repeats it), the agent does not
+ * get to read it.
+ *
+ * A text has to be given whole: a secret that a cut has parted is not found.
+ * So a page is cleared before it is cut into pieces, not after.
  */
 export function redact(text: string, secrets: Iterable<string>): string {
   let out = text;
   for (const secret of secrets) {
-    if (secret.length < 4) continue;
-    if (out.includes(secret)) out = out.split(secret).join(HIDDEN);
+    for (const form of secretForms(secret)) {
+      if (out.includes(form)) out = out.split(form).join(HIDDEN);
+    }
   }
   return out;
 }
