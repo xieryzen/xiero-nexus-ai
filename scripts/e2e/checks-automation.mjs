@@ -1856,6 +1856,86 @@ export async function automation(ctx) {
     const third2 = await runProject(yan, yanProject);
     eq("with tokens enough, a run is whole: its tasks, its result, its review", [finished(third2.events).map((e) => e.status), lastStatus(third2.events), await balance(yan)], [["succeeded", "succeeded", "succeeded"], "succeeded", [330, 1_000, 670]]);
 
+    begin("Tokens: a project has no token budget of its own");
+    // Forty tasks of one call each use 1,200 tokens. A project once had a
+    // budget, of 1,000 tokens at the least: its run was stopped after the task
+    // that passed it.
+    const fortyWf = await workflow(
+      "Count to forty",
+      Array.from({ length: 40 }, (_, i) => ({ title: `Count ${i + 1}`, objective: `Say ${i + 1}.`, role: "Counter" })),
+    );
+    const fortyMade = await admin.post("/api/projects", { title: "No budget", goal: "Check the app.", managerModelRowId: ids.models.chat, workflowId: fortyWf, maxParallel: 1, maxTasks: 40, maxTokens: 1000 });
+    const fortyId = fortyMade.data?.project?.id;
+    eq("a budget that an older client still sends is not refused, and not kept", [fortyMade.status, Object.keys(fortyMade.data?.project ?? {}).filter((key) => /maxTokens|budget/i.test(key))], [201, []]);
+    const forty = await runProject(admin, fortyId);
+    const fortyTasks = finished(forty.events);
+    eq("a run goes on past what was its budget: every task is done", [fortyTasks.length, fortyTasks.filter((t) => t.status === "succeeded").length, lastStatus(forty.events)], [40, 40, "succeeded"]);
+    const fortyCount = forty.events.filter((e) => e.type === "tokens").at(-1);
+    eq("  it says what its tasks used, and that an owner's run is held to no limit", [fortyCount?.used, fortyCount?.left, (await admin.get(`/api/projects/${fortyId}`)).data?.project?.tokensUsed], [1200, null, 1200]);
+    check("  nothing speaks of a budget any more", !forty.events.some((e) => e.type === "budget" || /budget/i.test(JSON.stringify(e))), forty.events.filter((e) => /budget/i.test(JSON.stringify(e))).slice(0, 3));
+
+    begin("Tokens: the tasks of a run are held to one balance");
+    // An agent that calls a tool for ever: 30 tokens a call, eight calls at the most.
+    await model("chat-count", openai, "chat-count", ["text"]);
+    await agent("Looper", "Looper", { tools: ["list_files"], maxSteps: 8 });
+    await agent("Second looper", "Looper with a second model", { tools: ["list_files"], maxSteps: 8, primaryModelRowId: state.models["chat-count"], fallbackModelRowId: ids.models.chat });
+    const loopsWf = await workflow("Three loops", [1, 2, 3].map((n) => ({ title: `Tool: loop ${n}`, objective: "Never stops by itself.", role: "Looper" })));
+    const zivMade = await make("ziv", { role: "admin", tokenLimit: 200 });
+    const zivId = zivMade.data?.user?.id;
+    const ziv = await signIn("ziv");
+    const loopsId = await project(ziv, { title: "Ziv loops", workflowId: loopsWf, maxParallel: 3 });
+    await mockReset();
+    const loops = await runProject(ziv, loopsId);
+    const loopCalls = (await asked()).length;
+    const loopTasks = finished(loops.events);
+    // The seventh call uses the last tokens. The two tasks that wait for an
+    // answer then get it, and each of the three asks once more to hand over
+    // what it has: twelve calls. Each task by its own count would make eight.
+    check("three tasks at once stop together when the account's tokens are used up", loopCalls >= 10 && loopCalls <= 12, loopCalls);
+    eq("  each hands over what it has", [loopTasks.map((t) => t.status), loopTasks.every((t) => /^DONE after \d tool results/.test(t.artifact ?? "")), loopTasks.reduce((sum, t) => sum + (t.steps ?? 0), 0)], [["succeeded", "succeeded", "succeeded"], true, loopCalls]);
+    eq("  every call is on the account, and on the run", [await balance(ziv), loops.events.filter((e) => e.type === "tokens").at(-1)?.used, loops.events.filter((e) => e.type === "tokens").at(-1)?.left], [[loopCalls * 30, 200, 0], loopCalls * 30, 0]);
+    const loopsResult = loops.events.find((e) => e.type === "final")?.deliverable ?? "";
+    check("  the run ends for a look: its result was not put together, and says why", lastStatus(loops.events) === "review" && loopsResult.includes(ofProject(String(loopCalls * 30), "200")), [lastStatus(loops.events), loopsResult]);
+
+    begin("Tokens: what an agent used before a call failed is counted");
+    const failWf = await workflow("A loop that fails", [{ title: "Tool: loop that fails", objective: "Never stops by itself.", role: "Looper with a second model" }]);
+    const failId = await project(ziv, { title: "Ziv fails", workflowId: failWf });
+    const usageOf = (id) => {
+      const db = database();
+      const rows = db.prepare("SELECT status, total_tokens AS tokens FROM usage_records WHERE user_id = ? ORDER BY created_at, rowid").all(id);
+      db.close();
+      return rows;
+    };
+    const usedBefore = loopCalls * 30;
+    await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: 100_000 });
+    await mockReset();
+    // The first model answers twice, and fails from then on.
+    await fetch(`${MOCK}/__force?model=chat-count&status=500&after=2`);
+    const failed = await runProject(ziv, failId);
+    const failedTask = taskOf(failed.events, 1);
+    const failAttempts = ((await ziv.get(`/api/projects/${failId}/attempts`)).data?.attempts ?? []).map((a) => [a.attempt, a.status, a.modelId]);
+    eq("the first model fails at its third call: the second starts the task over, and ends it", [failAttempts, failedTask?.status], [[[1, "error", "chat-count"], [2, "ok", "chat-mini"]], "succeeded"]);
+    // Two calls of the first model, eight of the second.
+    eq("  the task counts the calls that were answered before the failure", [failedTask?.tokens, failed.events.filter((e) => e.type === "tokens").at(-1)?.used], [300, 300]);
+    const failRows = usageOf(zivId);
+    check("  and so do the usage records: the attempt that failed is there with what it used", failRows.some((row) => row.status === "error" && row.tokens === 60), failRows.slice(-5));
+    const afterFail = await balance(ziv);
+    eq("  the account's count is what its usage records add up to", [afterFail[0], afterFail[0] >= usedBefore + 300], [failRows.reduce((sum, row) => sum + row.tokens, 0), true]);
+
+    begin("Tokens: with none left, no other model is asked");
+    // Two calls' worth is left: the first model uses it, and then fails.
+    await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: afterFail[0] + 60 });
+    await mockReset();
+    await fetch(`${MOCK}/__force?model=chat-count&status=500&after=2`);
+    const stopped = await runProject(ziv, failId);
+    await fetch(`${MOCK}/__force?model=chat-count&status=200`);
+    const stoppedTask = taskOf(stopped.events, 1);
+    const end = (afterFail[0] + 60).toLocaleString("en-US");
+    const stoppedCalls = (await mockLog()).filter((l) => l.method === "POST").map((l) => l.body?.model);
+    eq("the task fails, and says that the tokens are used up", [stoppedTask?.status, stoppedTask?.error, stoppedTask?.tokens], ["failed", ofProject(end, end), 60]);
+    eq("  the second model was not asked: two calls answered, and the one that failed", stoppedCalls, ["chat-count", "chat-count", "chat-count"]);
+    eq("  the run failed, and the account is told why", [lastStatus(stopped.events), await balance(ziv), ((await ziv.get("/api/notifications")).data?.notifications ?? []).find((n) => n.title === "Run failed: Ziv fails")?.body], ["failed", [afterFail[0] + 60, afterFail[0] + 60, 0], `No task succeeded. ${ofProject(end, end)}`]);
+
     begin("Tokens: what is not counted");
     const before = (await balance(wim))[0];
     const tested = await wim.post(`/api/models/${ids.models.chat}/test`, {});
@@ -1879,6 +1959,17 @@ export async function automation(ctx) {
     check("  an account with none left is told on every page", veraSettings.includes('id="tokens-used-up"') && (await pageOf(vera, "/dashboard")).includes("Your token balance is used up"), null);
     const tiaHome = await pageOf(tia, "/dashboard");
     check("  one with tokens sees how many are left, and no warning", tiaHome.includes('id="tokens-left"') && tiaHome.includes("10M tokens left") && !tiaHome.includes('id="tokens-used-up"'), null);
+    // What a project page says a run is held to: text that React splits is read as one.
+    const projectLine = async (who, id) => {
+      const html = (await pageOf(who, `/dashboard/projects/${id}`)).replaceAll("<!-- -->", "").replaceAll("&#x27;", "'");
+      return (html.match(/<span[^>]*id="project-tokens"[^>]*>(.*?)· max \d+× parallel/s) ?? [])[1]?.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim() ?? html.length;
+    };
+    eq("a project page says what the tasks used, and that an owner's run is held to no limit", await projectLine(admin, fortyId), "· 1,200 tokens used by the tasks · no token limit");
+    const zivLeft = (await balance(ziv))[2];
+    await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: (await balance(ziv))[0] + 5_000 });
+    eq("  to an account with a limit: how many of its tokens are left", [zivLeft, await projectLine(ziv, failId), await projectLine(admin, failId)], [0, "· 60 tokens used by the tasks · 5,000 of your tokens left", "· 60 tokens used by the tasks · 5,000 of its account's tokens left"]);
+    await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: 0 });
+    eq("  and when none are", [await projectLine(ziv, failId), await projectLine(admin, failId)], ["· 60 tokens used by the tasks · your tokens are used up", "· 60 tokens used by the tasks · its account's tokens are used up"]);
     const ownerSettings = await pageOf(admin, "/dashboard/settings");
     check("  an owner sees what it used, and that it has no limit", ownerSettings.includes('id="token-balance"') && ownerSettings.includes("No limit") && !ownerSettings.includes('id="tokens-left"'), null);
     const auditDb = database();
@@ -1894,11 +1985,18 @@ export async function automation(ctx) {
 
     // The accounts of these checks go, so that the lists after them are what they were.
     const gone = [];
-    for (const name of ["tia", "uli", "vera", "wim", "xena", "yan"]) {
+    for (const name of ["tia", "uli", "vera", "wim", "xena", "yan", "ziv"]) {
       const id = ((await admin.get("/api/admin/users")).data?.users ?? []).find((u) => u.username === name)?.id;
       gone.push((await admin.del(`/api/admin/users/${id}`)).status);
     }
-    eq("the accounts of these checks are deleted", gone, [200, 200, 200, 200, 200, 200]);
+    eq("the accounts of these checks are deleted", gone, [200, 200, 200, 200, 200, 200, 200]);
+    // And the projects, the agents and the model of the checks of a run's tokens.
+    const cleared = [];
+    for (const id of [fortyId, loopsId, failId]) cleared.push((await admin.del(`/api/projects/${id}`)).status);
+    for (const id of [fortyWf, loopsWf, failWf]) cleared.push((await admin.del(`/api/workflows/${id}`)).status);
+    for (const name of ["Looper", "Second looper"]) cleared.push((await admin.del(`/api/agents/${state.agents[name]}`)).status);
+    cleared.push((await admin.del(`/api/models/${state.models["chat-count"]}`)).status);
+    eq("  and what was made to check the tokens of a run", cleared, [200, 200, 200, 200, 200, 200, 200, 200, 200]);
   }
 
   // ─── What a user is shown ──────────────────────────────────────────────────

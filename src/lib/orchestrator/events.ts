@@ -57,6 +57,8 @@ export type RunEvent =
   | { type: "tool"; seq: number; call: ToolCallNote }
   | { type: "final"; deliverable: string }
   | { type: "review"; notes: string }
-  | { type: "budget"; used: number; limit: number }
+  // What the run's tasks used so far, and what the account the project belongs
+  // to has left: null when that account is not held to a limit.
+  | { type: "tokens"; used: number; left: number | null }
   | { type: "error"; message: string }
   | { type: "done"; status: ProjectState };

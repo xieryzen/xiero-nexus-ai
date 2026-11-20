@@ -141,7 +141,6 @@ export function serializeProject(p: Project, opts: { withTasks?: boolean } = {})
     finalDeliverable: p.finalDeliverable,
     reviewNotes: p.reviewNotes,
     error: p.error,
-    maxTokens: p.maxTokens,
     maxTasks: p.maxTasks,
     maxParallel: p.maxParallel,
     tokensUsed: p.tokensUsed,

@@ -203,9 +203,72 @@ test("a long result is cut, and says by how much", async () => {
 
 test("out of tokens: one more call for the answer, without tools", async () => {
   const model = scripted([{ content: "", toolCalls: [call("list")], usage: { promptTokens: 900, completionTokens: 200 } }, { content: "Summary.", usage: { promptTokens: 50, completionTokens: 10 } }]);
-  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a")], maxSteps: 10, tokenBudget: 1000, estimateTokens });
-  assert.deepEqual([result.content, result.steps, result.stopped, result.promptTokens, result.completionTokens], ["Summary.", 2, "budget", 950, 210]);
+  // Whoever runs the loop keeps the balance: here, a thousand tokens.
+  let used = 0;
+  const result = await runToolLoop({
+    chat: model.chat,
+    messages: BASE,
+    tools: [tool("list", () => "a")],
+    maxSteps: 10,
+    estimateTokens,
+    onUsage: (prompt, completion) => {
+      used += prompt + completion;
+    },
+    outOfTokens: () => used >= 1000,
+  });
+  assert.deepEqual([result.content, result.steps, result.stopped, result.promptTokens, result.completionTokens], ["Summary.", 2, "tokens", 950, 210]);
   assert.equal(model.asked[1]!.toolChoice, "none");
+  // The last call is counted as well.
+  assert.equal(used, 1160);
+});
+
+test("with tokens left, the loop goes on to its answer, however many it has used", async () => {
+  const big = { promptTokens: 400_000, completionTokens: 100_000 };
+  const model = scripted([
+    { content: "", toolCalls: [call("list", { n: 1 })], usage: big },
+    { content: "", toolCalls: [call("list", { n: 2 })], usage: big },
+    { content: "Done.", usage: big },
+  ]);
+  let asked = 0;
+  const result = await runToolLoop({
+    chat: model.chat,
+    messages: BASE,
+    tools: [tool("list", () => "a")],
+    maxSteps: 10,
+    estimateTokens,
+    outOfTokens: () => {
+      asked++;
+      return false;
+    },
+  });
+  assert.deepEqual([result.content, result.steps, result.stopped, result.promptTokens + result.completionTokens], ["Done.", 3, "answer", 1_500_000]);
+  // Asked after each step that called a tool, and not after the answer.
+  assert.equal(asked, 2);
+});
+
+test("each answered call says what it used: reported or estimated, and known when a later call fails", async () => {
+  const seen: [number, number][] = [];
+  let calls = 0;
+  const failing = async (): Promise<ChatResult> => {
+    calls++;
+    if (calls === 1) return { content: "", toolCalls: [call("list", { n: 1 })], usage: { promptTokens: 120, completionTokens: 30 } };
+    // No usage from the provider: the loop estimates it.
+    if (calls === 2) return { content: "", toolCalls: [call("list", { n: 2 })] };
+    throw new Error("The provider is down.");
+  };
+  await assert.rejects(
+    runToolLoop({ chat: failing, messages: BASE, tools: [tool("list", () => "a")], maxSteps: 10, estimateTokens, onUsage: (prompt, completion) => seen.push([prompt, completion]) }),
+    /The provider is down/,
+  );
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen[0], [120, 30]);
+  assert.ok(seen[1]![0] > 0 && seen[1]![1] > 0, JSON.stringify(seen[1]));
+  // What the calls said is what the loop returns when it ends in an answer.
+  const told: [number, number][] = [];
+  const model = scripted([{ content: "", toolCalls: [call("list")], usage: { promptTokens: 7, completionTokens: 3 } }, { content: "ok", usage: { promptTokens: 11, completionTokens: 5 } }]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a")], maxSteps: 5, estimateTokens, onUsage: (prompt, completion) => told.push([prompt, completion]) });
+  assert.deepEqual(told, [[7, 3], [11, 5]]);
+  assert.deepEqual([result.promptTokens, result.completionTokens], [18, 8]);
 });
 
 test("a cancelled run stops before the next call, and tools are not run", async () => {

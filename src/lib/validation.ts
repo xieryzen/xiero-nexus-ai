@@ -276,7 +276,8 @@ export const projectCreateSchema = z.object({
   // An administrator chooses the manager; for a user the app does (model-choice.ts).
   managerModelRowId: z.string().min(1).nullable().optional(),
   teamId: z.string().min(1).nullable().optional(),
-  maxTokens: z.number().int().min(1000).max(5_000_000).optional(),
+  // No token budget: a run is held to the tokens of its account alone. A
+  // `maxTokens` that an older client still sends is left unread.
   maxTasks: z.number().int().min(1).max(MAX_PROJECT_TASKS).optional(),
   maxParallel: z.number().int().min(1).max(8).optional(),
   requiresApproval: z.boolean().optional(),

@@ -52,8 +52,16 @@ export interface LoopOptions {
   maxSteps: number;
   /** Longest tool result handed to the model; the rest is cut with a note. */
   maxResultChars?: number;
-  /** Stop when this many tokens are used. */
-  tokenBudget?: number;
+  /**
+   * Asked after each step: whether the tokens the work may use are used up.
+   * The loop then asks once more, without tools, for the answer.
+   */
+  outOfTokens?(): boolean;
+  /**
+   * After each model call that was answered: the tokens that call used. So a
+   * caller knows what the loop used as it goes, and when a later call fails.
+   */
+  onUsage?(promptTokens: number, completionTokens: number): void;
   /** Token count of a text, for providers that do not report usage. */
   estimateTokens(text: string): number;
   isCancelled?(): boolean;
@@ -63,7 +71,7 @@ export interface LoopOptions {
   onToolCall?(event: ToolCallEvent): void;
 }
 
-export type LoopStop = "answer" | "max_steps" | "budget" | "cancelled";
+export type LoopStop = "answer" | "max_steps" | "tokens" | "cancelled";
 
 export interface LoopResult {
   content: string;
@@ -124,10 +132,13 @@ export async function runToolLoop(opts: LoopOptions): Promise<LoopResult> {
     steps++;
     opts.onStep?.(steps);
     const result = await opts.chat(messages, { tools: definitions, toolChoice });
-    promptTokens += result.usage?.promptTokens ?? opts.estimateTokens(conversationText(messages));
-    completionTokens +=
+    const prompt = result.usage?.promptTokens ?? opts.estimateTokens(conversationText(messages));
+    const completion =
       result.usage?.completionTokens ??
       opts.estimateTokens(result.content + JSON.stringify(result.toolCalls ?? ""));
+    promptTokens += prompt;
+    completionTokens += completion;
+    opts.onUsage?.(prompt, completion);
     return result;
   };
 
@@ -214,14 +225,14 @@ export async function runToolLoop(opts: LoopOptions): Promise<LoopResult> {
     }
 
     if (opts.isCancelled?.()) return done("", "cancelled");
-    if (opts.tokenBudget !== undefined && promptTokens + completionTokens >= opts.tokenBudget) {
-      // Out of budget: one last call for the answer, without tools.
+    if (opts.outOfTokens?.()) {
+      // No tokens left: one last call for the answer, without tools.
       if (steps < maxSteps) {
         messages.push({ role: "user", content: WRAP_UP });
         const final = await ask("none");
-        return done(final.content, "budget");
+        return done(final.content, "tokens");
       }
-      return done("", "budget");
+      return done("", "tokens");
     }
   }
 }

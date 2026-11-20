@@ -8,6 +8,7 @@ import { assetsForProject } from "@/lib/media/service";
 import { chatModels } from "@/lib/model-options";
 import { listRuns, serializeRun } from "@/lib/runs";
 import { listSchedules, serializeSchedule } from "@/lib/schedules";
+import { tokensLeftFor } from "@/lib/tokens";
 import { serializeProject } from "@/lib/workforce";
 import { ProjectRunner } from "@/components/projects/project-runner";
 import { isAdminRole, seesSetup } from "@/lib/roles";
@@ -85,6 +86,9 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       accountAgents={accountOptions.length > 0 ? browsersOf(project) : []}
       browserReady={browserConfigured()}
       mayOperate={mayOperate}
+      // What a run of it is held to: the tokens its account has left, and no budget of the project.
+      tokensLeft={tokensLeftFor(project.createdBy)}
+      own={project.createdBy === user.id}
       chooses={sees}
       agentNames={agentNames}
       canRun={canRun && mayOperate}

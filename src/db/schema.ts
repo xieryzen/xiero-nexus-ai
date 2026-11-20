@@ -431,7 +431,9 @@ export const projects = sqliteTable(
     finalDeliverable: text("final_deliverable"),
     reviewNotes: text("review_notes"),
     error: text("error"),
-    // Budget & limits (v1.3)
+    // Limits (v1.3). A project has no token budget since v1.8.1: a run is held
+    // to the tokens of its account (token-rules.ts). The column of the budget
+    // stays, unread, so that the table is not rebuilt for it.
     maxTokens: integer("max_tokens").notNull().default(200_000),
     maxTasks: integer("max_tasks").notNull().default(12),
     maxParallel: integer("max_parallel").notNull().default(3),

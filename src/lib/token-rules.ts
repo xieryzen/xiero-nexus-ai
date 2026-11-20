@@ -11,6 +11,9 @@
  * - What is counted is what the work of the account used: chat, the runs of
  *   its projects, embeddings, media, the public API with its keys. A check
  *   of a model is the installation's, and is counted for nobody.
+ * - Nothing else holds the tokens of a run: a project has no budget of its
+ *   own. A run goes on while its account has tokens left, and stops when
+ *   they are used up.
  */
 
 import { isOwnerRole } from "./roles";
@@ -118,11 +121,3 @@ export function usedUpMessage(account: TokenAccount, whose: "yours" | "project" 
 
 /** The error code of work refused because the tokens are used up. */
 export const TOKENS_USED_UP_CODE = "token_limit_reached";
-
-/**
- * What a task of a run may still use: what the project has left for it, and
- * no more than the account has left.
- */
-export function taskTokenBudget(projectLeft: number, accountLeft: number | null): number {
-  return accountLeft === null ? projectLeft : Math.max(1, Math.min(projectLeft, accountLeft));
-}

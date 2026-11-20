@@ -98,7 +98,8 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 - **AI Manager + orchestration** — describe a goal; the Manager decomposes it
   into tasks (JSON plan), assigns each to an agent, and executes them in
   dependency order through the gateway, with a per-agent **primary→fallback**
-  model, bounded execution (max tasks, token budget, bounded attempts),
+  model, bounded execution (max tasks, bounded steps and attempts, and the
+  [tokens of the project's account](#tokens-of-an-account-v180)),
   cooperative **cancellation**, and a final synthesized deliverable.
 - **Task states & evidence** — every task tracks status
   (`queued`/`running`/`succeeded`/`failed`/`blocked`/`cancelled`), its artifact,
@@ -150,9 +151,10 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 - **Parallel execution** — independent tasks (no dependency between them) run
   concurrently in dependency-ordered waves, capped by a per-project
   `maxParallel`.
-- **Budget & limits** — per-project token budget, max tasks, and max
-  parallelism; a run stops and cancels remaining tasks when the token budget is
-  exceeded. Budget usage streams live to the project view.
+- **Limits** — per-project max tasks and max parallelism. A project has no
+  token budget of its own (it had one until v1.8.1): a run is held to the
+  [tokens of its account](#tokens-of-an-account-v180), and to nothing else.
+  What the tasks used streams live to the project view.
 - **Approval policy** — a project can require admin approval before each run; an
   unapproved run stops at `needs_approval` until an admin approves (approval is
   consumed per run).
@@ -557,19 +559,31 @@ Every account has a number of tokens it may use, and an owner sets it.
   was used, of how much, and that an owner can raise the limit. Nothing is
   asked of a provider. What the account made stays, and can be read.
 - **A run in progress stops.** The tasks that have not started are not
-  started and say why; the result is not put together and not reviewed when
-  that would need tokens; the run ends "for a look" with what its finished
-  tasks made. The account is told in its notifications.
+  started and say why; an agent in the middle of a task is asked once more,
+  without its tools, to hand over what it has; no second model is tried for
+  a task whose first failed; the result is not put together and not reviewed
+  when that would need tokens; the run ends "for a look" with what its
+  finished tasks made. The account is told in its notifications.
+- **A project has no token budget of its own** (v1.8.1; until then a run was
+  stopped at 200,000 tokens unless the project said otherwise). The tokens
+  of its account are all that a run is held to, and the project page says
+  how many are left. **A run of an owner's project is held to no number of
+  tokens**: what ends it is the number of its tasks (at most 40), the steps
+  an agent takes in a task (at most 40 with each of its models), and what
+  the provider allows.
 - **Everyone sees their own tokens** under **Settings**, and in short next
   to their name on every page.
 
 The limit is not exact to the token. The request in progress when the last
-tokens go is finished and counted in full, and tasks that work side by side
-can each use what was left, so an account can end somewhat above its limit.
-A check of a model is counted for nobody, and neither is a request the
-provider failed. An image or a video is counted with the tokens of its
-prompt, which is little: a limit in tokens holds chat and runs back, and
-media hardly.
+tokens go is finished and counted in full, and so is the one more that an
+agent is asked to hand over its work: an account ends above its limit by
+those requests, for each task that was in progress. Tasks that work side by
+side are held to one balance: each call of an agent is counted the moment it
+is answered. A check of a model is counted for nobody, and neither is a
+request the provider failed; of an agent whose model failed in the middle of
+a task, the calls that were answered are counted. An image or a video is
+counted with the tokens of its prompt, which is little: a limit in tokens
+holds chat and runs back, and media hardly.
 
 Over the API: `tokenLimit`, `tokensUsed` and `tokensLeft` are in
 `GET /api/account/me` and `GET /api/admin/users` (`tokenLimit` and
@@ -1123,7 +1137,7 @@ links in the answers to be right.
 | 1.0.0 | Multi-Provider Foundation | ✅ implemented |
 | 1.1.0 | AI Workforce (AI Manager, agents, teams, tasks, delegation) | ✅ implemented |
 | 1.2.0 | Development Execution (sandbox, snapshots, QA review, hard QA gate, remote Git) | ✅ implemented (remote Git untested-live) |
-| 1.3.0 | Advanced Orchestration (parallel, budgets, approval, observability, auto-routing, workflows) | ✅ implemented (step-based workflow builder) |
+| 1.3.0 | Advanced Orchestration (parallel, limits, approval, observability, auto-routing, workflows; the token budget of a project went in v1.8.1) | ✅ implemented (step-based workflow builder) |
 | 1.4.0 | Creative Workflows (image and video generation, Creative Studio, media tasks, Reel template) | ✅ implemented (tested against a mock provider, not a live one) |
 | 1.5.0 | Automation, tools and knowledge (background runs, schedules, notifications, agent tools and memory, knowledge base, voice-over, joined videos, Gemini and custom HTTP adapters, API) | ✅ implemented (tested against mock providers, not live ones) |
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
