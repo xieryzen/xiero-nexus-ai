@@ -393,7 +393,8 @@ try {
       note,
       "1 of 3 tasks is done. Continue does the 2 that are left and keeps what is done; Re-run plans anew and does everything again. A task that stopped at a limit of its model can be continued when the limit is over, or after its agent was given another model.",
     );
-    check("  the task that failed says what its provider said", await has("Provider responded 429: You exceeded your current quota, please check your plan and billing details."), null);
+    const failedSays = await page.$$eval("main p", (list) => list.map((el) => el.textContent.trim()).find((t) => t.startsWith("Provider responded 429")) ?? null);
+    check("  the task that failed says what its provider said", /^Provider responded 429: .*You exceeded your current quota, please check your plan and billing details\./.test(failedSays ?? ""), failedSays);
     await snap("project-continue");
 
     // Its model says "too many requests" the next five times: the task waits, in sight, and is done.

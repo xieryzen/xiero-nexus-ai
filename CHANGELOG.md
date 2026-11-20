@@ -5,6 +5,77 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.9.0] - 2026-11-20
+
+A run that met the quota of its provider lost what it had done: the task
+failed with the provider's "429, you exceeded your current quota", every
+task behind it was not started, and the only way on was to run the project
+again from its first task. Now such a run waits where waiting helps, is
+taken up again where it does not, and says plainly which of the two it is.
+
+### Added
+
+- **Continue.** A run that ended with tasks that did not succeed can be
+  taken up again: the tasks that succeeded are kept with what they made,
+  their files and their tokens, and only the others are done again. The
+  project page has **Continue** next to **Re-run**, with a line that says
+  how many tasks are done and what each button does. The run that continues
+  is a run of its own in the history, marked "continued the run before it",
+  with the instruction of that run unless it is given another, and it counts
+  the tokens it used itself. Over the API: `"continue": true` in the body of
+  `POST /api/projects/{id}/run` and `POST /api/v1/projects/{id}/runs`;
+  `409 nothing_to_continue` when there is nothing left to do; a run has
+  `continued`. A run started by a schedule starts anew, as before.
+- **A task waits for a limit that ends.** When none of a task's models
+  answered and at least one said "not now" (429, 503, 529), the task waits
+  and asks them again: after one minute, two, five, ten and then every
+  quarter of an hour, for an hour in all. `RUN_LIMIT_WAIT_MINUTES` sets the
+  time (0 to 1440; `0` turns the waiting off). Where its providers say how
+  long, the task does not ask before the first of those waits is over. The
+  task's card says that it waits and when it asks again, and **Cancel** ends the wait at once. A task
+  that waited the whole time in vain says so, and the other tasks of its run
+  do not wait a second time.
+- **No waiting for a limit that does not end in that time**: a quota counted
+  per day, an allowance of nothing, an account without credit
+  (`insufficient_quota`), or a wait that the provider puts at longer than
+  the time that is left. Such a task fails at once, as before.
+
+### Changed
+
+- **What Gemini says about a used-up quota is told in few words**: which
+  quota, its allowance, whether it is counted per minute or per day, the
+  model, and how long to wait in hours and minutes, in place of a text that
+  was cut off in the middle of an address.
+- **A task that failed says what each of its models answered**, a line for
+  each with the model and its provider, where it said only what the last
+  one did. (To someone who is not shown the setup it says what it said
+  before.)
+- A request that gets 429, 503 or 529 without a `Retry-After` header is
+  waited for as long as the answer itself names (Gemini writes it there),
+  and not at all when the answer says that the limit does not end soon.
+- A page that connects while a run is under way is told of the tasks that
+  wait to start, too: after Continue, a task that the page showed as failed
+  is shown as waiting again.
+
+### Fixed
+
+- The SSH server that the checks start threw an error at its start about
+  once in fifty runs, on a key that the `ssh2` library made and could not
+  read. It now makes another.
+
+### Upgrading
+
+- The database gets two columns (`project_runs.continued`,
+  `tokens_before`): back up `data/` first, as for every version that
+  changes it. See [RELEASING.md](RELEASING.md), "From 1.8 to 1.9".
+- A run that stopped under 1.8 can be continued under 1.9.
+
+### Not verified
+
+- No run was waited through against the quota of a live provider. The
+  answers that the tests give in a provider's place follow what Google's
+  API and the OpenAI-style providers are documented and reported to send.
+
 ## [1.8.1] - 2026-11-20
 
 A project has no token budget any more. A run is held to the tokens of the

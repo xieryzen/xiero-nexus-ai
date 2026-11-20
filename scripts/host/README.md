@@ -611,7 +611,11 @@ that is billed:
 That is little: an agent with tools makes several requests for one task. The
 app waits and asks again when a provider answers "too many requests" (see
 `PROVIDER_RETRIES` in the main README), and an agent whose first model does
-not answer goes on with its second, so a project gets done, slowly. The
+not answer goes on with its second, so a project gets done, slowly. From
+v1.9.0 a task whose models are all limited waits for them (an hour unless
+`RUN_LIMIT_WAIT_MINUTES` says otherwise), and a run that stopped at a quota
+for the day is taken up again with **Continue**, which keeps what it
+finished. The
 agents have their first model with Kilo Gateway and their second with
 OVHcloud or Gemini. None depends on LLM7, whose allowance was used up after
 a few tasks, or on the one model of Pollinations: those are in the app to be

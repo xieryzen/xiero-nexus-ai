@@ -1410,6 +1410,8 @@ export async function executeRun(runId: string): Promise<void> {
           waits++;
           if (went.stopped === "cancelled") stoppedByCancel = true;
           if (went.stopped) break;
+          // The wait is over: the card says that the task is at work again.
+          emit({ type: "progress", seq, message: "Trying again", full: candidates.length === 1 ? "Asking its model again" : "Asking its models again" });
         }
         // The whole time, and no model answered: the other tasks of this run
         // would wait for the same limits, and do not.

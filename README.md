@@ -891,6 +891,62 @@ start on their own machine, with a real Chromium, **not against the sites
 you will use it on**: how a site's form is recognised differs from site to
 site, and where the app does not find a form, signing in by hand is the way.
 
+## Runs that meet a limit (v1.9.0)
+
+A provider with a small allowance (a free tier above all) stops answering in
+the middle of a run: "429, you exceeded your current quota". Until v1.9.0
+the task failed with that, every task behind it was not started, and the
+only way on was to run the project again from its first task.
+
+- **Continue** — a run that ended with tasks that did not succeed (failed,
+  not started behind a failed one, or cancelled) can be taken up again. The
+  project page then has **Continue** next to **Re-run**: Continue does the
+  tasks that are left and keeps the others with what they made, their files
+  and their tokens; Re-run plans anew and does everything again. The run
+  that continues is a run of its own in the history ("continued the run
+  before it"), with the instruction of the run it continues unless it is
+  given another, and it counts the tokens it used itself. What a task did on
+  a server or in the browser the last time stays in the logs, and the agent
+  that does it again is told which commands the task already ran. Over the
+  API: `{"continue": true}` in the body of `POST /api/projects/{id}/run`
+  and of `POST /api/v1/projects/{id}/runs`; `409 nothing_to_continue` when
+  the project was never run or every task of its last run succeeded. A run
+  that a schedule starts always starts anew.
+- **A task waits for a limit that ends** — when none of a task's models
+  answered and at least one of them said "not now" (429, 503 or 529), the
+  task is not failed: it waits and asks its models again, after one minute,
+  two, five, ten and then every quarter of an hour, **for an hour in all**
+  (`RUN_LIMIT_WAIT_MINUTES`; the waits grow with it; `0` turns it off, and
+  the task then fails at once as before). Where its providers say how long,
+  the task does not ask before the first of those waits is over. Its card
+  says that it waits and when it asks again; **Cancel** ends the wait at once. A task that waited the whole
+  time in vain fails and says so, and the other tasks of that run do not
+  wait a second time: what is left is for Continue. While it waits, a task
+  keeps its place among the runs that work at the same time
+  (`RUN_CONCURRENCY`).
+- **It does not wait for a limit that does not end in that time**: a quota
+  that is counted per day, an allowance of nothing ("limit: 0", a model that
+  the tier does not include), an account without credit
+  (`insufficient_quota`), or a wait that the provider puts at longer than
+  the time that is left. Such a task fails at once. What helps then is
+  another model for the agent, a provider with a larger allowance, or
+  Continue the next day.
+- **What the provider said, in few words** — Gemini's answer to a used-up
+  quota is some hundred words with two addresses in it. It is now told as
+  "Provider responded 429: You exceeded your current quota, please check
+  your plan and billing details. Quota exceeded: generate content free tier
+  requests, limit 20 per day, model gemini-2.5-flash. Please retry in 17
+  hours and 18 minutes." A task that failed after more than one of its
+  models was asked says what **each** of them answered, a line for each,
+  where it used to say only what the last one did.
+
+Only the tasks wait. The requests that plan a run, put its result together
+and review it are sent again for seconds (`PROVIDER_RETRIES`) and go on with
+the next model, as before. What was tested is the app against providers of
+the tests that answer the way Gemini and the OpenAI-style providers are
+documented and reported to answer; **no run was waited through against a
+live provider's quota**.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -935,6 +991,11 @@ The agent keeps its tools on the way: only a request that the model refused
 is tried once more without them. `GET /api/projects/{id}/attempts` lists
 every attempt of the last run's tasks, with the model that was asked, the
 time it took, and what the provider said.
+
+When none of a task's models answers, the task waits for their limits and
+asks again, for an hour unless set otherwise, and a run that stopped all the
+same is taken up again with **Continue**: see
+[Runs that meet a limit](#runs-that-meet-a-limit-v190).
 
 ### Anthropic
 
@@ -1120,7 +1181,7 @@ curl https://nexus.example.com/api/v1/chat/completions \
 | `GET /videos/{id}/content` | Media | The finished file. Byte ranges are supported. |
 | `GET /media/{id}`, `GET /media/{id}/content` | Media | An image, a voice-over or a video of the key's user, and its file. |
 | `GET /projects` | Projects | The user's projects (all projects, for an administrator's key). |
-| `POST /projects/{id}/runs` | Projects | Start a run. The body is optional: `{"input": "an instruction for this run"}`. Answers `202` with the run `queued`, `409` when the project is already running, and `200` with the reason when the run cannot start. |
+| `POST /projects/{id}/runs` | Projects | Start a run. The body is optional: `{"input": "an instruction for this run"}`, and `{"continue": true}` to take up the last run again, doing only its tasks that did not succeed (v1.9.0). Answers `202` with the run `queued`, `409` when the project is already running (`run_active`) or has nothing to continue (`nothing_to_continue`), and `200` with the reason when the run cannot start. A run says `"continued": true` when it continued the one before it. |
 | `GET /projects/{id}/runs` | Projects | The project's runs, newest first. |
 | `GET /runs/{id}` | Projects | A run's `status` (`queued`, `running`, `succeeded`, `review`, `needs_approval`, `failed`, `cancelled`) and, once it has finished, its `deliverable` and tasks. |
 
@@ -1143,6 +1204,7 @@ links in the answers to be right.
 | 1.6.0 | Free providers (waiting for a provider that is limited or busy, the next model with its tools, every attempt of a task, the host scripts) | ✅ implemented (seen at work on one real server) |
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
 | 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | ✅ implemented (five candidates ran on one real server, where the browser service was set up; what the parts do was tested against mock providers, an SSH server and a web site of the tests, and not seen on that server) |
+| 1.9.0 | Runs that meet a limit (Continue: a run is taken up again with what it finished; a task waits for a limit of its models that ends; a quota answer in few words, and what each model of a task said) | ✅ implemented (tested against providers of the tests; not waited through against a live provider's quota) |
 
 ---
 
@@ -1214,6 +1276,7 @@ account you register through the UI becomes the owner.
 | `BROWSER_WAIT_MINUTES` | no | How long a page waits for a person who has to pass a CAPTCHA or enter a code: default 15, between 1 and 240. |
 | `BROWSER_MAX_PAGES` | no | How many pages all agents together may have open in the browser: default 8, between 1 and 50. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
+| `RUN_LIMIT_WAIT_MINUTES` | no | How long a task of a project waits for its models when all of them say "not now" (429, 503, 529), asking them again meanwhile: 0 to 1440 minutes, default 60; `0` = it does not wait and fails at once. It never waits for a limit that does not end in that time (a quota per day, an account without credit). |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
 | `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
@@ -1509,7 +1572,12 @@ the session that lets the next run in; a CAPTCHA on a form, a code after
 the password and a page that is nothing but a check, each handed to a
 person whom the tests play (a click on the page's picture, in a frame of
 another site that no agent reaches); a page nobody takes over; private
-addresses and files that are not opened; and who may. At the end the server
+addresses and files that are not opened; and who may. From v1.9.0: a run
+that stops at the limits of its models and is continued, with what it had
+done kept and not asked for again; a task that waits for a limit and goes
+on, one that waits in vain, one that is stopped while it waits; and quota
+answers in the shape Google sends them, for a quota per minute (waited for)
+and per day (not waited for). At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with

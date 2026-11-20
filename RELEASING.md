@@ -388,6 +388,26 @@ server.
   provider's limit, and nothing in the app lifts it.
 - Going back to 1.8.0 needs nothing.
 
+### From 1.8 to 1.9
+
+- Nothing has to be configured. At its first start 1.9 adds two columns to
+  the table of the runs (`project_runs.continued` and `tokens_before`).
+  **Back up `data/` before the upgrade**, as for every version that changes
+  the database: going back to 1.8 is done with that backup in its place
+  (`pterodactyl-upgrade.sh` makes the backup and prints the command). 1.8
+  on the database of 1.9 was not tried.
+- **A run that stopped before the upgrade can be continued after it**: open
+  the project and press **Continue**. The tasks that succeeded are kept; the
+  others are done again.
+- **A task now waits when all of its models are limited**, for up to an
+  hour, where 1.8 failed it at once. A run with such a task takes longer and
+  keeps its place among the runs that work at the same time
+  (`RUN_CONCURRENCY`) meanwhile. `RUN_LIMIT_WAIT_MINUTES=0` in `.env` brings
+  back what 1.8 did; **Cancel** ends a wait at once.
+- A task that failed after several of its models were asked now says what
+  each of them answered. A program that reads the text of a task's error
+  finds more lines there than before.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of
