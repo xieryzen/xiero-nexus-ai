@@ -8,7 +8,6 @@ import {
   isLimited,
   parseTokens,
   shortTokens,
-  taskTokenBudget,
   tokenSummary,
   tokensLeft,
   usedUp,
@@ -117,13 +116,4 @@ test("the refusal says how much was used, of how much, and who can change it", (
     project,
     "The token balance of the account this project belongs to is used up: 500 of 500 tokens used. An owner of this installation can raise its limit.",
   );
-});
-
-test("a task of a run may use what the project has left for it, and no more than the account has", () => {
-  // An account without a limit: the project's budget alone.
-  assert.equal(taskTokenBudget(20_000, null), 20_000);
-  assert.equal(taskTokenBudget(150_000, 1_000_000), 150_000);
-  assert.equal(taskTokenBudget(150_000, 4_000), 4_000);
-  // Nothing left: the call that is made is the last one.
-  assert.equal(taskTokenBudget(150_000, 0), 1);
 });

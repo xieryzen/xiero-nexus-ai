@@ -142,7 +142,6 @@ export const POST = handle(async (req) => {
       goal: body.goal,
       managerModelRowId: body.managerModelRowId ?? null,
       teamId: body.teamId ?? null,
-      maxTokens: body.maxTokens ?? 200_000,
       maxTasks,
       maxParallel: body.maxParallel ?? 3,
       requiresApproval: body.requiresApproval ?? false,

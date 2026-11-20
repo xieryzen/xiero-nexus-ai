@@ -373,6 +373,21 @@ server.
   leaves it out. The browser service keeps running until it is taken away
   (`browser-service.sh --remove`); nothing uses it then.
 
+### From 1.8.0 to 1.8.1
+
+- Nothing has to be configured, and the database is not changed.
+- **A project has no token budget any more.** A run that 1.8.0 stopped at
+  the project's budget (200,000 tokens unless the project said otherwise)
+  now goes on while its account has tokens left. **If you used the budget to
+  cap what a run may spend, set the token limit of the account the project
+  belongs to** (Users & Roles, an owner). An owner's account has no limit,
+  so a run of an owner's project is held to no number of tokens: a project
+  that is to be capped has to belong to an account that is not an owner.
+- A run that is not stopped at a budget asks more of its provider. A
+  provider with a small quota (a free tier) answers 429 sooner; that is the
+  provider's limit, and nothing in the app lifts it.
+- Going back to 1.8.0 needs nothing.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of

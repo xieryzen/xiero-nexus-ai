@@ -66,9 +66,9 @@ import { accountsForRun, roleOfUser } from "@/lib/browser/accounts";
 import { BROWSER_TOOL, accountsLine, callSummary, mayUseBrowser, type AccountForAgent } from "@/lib/browser/rules";
 import { browserConfigured } from "@/lib/browser/service";
 import { closeRunBrowser, closeTaskPages } from "@/lib/browser/sessions";
-import { taskTokenBudget, usedUpMessage } from "@/lib/token-rules";
+import { usedUpMessage } from "@/lib/token-rules";
 import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
-import { computeCost, estimateTokens, recordUsage } from "@/lib/usage";
+import { computeCost, countTokens, estimateTokens, recordUsage } from "@/lib/usage";
 import { allFiles, ensureWorkspace, latestExecSummary, listFiles, upsertFile } from "@/lib/workspace";
 import { validateWorkspacePath } from "@/lib/workspace/paths";
 import { pickCheapestModel, type RoutableModel } from "@/lib/router";
@@ -799,10 +799,11 @@ export async function executeRun(runId: string): Promise<void> {
       if (t.row.status === "succeeded" && t.row.artifact) artifactBySeq.set(t.seq, t.row.artifact);
       if (isGeneratedKind(t.kind)) mediaStarted++;
     }
-    const budget = project.maxTokens;
-    // The run spends the tokens of the account the project belongs to. When
-    // they are used up, the tasks that have not started are not started, and
-    // nothing more is asked of a model for this run.
+    // The run spends the tokens of the account the project belongs to, and is
+    // held to nothing else: a project has no token budget of its own. When
+    // the account's tokens are used up, the tasks that have not started are
+    // not started, and nothing more is asked of a model for this run, but
+    // for a task in progress to hand over what it has.
     const accountSpent = (): boolean => !hasTokensLeft(project.createdBy);
     const accountSpentMessage = (): string => {
       const account = tokenAccount(project.createdBy);
@@ -1157,8 +1158,14 @@ export async function executeRun(runId: string): Promise<void> {
         let lastError = "No model available";
         let answered = false;
         let stoppedByCancel = false;
+        let outOfTokens = false;
 
         for (const mid of candidates) {
+          // Another model is not asked once the account's tokens are used up.
+          if (accountSpent()) {
+            outOfTokens = true;
+            break;
+          }
           attempt++;
           let resolved: ResolvedModel;
           try {
@@ -1180,6 +1187,12 @@ export async function executeRun(runId: string): Promise<void> {
             let callSteps = 0;
             let callTools = 0;
             let spent = false;
+            // With tools: what the calls of this attempt used so far. Each is
+            // counted on the account as it is answered, so that the tasks of
+            // a run, and whatever else the account does meanwhile, are held
+            // to one balance; the record at the end does not count it again.
+            let loopPrompt = 0;
+            let loopCompletion = 0;
             const usage = (status: "ok" | "error", p: number, c: number, errorCode?: string) =>
               recordUsage({
                 userId: project.createdBy,
@@ -1188,10 +1201,11 @@ export async function executeRun(runId: string): Promise<void> {
                 kind: "other",
                 promptTokens: p,
                 completionTokens: c,
-                estimatedCost: status === "ok" ? computeCost(resolved.model, p, c) : undefined,
+                estimatedCost: status === "ok" || p + c > 0 ? computeCost(resolved.model, p, c) : undefined,
                 status,
                 errorCode,
                 latencyMs: Date.now() - started,
+                counted: mode === "tools",
               });
             savedNow.clear();
             const messages = messagesFor(mode === "tools" ? toolNames : []);
@@ -1206,10 +1220,12 @@ export async function executeRun(runId: string): Promise<void> {
                   messages,
                   tools,
                   maxSteps: Math.min(Math.max(1, agent?.maxSteps ?? DEFAULT_MAX_STEPS), MAX_MAX_STEPS),
-                  tokenBudget: taskTokenBudget(
-                    Math.max(20_000, budget - usedTokens - taskTokens),
-                    tokensLeftFor(project.createdBy),
-                  ),
+                  outOfTokens: accountSpent,
+                  onUsage: (prompt, completion) => {
+                    loopPrompt += prompt;
+                    loopCompletion += completion;
+                    countTokens(project.createdBy, prompt + completion);
+                  },
                   estimateTokens,
                   isCancelled,
                   onStep: (n) => {
@@ -1244,7 +1260,9 @@ export async function executeRun(runId: string): Promise<void> {
                     "empty_answer",
                     result.stopped === "answer"
                       ? "The agent returned an empty answer"
-                      : "The agent used all its steps without giving its deliverable",
+                      : result.stopped === "tokens"
+                        ? accountSpentMessage()
+                        : "The agent used all its steps without giving its deliverable",
                   );
                 }
                 db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls }).run();
@@ -1274,8 +1292,15 @@ export async function executeRun(runId: string): Promise<void> {
               break;
             } catch (e) {
               lastError = e instanceof AppError ? e.message : sanitizeUpstreamError(e);
-              if (!spent) usage("error", 0, 0, e instanceof AppError ? e.code : "error");
-              db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, latencyMs: Date.now() - started, steps: callSteps || null, toolCallCount: callTools || null, error: lastError }).run();
+              if (!spent) {
+                // The calls that were answered before one failed were used all
+                // the same: they are on the account, and they are the task's.
+                taskTokens += loopPrompt + loopCompletion;
+                promptTokens += loopPrompt;
+                completionTokens += loopCompletion;
+                usage("error", loopPrompt, loopCompletion, e instanceof AppError ? e.code : "error");
+              }
+              db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "error", attempt, ...(!spent && loopPrompt + loopCompletion > 0 ? { promptTokens: loopPrompt, completionTokens: loopCompletion } : {}), latencyMs: Date.now() - started, steps: callSteps || null, toolCallCount: callTools || null, error: lastError }).run();
               // Only a refusal on the very first request is taken to be about the
               // tools, and not one that says the provider is limited, busy or down.
               const refusedTools =
@@ -1293,6 +1318,9 @@ export async function executeRun(runId: string): Promise<void> {
         }
 
         if (stoppedByCancel) return failTask("Cancelled", undefined, "cancelled");
+        // Without tokens for a model: a task that asked none was not started,
+        // and one whose model failed is not given its next.
+        if (!answered && outOfTokens) return failTask(accountSpentMessage(), undefined, attempt === 0 ? "cancelled" : "failed");
         if (!answered) return failTask(lastError);
       }
 
@@ -1445,11 +1473,6 @@ export async function executeRun(runId: string): Promise<void> {
         pending.clear();
         break;
       }
-      if (usedTokens > budget) {
-        markAll(pending, "cancelled", "Token budget exhausted");
-        pending.clear();
-        break;
-      }
       if (accountSpent()) {
         markAll(pending, "cancelled", accountSpentMessage());
         pending.clear();
@@ -1486,7 +1509,7 @@ export async function executeRun(runId: string): Promise<void> {
       });
       db.update(projects).set({ tokensUsed: usedTokens, updatedAt: new Date() }).where(eq(projects.id, projectId)).run();
       db.update(projectRuns).set({ tokensUsed: usedTokens }).where(eq(projectRuns.id, runId)).run();
-      emit({ type: "budget", used: usedTokens, limit: budget });
+      emit({ type: "tokens", used: usedTokens, left: tokensLeftFor(project.createdBy) });
     }
 
     db.update(projects).set({ tokensUsed: usedTokens, updatedAt: new Date() }).where(eq(projects.id, projectId)).run();
@@ -1507,8 +1530,8 @@ export async function executeRun(runId: string): Promise<void> {
     const succeededTasks = completed.filter((t) => t.status === "succeeded");
     const mediaTasks = succeededTasks.filter((t) => t.kind !== "text");
 
-    // The manager's and the reviewer's own calls are in the usage records. The
-    // project's token count stays what the tasks used, which the budget is about.
+    // The manager's and the reviewer's own calls are in the usage records, and
+    // on the account. The project's token count stays what the tasks used.
     const recordManager = (r: { prompt: number; completion: number }, model: ResolvedModel, started: number) => {
       recordUsage({
         userId: project.createdBy,
@@ -1672,7 +1695,7 @@ export async function executeRun(runId: string): Promise<void> {
 
     if (deliverable) emit({ type: "final", deliverable });
     if (reviewNotes) emit({ type: "review", notes: reviewNotes });
-    emit({ type: "budget", used: usedTokens, limit: budget });
+    emit({ type: "tokens", used: usedTokens, left: tokensLeftFor(project.createdBy) });
     emit({ type: "status", status: finalStatus });
 
     const total = completed.length;

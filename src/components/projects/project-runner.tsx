@@ -97,6 +97,8 @@ export function ProjectRunner({
   accountAgents = [],
   browserReady = true,
   mayOperate = true,
+  tokensLeft: initialTokensLeft,
+  own,
 }: {
   project: ProjectDTO;
   agentNames: Record<string, string>;
@@ -124,6 +126,10 @@ export function ProjectRunner({
   browserReady?: boolean;
   /** Whether this account may run and change the project: false when it names a server the account may not use. */
   mayOperate?: boolean;
+  /** The tokens the account this project belongs to can still use: all a run is held to. Null: it is not held to a limit. */
+  tokensLeft: number | null;
+  /** Whether the project belongs to the account that looks at it. */
+  own: boolean;
 }) {
   const [status, setStatus] = useState(project.status);
   const [tasks, setTasks] = useState<TaskLive[]>(
@@ -150,8 +156,9 @@ export function ProjectRunner({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
-  const [budgetUsed, setBudgetUsed] = useState(project.tokensUsed);
-  const [budgetLimit, setBudgetLimit] = useState(project.maxTokens);
+  // What the tasks of the latest run used, and what its account has left.
+  const [tokensUsed, setTokensUsed] = useState(project.tokensUsed);
+  const [tokensLeft, setTokensLeft] = useState<number | null>(initialTokensLeft);
   const [approving, setApproving] = useState(false);
   const [runInput, setRunInput] = useState("");
   const [showInput, setShowInput] = useState(false);
@@ -243,9 +250,9 @@ export function ProjectRunner({
       case "review":
         setReview(evt.notes);
         break;
-      case "budget":
-        setBudgetUsed(evt.used);
-        setBudgetLimit(evt.limit);
+      case "tokens":
+        setTokensUsed(evt.used);
+        setTokensLeft(evt.left);
         break;
       case "error":
         setError(evt.message);
@@ -356,7 +363,7 @@ export function ProjectRunner({
       setTasks([]);
       setTraces({});
       setOpenTraces(new Set());
-      setBudgetUsed(0);
+      setTokensUsed(0);
       setStatus("queued");
       setRunInput("");
       setShowInput(false);
@@ -480,8 +487,16 @@ export function ProjectRunner({
           </span>
         )}
         {project.requiresApproval && <span className="text-xs text-ink-3">· approval required</span>}
-        <span className="text-xs text-ink-3">
-          · budget {formatNumber(budgetUsed)} / {formatNumber(budgetLimit)} tokens · max {project.maxParallel}× parallel
+        <span className="text-xs text-ink-3" id="project-tokens">
+          · {formatNumber(tokensUsed)} tokens used by the tasks ·{" "}
+          {tokensLeft === null ? (
+            "no token limit"
+          ) : tokensLeft > 0 ? (
+            `${formatNumber(tokensLeft)} of ${own ? "your" : "its account's"} tokens left`
+          ) : (
+            <span className="text-danger">{own ? "your tokens are used up" : "its account's tokens are used up"}</span>
+          )}{" "}
+          · max {project.maxParallel}× parallel
         </span>
         {hasMediaModels && (
           <span className="text-xs text-ink-3" id="project-media">
@@ -500,15 +515,6 @@ export function ProjectRunner({
           </span>
         )}
       </div>
-
-      {budgetLimit > 0 && (
-        <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-surface-2">
-          <div
-            className={`h-full ${budgetUsed > budgetLimit ? "bg-danger" : "bg-signal"}`}
-            style={{ width: `${Math.min(100, Math.round((budgetUsed / budgetLimit) * 100))}%` }}
-          />
-        </div>
-      )}
 
       {status === "needs_approval" && (
         <div className="mb-4">

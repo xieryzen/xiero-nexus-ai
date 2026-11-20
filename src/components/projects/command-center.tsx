@@ -72,7 +72,6 @@ export function CommandCenter({
   const [managerModelRowId, setManager] = useState(managerModels[0]?.id ?? "");
   const [teamId, setTeamId] = useState("");
   const [showAdv, setShowAdv] = useState(false);
-  const [maxTokens, setMaxTokens] = useState("200000");
   const [maxTasks, setMaxTasks] = useState("12");
   const [maxParallel, setMaxParallel] = useState("3");
   const [requiresApproval, setRequiresApproval] = useState(false);
@@ -145,7 +144,6 @@ export function CommandCenter({
           goal,
           managerModelRowId: chooses ? managerModelRowId : null,
           teamId: teamId || null,
-          maxTokens: Number(maxTokens),
           maxTasks: Number(maxTasks),
           maxParallel: Number(maxParallel),
           requiresApproval,
@@ -288,14 +286,11 @@ export function CommandCenter({
               )}
 
               <button type="button" onClick={() => setShowAdv((s) => !s)} className="text-xs font-medium text-signal hover:underline">
-                {showAdv ? "Hide" : "Show"} advanced settings (budget, limits, memory, approval)
+                {showAdv ? "Hide" : "Show"} advanced settings (limits, memory, approval)
               </button>
               {showAdv && (
                 <div className="space-y-4 rounded-md border border-line bg-surface-2/40 p-4">
                   <div className="grid gap-4 sm:grid-cols-3">
-                    <Field label="Token budget" htmlFor="p-maxtok" hint="run stops if exceeded">
-                      <Input id="p-maxtok" type="number" min={1000} value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
-                    </Field>
                     <Field label="Max tasks" htmlFor="p-maxtask">
                       <Input id="p-maxtask" type="number" min={1} max={MAX_PROJECT_TASKS} value={maxTasks} onChange={(e) => setMaxTasks(e.target.value)} />
                     </Field>

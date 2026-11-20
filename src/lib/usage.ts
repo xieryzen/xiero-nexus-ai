@@ -43,6 +43,28 @@ export interface RecordUsageInput {
   status?: "ok" | "error";
   errorCode?: string;
   latencyMs?: number;
+  /**
+   * The tokens are on the account's balance already: work of many calls
+   * counts each call as it is answered (countTokens), and is recorded once,
+   * at its end.
+   */
+  counted?: boolean;
+}
+
+/**
+ * Count tokens on an account's balance, without a usage record. For work of
+ * many calls (an agent with tools): every call counts the moment it is
+ * answered, so that whatever else the account does meanwhile is held to the
+ * same balance, and what was used is counted when a later call fails. The
+ * record of the work is written at its end, with `counted`.
+ */
+export function countTokens(userId: string | null | undefined, tokens: number): void {
+  try {
+    chargeTokens(userId, tokens);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[xiero-nexus] token count failed:", err);
+  }
 }
 
 export function recordUsage(input: RecordUsageInput): void {
@@ -73,12 +95,7 @@ export function recordUsage(input: RecordUsageInput): void {
   // The account's balance: what its work used. A check of a model is the
   // installation's own, and a request that failed delivered nothing.
   const kind = input.kind ?? "chat";
-  if (input.userId && kind !== "test" && (input.status ?? "ok") === "ok") {
-    try {
-      chargeTokens(input.userId, prompt + completion);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[xiero-nexus] token count failed:", err);
-    }
+  if (input.userId && kind !== "test" && (input.status ?? "ok") === "ok" && !input.counted) {
+    countTokens(input.userId, prompt + completion);
   }
 }

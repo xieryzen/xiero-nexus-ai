@@ -5,6 +5,88 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.8.1] - 2026-11-20
+
+A project has no token budget any more. A run is held to the tokens of the
+account its project belongs to, which an owner sets, and to nothing else.
+Since that limit now holds alone, three places where a run could pass it
+were put right.
+
+### Changed
+
+- **A project has no token budget.** Until now a run was stopped when its
+  tasks had used more than the project's budget, 200,000 tokens unless the
+  project was given another: the tasks that had not started were cancelled
+  with "Token budget exhausted", and an agent with tools was cut to what the
+  budget had left. That is gone. The field **Token budget** is no longer in
+  the project form, and no run is stopped or cut for one. The projects that
+  are there need nothing: their next run goes on past what was their budget.
+- **The tokens of its account are all that a run is held to**: the limit
+  that an owner sets, since 1.8.0, for the account the project belongs to,
+  whoever starts the run. When they are used up, the run stops as before.
+  **An owner is not held to a limit, so a run of an owner's project is held
+  to no number of tokens**: what ends it is the number of its tasks (at most
+  40), the steps an agent takes in a task (at most 40 with each of its
+  models), and what the provider allows.
+- **The project page** says what the tasks of the run used, and what the run
+  is held to: how many tokens its account has left, that they are used up,
+  or "no token limit" for the project of an owner. The bar that showed the
+  budget is gone.
+- Over the API: a project no longer has `maxTokens`
+  (`GET /api/projects`, `GET /api/projects/{id}`), and `POST /api/projects`
+  leaves one that is still sent unread. The event of a run that carried the
+  budget (`budget`, with `used` and `limit`) is now `tokens`, with `used`
+  and `left`: what the account has left, `null` when it is not held to a
+  limit.
+
+### Fixed
+
+- **Tasks that run side by side are held to one balance.** An agent with
+  tools measured what it used against what the account had left when its
+  task began, so each of the tasks of a run that worked at once could use
+  that much. Every call of an agent is now counted on the account the moment
+  it is answered, and each agent stops after the call that finds the tokens
+  used up: it is asked once more, without its tools, to hand over what it
+  has. In the checks, an account with 200 tokens left whose run worked on
+  three tasks at once ended at 720 tokens used; it now ends at 360 at the
+  most.
+- **What an agent used before its model failed is counted.** When a model
+  failed in the middle of a task with tools, the calls it had answered were
+  counted for nobody: not on the account, not in the task, not in the usage
+  records. They are counted now, and the usage record of the attempt that
+  failed says what it used.
+- **No second model is asked once the tokens are used up.** A task whose
+  model failed was started over with the agent's next model, though the
+  account had nothing left. It now fails, and says that the tokens are used
+  up.
+
+### Notes
+
+- **The app's token limit and a provider's quota are two things.** The first
+  is set under **Users & Roles**. The second is the provider's: a message
+  such as "Provider responded 429: You exceeded your current quota" in a
+  task or in the result of a run comes from there, and no setting of the app
+  lifts it. A run that is not stopped at a budget asks more of its provider
+  than before, so a provider with a small quota (a free tier) refuses
+  sooner. The app waits and asks again, as since 1.6; what a provider
+  refuses for good goes to the agent's next model, and ends the task when
+  none answers.
+- **Checked against the mock provider, not a real one.** The checks run a
+  project of forty tasks past what was the smallest budget, three tasks at
+  once against one small balance, an agent whose model fails in the middle
+  of its task, and the pages. A run with a real provider that goes past
+  200,000 tokens was not seen.
+
+### Upgrading
+
+- Nothing has to be configured, and the database is not changed: the column
+  that held the budget stays, and is no longer read. Going back to 1.8.0
+  needs nothing.
+- **If you used a project's budget to cap what a run may spend:** set the
+  token limit of the account the project belongs to instead (**Users &
+  Roles**, an owner). An owner's account has no limit: a project that is to
+  be capped has to belong to an account that is not an owner.
+
 ## [1.8.0] - 2026-11-20
 
 Five things. The app checks by itself that its models answer, and offers the

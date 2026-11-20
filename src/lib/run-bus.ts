@@ -13,6 +13,7 @@ import { eventFor } from "./for-viewer";
 import { serializeAsset, type MediaAssetDTO } from "./media/dto";
 import type { RunEvent } from "./orchestrator/events";
 import { runtime, type RunChannel } from "./runtime";
+import { tokensLeftFor } from "./tokens";
 
 /**
  * What a project run reports, and how pages follow it.
@@ -131,7 +132,7 @@ export function snapshotEvents(projectId: string): RunEvent[] {
         toolCalls: t.toolCallCount || undefined,
       });
     }
-    events.push({ type: "budget", used: project.tokensUsed, limit: project.maxTokens });
+    events.push({ type: "tokens", used: project.tokensUsed, left: tokensLeftFor(project.createdBy) });
   }
   if (project.finalDeliverable) events.push({ type: "final", deliverable: project.finalDeliverable });
   if (project.reviewNotes) events.push({ type: "review", notes: project.reviewNotes });

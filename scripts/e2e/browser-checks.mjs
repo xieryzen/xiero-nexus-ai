@@ -314,6 +314,7 @@ try {
   await page.waitForSelector("#p-maxtask");
   check("  and makes room for its steps and its media", (await page.$eval("#p-maxtask", (e) => e.value)) === "14" && (await page.$eval("#p-maxmedia", (e) => e.value)) === "10", [await page.$eval("#p-maxtask", (e) => e.value), await page.$eval("#p-maxmedia", (e) => e.value)]);
   check("  memory of earlier runs can be switched on", await has("Remember earlier runs"));
+  check("  a project is given no token budget: its limits are tasks, tasks at once and media", (await page.$("#p-maxtok")) === null && !(await has("Token budget")) && (await page.$("#p-par")) !== null, null);
   await snap("project-form");
 
   begin("Browser: a project page");
@@ -352,6 +353,9 @@ try {
     check("  a page opened while it runs picks it up", await waitText(/working…|succeeded/, 10_000), null);
     const finished = await waitText("Final deliverable", 60_000);
     check("  and shows the result when it ends, without a reload", finished && (await has("succeeded")), null);
+    // What a run is held to stands next to its state: no budget of the project, the tokens of its account.
+    const heldTo = await page.$eval("#project-tokens", (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+    check("  with what its tasks used, and that an owner's run is held to no number of tokens", /^· [1-9][\d,]* tokens used by the tasks · no token limit · max \d+× parallel$/.test(heldTo ?? ""), heldTo);
     await snap("project-run");
   }
 
@@ -743,6 +747,10 @@ try {
   check("  it is made", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && Boolean(plainFlow), [page.url(), plainFlow]);
   await clickText(/^\s*Run\s*$/);
   check("  it runs to its end", await waitText("Final deliverable", 60_000), (await text()).slice(0, 300));
+  // The run is followed live: what the account has left is what the run's events said, not what the page was opened with.
+  const mine = await page.evaluate(async () => (await (await fetch("/api/account/me")).json()).user);
+  const leftNow = `${new Intl.NumberFormat("en-US").format(mine?.tokensLeft ?? -1)} of your tokens left`;
+  check("  the page says what the tasks used, and how many of the account's tokens are left now", (await waitText(leftNow, 5_000)) && /· [1-9][\d,]* tokens used by the tasks · /.test(await text()) && mine?.tokensLeft < mine?.tokenLimit, [leftNow, await page.$eval("#project-tokens", (el) => el.textContent).catch(() => null)]);
   eq("  the page of the project names no model and no provider", await namedOnPage(), []);
   check("  nor what its steps told the agents", !(await has("SECRET-")), null);
   await snap("user-project");
