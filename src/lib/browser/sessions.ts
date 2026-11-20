@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { SiteAccount } from "@/db/schema";
 import { notify } from "../notifications";
-import { cookiesOfAccount, logAction, noteUse, passwordOf, saveSession, sessionOf, type SavedCookie } from "./accounts";
+import { cookiesOfAccount, keepSessionOf, logAction, noteUse, passwordOf, sessionOf, type SavedCookie } from "./accounts";
 import { CdpError, type CdpConnection } from "./cdp";
 import { BrowserPage, PageProblem } from "./page";
 import {
@@ -358,8 +358,9 @@ export async function keepSessions(browser: RunBrowser): Promise<void> {
   const all = [...browser.accounts.values()].map((entry) => entry.row);
   for (const entry of used) {
     try {
-      saveSession(
-        entry.row.id,
+      // Not when the account signs in as someone else by now: this browser holds the old sign-in.
+      keepSessionOf(
+        entry.row,
         cookiesOfAccount(
           cookies,
           entry.row,
@@ -601,13 +602,17 @@ export async function ownerSession(account: SiteAccount, user: { id: string }): 
       s.live.delete(id);
       void (async () => {
         let kept = 0;
+        // The account was changed while the owner signed in: what was signed in to is not what it is now.
+        let changed = false;
         const page = front();
         const url = page ? shownUrl(page.lastUrl) : null;
         if (outcome === "save" && !conn.closed) {
           try {
             const { cookies } = await conn.send<{ cookies: Record<string, unknown>[] }>("Storage.getCookies", { browserContextId: contextId });
-            kept = saveSession(account.id, cookiesOfAccount(cookies, account));
-            noteUse(account.id, null);
+            const saved = keepSessionOf(account, cookiesOfAccount(cookies, account));
+            changed = saved === null;
+            kept = saved ?? 0;
+            if (!changed) noteUse(account.id, null);
           } catch {
             kept = 0;
           }
@@ -623,7 +628,9 @@ export async function ownerSession(account: SiteAccount, user: { id: string }): 
             outcome === "save"
               ? kept > 0
                 ? `The session was kept: ${kept} ${kept === 1 ? "cookie" : "cookies"} of the site.`
-                : "The site left no cookie to keep: there is no session to come back to."
+                : changed
+                  ? "The account was changed while this sign-in went on: what was signed in to is not what the account is now, and nothing was kept."
+                  : "The site left no cookie to keep: there is no session to come back to."
               : outcome === "timeout"
                 ? `Nothing was done for ${OWNER_SESSION_MINUTES} minutes: the page was closed, and nothing was kept.`
                 : "The page was closed, and nothing was kept.",

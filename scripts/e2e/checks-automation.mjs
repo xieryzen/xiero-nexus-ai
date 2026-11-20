@@ -3199,6 +3199,23 @@ export async function automation(ctx) {
     eq("an account that is moved to the site of another one of the project: the project does not run, and says why", [moved.status, stuck?.status, stuck?.error], [200, "failed", ONE("elsewhere", "shop-wrong")]);
     eq("  (the account is put back where it was)", (await admin.patch(`/api/browser/accounts/${elsewhere?.id}`, { siteUrl: "https://no-such-site.invalid/login" })).status, 200);
 
+    begin("Browser: an account that is changed while a run works with it");
+    const changing = (await admin.post("/api/browser/accounts", { name: "shop-changing", siteUrl: `${SITE}/login`, username: "budi", password: BUDI })).data?.account;
+    const during = await web(admin, "changed meanwhile", [{ action: "sign_in" }, { action: "ask_person", reason: "Wait while the account is changed." }], { siteAccountIds: [changing?.id] });
+    await site("/__reset");
+    let between = null;
+    const duringRun = await runWithPerson(admin, during.id, async (id) => {
+      // The run has signed in as budi, and that session is kept. Now the owner makes the account another user's.
+      const before = (await admin.get(`/api/browser/accounts/${changing?.id}`)).data?.account?.hasSession;
+      const patched = await admin.patch(`/api/browser/accounts/${changing?.id}`, { username: "sari", password: SARI });
+      between = [before, patched.status, patched.data?.sessionDropped, patched.data?.account?.hasSession];
+      await person(admin, id).done("continue");
+    });
+    eq("the run signed in and its session was kept; the owner's change dropped that session", [finished(duringRun.run.events).map((e) => e.status), (await site("/__state")).signIns, between], [["succeeded"], [{ user: "budi", from: "/login" }], [true, 200, true, false]]);
+    // The run keeps its sessions when a page is handed back and when it ends: neither may bring the old one back.
+    const cameBack = await until(async () => (await admin.get(`/api/browser/accounts/${changing?.id}`)).data?.account?.hasSession, (has) => has === true, { tries: 12, gapMs: 250 });
+    eq("what the run's browser still held, of the old sign-in, is not kept as the session of the changed account", cameBack, false);
+
     begin("Browser: a CAPTCHA on the sign-in form is a person's, in the same browser");
     const captcha = (await admin.post("/api/browser/accounts", { name: "shop-captcha", siteUrl: `${SITE}/captcha-login`, username: "budi", password: BUDI })).data?.account;
     const guarded = await web(admin, "captcha", [{ action: "sign_in", account: "shop-captcha" }, { action: "type", find: 'field "New note"', text: "After the CAPTCHA" }, { action: "click", find: 'button "Add note"' }], { siteAccountIds: [captcha?.id] });
@@ -3475,8 +3492,8 @@ export async function automation(ctx) {
     const gone = [];
     for (const id of [samId, sueId]) gone.push((await admin.del(`/api/admin/users/${id}`)).status);
     gone.push((await admin.del(`/api/agents/${state.agents["Surfer again"]}`)).status, (await admin.del(`/api/models/${state.models["chat-web"]}`)).status);
-    for (const id of [wrong?.id, careless?.id, elsewhere?.id, coded?.id, byHand?.id, forAdmins?.id, odd?.id, thief?.id]) gone.push((await admin.del(`/api/browser/accounts/${id}`)).status);
-    eq("the accounts of these checks are deleted, and the model that was made to fail", gone, Array(12).fill(200));
+    for (const id of [wrong?.id, careless?.id, elsewhere?.id, coded?.id, byHand?.id, forAdmins?.id, odd?.id, thief?.id, changing?.id]) gone.push((await admin.del(`/api/browser/accounts/${id}`)).status);
+    eq("the accounts of these checks are deleted, and the model that was made to fail", gone, Array(13).fill(200));
   }
 
   const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, visibility, servers, browser };

@@ -305,6 +305,15 @@ is not a candidate.
   one domain, and a cookie for that domain) is kept for neither. **The
   sessions that were kept so far are dropped once, at the upgrade**: nothing
   says which of them are another account's, so each account signs in anew.
+- **A session of a sign-in that an account no longer has is not kept.** A
+  run keeps the sessions of its accounts when a page is handed back to it
+  and a moment after it has ended. An owner who changes an account (another
+  user name, another site, a new password) drops the session that was kept.
+  A run that was at work during the change, or had only just ended, then
+  kept what its browser still held: the session of the old sign-in, as the
+  session of the account as it is now. A session is kept only when the
+  account still signs in as it did when the run's browser was given it. The
+  same holds for a sign-in an owner does by hand.
 - **A password is typed into the password field, or not at all.** The app
   put the cursor into the password field and typed. A field that passes the
   cursor on (to the field next to it, to a keyboard of the site's own) had
@@ -356,12 +365,15 @@ In the host scripts, on the first real node:
   in to over SSH, builds the image of the browser service, runs
   `browser-service.sh` itself with a real Docker on a made-up server, and
   runs the checks of the browser against the service in its container.
-- The three faults under Fixed were found by reading the code of the fifth
-  candidate, not by a test and not on the server. The checks have a
-  password with quotes and spaces, a page read from its middle, a password
-  a person types by hand, a form that passes the cursor on, and projects
-  with two accounts of one site since; each of them fails against the fifth
-  candidate.
+- Three of the four faults of the browser under Fixed were found by reading
+  the code of the fifth candidate, not by a test and not on the server. The
+  fourth, the session of a sign-in an account no longer has, showed once in
+  CI: a check that changes an account right after a run found the session
+  back. The checks have a password with quotes and spaces, a page read from
+  its middle, a password a person types by hand, a form that passes the
+  cursor on, projects with two accounts of one site, and an account that is
+  changed while a run works with it since; each of them fails against the
+  fifth candidate.
 - Only an owner changes a role or a token limit, as in 1.7: an
   administrator sees the accounts and their tokens, and is answered 403
   when changing one. Checks hold that now.

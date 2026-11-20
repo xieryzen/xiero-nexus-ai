@@ -253,6 +253,22 @@ export function saveSession(accountId: string, cookies: readonly SavedCookie[]):
   return cookies.length;
 }
 
+/**
+ * Keep the session a browser holds for an account, when the account still
+ * signs in as it did when that browser was given it. A run goes on for
+ * minutes and keeps its sessions at its end: when the account was changed
+ * in the meantime (another user name, another site, a new password), what
+ * the browser holds is of the old sign-in, and is not kept as the session
+ * of the new one. Null: not kept, for that reason or because the account is
+ * gone.
+ */
+export function keepSessionOf(known: Pick<SiteAccount, "id" | "siteUrl" | "username" | "secretCiphertext">, cookies: readonly SavedCookie[]): number | null {
+  const now = getAccount(known.id);
+  if (!now) return null;
+  if (siteHost(now.siteUrl) !== siteHost(known.siteUrl) || now.username !== known.username || now.secretCiphertext !== known.secretCiphertext) return null;
+  return saveSession(known.id, cookies);
+}
+
 export function forgetSession(accountId: string): void {
   db.update(siteAccounts).set({ sessionCiphertext: null, sessionSavedAt: null, sessionCookies: 0 }).where(eq(siteAccounts.id, accountId)).run();
 }

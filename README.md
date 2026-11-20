@@ -760,7 +760,9 @@ turn automated visitors away. What the app does instead:
 - **The session is kept, so you are not asked often.** What a sign-in leaves
   behind (the site's cookies) is kept, encrypted, with the account. The next
   run, of this project or another one, is let in without signing in again:
-  no form, no CAPTCHA, no code, until the site ends the session.
+  no form, no CAPTCHA, no code, until the site ends the session. A new
+  password, another user name or another site drops it; a run that was at
+  work with the account as it was does not bring it back.
 - **Sign in by hand, once.** On the **Browser** page an owner opens the site
   of an account in the same browser: the app fills in the form, you do what
   the site asks of a person, and keep the session. Agents then find the site
