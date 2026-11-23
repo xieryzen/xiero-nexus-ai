@@ -117,7 +117,7 @@ export const RETRY_AT_MAX_MS = 24 * 60 * 60_000;
  */
 export type UseOutcome = { kind: "none" } | { kind: "refused" } | { kind: "limited"; waitMs: number | null; lasting: boolean } | { kind: "down" };
 
-export function useOutcome(error: { code?: string; message: string; limit?: { waitMs: number | null; lasting: boolean } | null }): UseOutcome {
+export function outcomeOfUse(error: { code?: string; message: string; limit?: { waitMs: number | null; lasting: boolean } | null }): UseOutcome {
   if (error.code === "timeout" || error.code === "network_error") return { kind: "down" };
   const status = Number(/^Provider responded (\d{3})\b/.exec(error.message)?.[1] ?? 0);
   if (status === 401 || status === 402 || status === 404 || status === 410) return { kind: "refused" };
@@ -157,7 +157,7 @@ export function afterUseFailure(prev: { failing: boolean; useFailures: number },
  * had put away comes back on probation: it answers one word, and the next
  * request of real work that fails puts it away again.
  */
-export function useFailuresAfterCheck(useFailures: number): number {
+export function failuresAfterCheck(useFailures: number): number {
   return useFailures >= USE_FAILURES_TO_HIDE ? USE_FAILURES_TO_HIDE - 1 : 0;
 }
 

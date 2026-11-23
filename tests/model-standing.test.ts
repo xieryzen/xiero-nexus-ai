@@ -12,8 +12,8 @@ import {
   nextCheckAt,
   restMs,
   usableNow,
-  useFailuresAfterCheck,
-  useOutcome,
+  failuresAfterCheck,
+  outcomeOfUse,
 } from "../src/lib/model-health-rules";
 
 const MINUTE = 60_000;
@@ -21,23 +21,23 @@ const SIX_HOURS = 6 * 60 * MINUTE;
 const NOW = 1_800_000_000_000;
 
 test("what a failed request says about its model", () => {
-  assert.deepEqual(useOutcome({ code: "timeout", message: "Upstream request timed out" }), { kind: "down" });
-  assert.deepEqual(useOutcome({ code: "network_error", message: "Could not reach the provider" }), { kind: "down" });
+  assert.deepEqual(outcomeOfUse({ code: "timeout", message: "Upstream request timed out" }), { kind: "down" });
+  assert.deepEqual(outcomeOfUse({ code: "network_error", message: "Could not reach the provider" }), { kind: "down" });
   // No such model, a key that is not accepted, no credit: asking again changes nothing.
   for (const status of [401, 402, 404, 410]) {
-    assert.deepEqual(useOutcome({ code: "upstream_error", message: `Provider responded ${status}: no` }), { kind: "refused" }, String(status));
+    assert.deepEqual(outcomeOfUse({ code: "upstream_error", message: `Provider responded ${status}: no` }), { kind: "refused" }, String(status));
   }
   // "Not now", with what the provider said about its limit.
-  assert.deepEqual(useOutcome({ message: "Provider responded 429: slow down", limit: { waitMs: 34_000, lasting: false } }), { kind: "limited", waitMs: 34_000, lasting: false });
-  assert.deepEqual(useOutcome({ message: "Provider responded 429: quota for the day", limit: { waitMs: null, lasting: true } }), { kind: "limited", waitMs: null, lasting: true });
-  assert.deepEqual(useOutcome({ message: "Provider responded 503: busy" }), { kind: "limited", waitMs: null, lasting: false });
+  assert.deepEqual(outcomeOfUse({ message: "Provider responded 429: slow down", limit: { waitMs: 34_000, lasting: false } }), { kind: "limited", waitMs: 34_000, lasting: false });
+  assert.deepEqual(outcomeOfUse({ message: "Provider responded 429: quota for the day", limit: { waitMs: null, lasting: true } }), { kind: "limited", waitMs: null, lasting: true });
+  assert.deepEqual(outcomeOfUse({ message: "Provider responded 503: busy" }), { kind: "limited", waitMs: null, lasting: false });
   // An error of the provider, and a refusal that may be of this one request.
   for (const status of [403, 408, 500, 502, 504]) {
-    assert.deepEqual(useOutcome({ message: `Provider responded ${status}: x` }), { kind: "down" }, String(status));
+    assert.deepEqual(outcomeOfUse({ message: `Provider responded ${status}: x` }), { kind: "down" }, String(status));
   }
   // The request's own fault says nothing about the model: too long, a parameter it does not take.
   for (const message of ["Provider responded 400: context too long", "Provider responded 422: bad tools", "The agent returned an empty answer", "Model is disabled"]) {
-    assert.deepEqual(useOutcome({ code: "bad_request", message }), { kind: "none" }, message);
+    assert.deepEqual(outcomeOfUse({ code: "bad_request", message }), { kind: "none" }, message);
   }
 });
 
@@ -67,12 +67,12 @@ test("a provider that says how long is taken at its word, up to a day", () => {
 });
 
 test("a model that real work put away comes back on probation", () => {
-  assert.equal(useFailuresAfterCheck(0), 0);
-  assert.equal(useFailuresAfterCheck(2), 0);
+  assert.equal(failuresAfterCheck(0), 0);
+  assert.equal(failuresAfterCheck(2), 0);
   // It passed a check of one word: the next request of real work that fails puts it away again.
-  assert.equal(useFailuresAfterCheck(3), 2);
-  assert.equal(useFailuresAfterCheck(9), 2);
-  assert.equal(afterUseFailure({ failing: false, useFailures: useFailuresAfterCheck(3) }, { kind: "down" }, NOW)?.failing, true);
+  assert.equal(failuresAfterCheck(3), 2);
+  assert.equal(failuresAfterCheck(9), 2);
+  assert.equal(afterUseFailure({ failing: false, useFailures: failuresAfterCheck(3) }, { kind: "down" }, NOW)?.failing, true);
 });
 
 test("resting, and what the app may choose now", () => {

@@ -83,7 +83,7 @@ export function recordOutcome(model: Model, provider: Provider, outcome: CheckOu
         lastTestStatus: "ok",
         lastTestError: null,
         checkFailures: 0,
-        // A model that real work had put away is back on probation (model-health-rules.ts: useFailuresAfterCheck).
+        // A model that real work had put away is back on probation (model-health-rules.ts: failuresAfterCheck).
         useFailures: sql`CASE WHEN ${models.useFailures} >= ${USE_FAILURES_TO_HIDE} THEN ${USE_FAILURES_TO_HIDE - 1} ELSE 0 END`,
         retryAt: null,
       })

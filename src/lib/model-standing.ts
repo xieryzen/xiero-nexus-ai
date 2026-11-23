@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { models, type Model, type Provider } from "@/db/schema";
 import { audit } from "./audit";
 import { AppError, sanitizeUpstreamError } from "./errors";
-import { afterUseFailure, isFailing, useOutcome } from "./model-health-rules";
+import { afterUseFailure, isFailing, outcomeOfUse } from "./model-health-rules";
 import { limitOf } from "./upstream";
 
 /**
@@ -68,7 +68,7 @@ export function noteFailure(model: Model, provider: Provider, err: unknown): voi
   try {
     const message = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
     const code = err instanceof AppError ? err.code : "error";
-    const outcome = useOutcome({ code, message, limit: limitOf(err) });
+    const outcome = outcomeOfUse({ code, message, limit: limitOf(err) });
     if (outcome.kind === "none") return;
     const row = current(model.id);
     if (!row) return;
