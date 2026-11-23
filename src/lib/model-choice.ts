@@ -160,6 +160,32 @@ export function requireAppChoices(kind: ChoiceKind): string[] {
   return ids;
 }
 
+/**
+ * The app's choices for a conversation that works with tools (chat/turn.ts):
+ * as requireAppChoices("chat"), with the models that can be used now before
+ * the ones that fail or rest, and among those the ones marked for tool
+ * calling, on an adapter that does it, first. A model without tools can
+ * answer, and cannot act.
+ */
+export function requireChatChoices(): string[] {
+  const all = askable();
+  const ids = choices(all, "chat");
+  if (ids.length === 0) throw new PlainError(503, "not_set_up", NOT_SET_UP);
+  const now = Date.now();
+  const byId = new Map(all.map((m) => [m.id, m] as const));
+  const rank = (id: string): number => {
+    const m = byId.get(id);
+    if (!m) return 4;
+    const tools = m.capabilities.includes("tool_calling") && getAdapter(m.adapter).supports.includes("tool_calling");
+    const away = m.failing || isResting(m, now);
+    return (away ? 2 : 0) + (tools ? 0 : 1);
+  };
+  return ids
+    .map((id, index) => ({ id, index, rank: rank(id) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((m) => m.id);
+}
+
 export function requireAppChoice(kind: ChoiceKind): string {
   return requireAppChoices(kind)[0]!;
 }

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, isNull, ne } from "drizzle-orm";
 import { db } from "@/db";
 import { servers, type Server, type User } from "@/db/schema";
 import { AppError, Errors } from "../errors";
@@ -60,7 +60,8 @@ function nameFor(input: ServerInput, existing?: Server): string {
   const taken = db
     .select({ id: servers.id })
     .from(servers)
-    .where(existing ? and(eq(servers.name, name), ne(servers.id, existing.id)) : eq(servers.name, name))
+    // Among the machines of the Servers page: what an account handed over in a conversation has names of its own.
+    .where(existing ? and(eq(servers.name, name), isNull(servers.ownerId), ne(servers.id, existing.id)) : and(eq(servers.name, name), isNull(servers.ownerId)))
     .get();
   if (taken) throw Errors.conflict(`There is a server "${name}" already.`);
   return name;

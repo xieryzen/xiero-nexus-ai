@@ -212,12 +212,47 @@ function embedding(text, dimensions = 24) {
  *                     BROWSER: {"action": "open", "url": "https://example.com/"}
  *                     BROWSER: {"action": "click", "find": "button \"Sign in\""}
  *
+ * The assistant of a conversation (the Chat page) does what the last message
+ * of the person lists, a line each, in that order:
+ *                     DO: {"tool": "run_on_server", "args": {"command": "uname -a"}}
+ * and, asked in plain words to keep a note with its tool "remember" that
+ * says exactly something (the check of scripts/host/workforce.py), keeps
+ * that note. `/__assistant?follows=0` makes it a model that only answers.
+ *
  * Returns the tool calls of this step, or null to answer in text.
  */
 function nextToolCalls(body) {
   const messages = Array.isArray(body?.messages) ? body.messages : [];
   const offered = new Set((body?.tools ?? []).map((t) => t?.function?.name));
   if (offered.size === 0 || body?.tool_choice === "none") return null;
+  if (String(messages.find((m) => m.role === "system")?.content ?? "").startsWith(ASSISTANT)) {
+    const at = messages.map((m) => m.role).lastIndexOf("user");
+    const said = String(messages[at]?.content ?? "");
+    const calls = [...said.matchAll(/^DO: (\{.*\})\s*$/gm)].map((m) => {
+      try {
+        return JSON.parse(m[1]);
+      } catch {
+        return null;
+      }
+    });
+    const made = messages.slice(at + 1).filter((m) => m.role === "tool").length;
+    // Asked in words, as a person or a check asks a real model.
+    const note = said.match(/Keep a note with your tool "remember" that says exactly: (.+?\.) Then answer/);
+    if (calls.length === 0 && note) return assistantFollows && made === 0 && offered.has("remember") ? [{ name: "remember", args: { note: note[1] } }] : null;
+    const next = calls[made];
+    if (!next) return null;
+    // "args_b64": the arguments as base64 of their JSON, for what a message must not say in plain text.
+    let args = next.args ?? {};
+    if (typeof next.args_b64 === "string") {
+      try {
+        args = JSON.parse(Buffer.from(next.args_b64, "base64").toString("utf8"));
+      } catch {
+        args = {};
+      }
+    }
+    // A tool the assistant was not handed is asked for all the same: the app has to say that there is none.
+    return [{ name: next.tool, args }];
+  }
   const task = [...messages].find((m) => m.role === "user")?.content ?? "";
   const title = (String(task).match(/^Task: (.*)$/m) ?? [])[1] ?? "";
   const done = messages.filter((m) => m.role === "tool").length;
@@ -311,6 +346,51 @@ function nextToolCalls(body) {
   return null;
 }
 
+/** How the instructions of the assistant of a conversation begin (src/lib/chat/turn.ts). */
+const ASSISTANT = "You are the assistant of Xiero Nexus AI";
+/** Whether the assistant does what it is asked in words with its tools, or only answers. */
+let assistantFollows = true;
+
+/**
+ * What the assistant of a conversation was shown, for the checks: its tools,
+ * what it can reach, what is remembered, and the message itself as it
+ * arrived. An answer that names all of it shows what the app put in front of
+ * the model, and what it kept from it.
+ */
+function assistantSaw(body, system, user) {
+  const block = (heading) => {
+    const at = system.indexOf(heading);
+    if (at === -1) return [];
+    const lines = system.slice(at).split("\n").slice(1);
+    const out = [];
+    for (const line of lines) {
+      if (!line.startsWith("- ")) break;
+      out.push(line.slice(2));
+    }
+    return out;
+  };
+  const names = (lines) => lines.map((line) => line.split(":")[0].replace(/[{}]/g, "").replace(/^key$/, "")).join("|");
+  const tools = (body?.tools ?? []).map((t) => t?.function?.name).filter(Boolean);
+  const servers = block("Servers you can work on with run_on_server");
+  const sites = [...block("Site accounts you can sign in with in the browser"), ...block("Site accounts that are kept")];
+  const keys = [...system.matchAll(/^- \{\{key:([a-z0-9._-]+)\}\}/gm)].map((m) => m[1]);
+  const notes = block("What is remembered about this person and their work");
+  const passages = block("From this person's other conversations");
+  return [
+    "assistant",
+    `tools=${tools.join("|") || "none"}`,
+    servers.length ? `servers=${names(servers)}` : "",
+    sites.length ? `sites=${names(sites)}` : "",
+    keys.length ? `keys=${keys.join("|")}` : "",
+    notes.length ? `notes=${notes.length}` : "",
+    passages.length ? `passages=${passages.length}` : "",
+    system.includes("In this answer you have no tools") ? "told-no-tools" : "",
+    system.includes("The person's own instructions for this conversation") ? "own-instructions" : "",
+    `turns=${(body?.messages ?? []).filter((m) => m.role === "user").length}`,
+    `said=${user.replace(/\s+/g, " ").slice(0, 600)}`,
+  ].filter(Boolean);
+}
+
 /** What the agent says at the end of a task with tools: what the tools told it. */
 function toolSummary(body) {
   const results = (body?.messages ?? []).filter((m) => m.role === "tool").map((m) => String(m.content));
@@ -401,6 +481,7 @@ function chatAnswer(body) {
   if (title.startsWith("Fenced:")) return 'Here is the file:\n\n```json\n{"name": "from a fence"}\n```\n\nI could not run it.';
   const skills = [...system.matchAll(/^### Skill: (.*)$/gm)].map((m) => m[1]);
   const extras = [
+    ...(system.startsWith(ASSISTANT) ? assistantSaw(body, system, user) : []),
     system.includes("Notes you kept from earlier work") ? "notes" : "",
     user.includes("This project has been run before") ? "earlier-runs" : "",
     system.includes("For this run in particular") ? "run-input" : "",
@@ -1030,6 +1111,10 @@ const api = http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/__jobs") return send(res, 200, [...jobs.values()]);
+  if (url.pathname === "/__assistant") {
+    assistantFollows = url.searchParams.get("follows") !== "0";
+    return send(res, 200, { ok: true, follows: assistantFollows });
+  }
   if (url.pathname === "/__force") {
     const model = url.searchParams.get("model") ?? "";
     const status = Number(url.searchParams.get("status") ?? 200);
@@ -1175,6 +1260,10 @@ const cdn = http.createServer((req, res) => {
       ),
       { "content-type": "text/html; charset=utf-8" },
     );
+  }
+  // An API that says back what it was sent to sign in with: for the keys an account hands over.
+  if (path === "/site/api/echo") {
+    return send(res, 200, { authorization: req.headers.authorization ?? null, token: new URL(req.url, CDN).searchParams.get("token") });
   }
   if (path === "/site/moved") {
     res.writeHead(301, { location: "/site/article.html" });

@@ -7,9 +7,99 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
-What trying 1.10.0 on the server of this repository showed.
+## [1.11.0] - 2026-11-23
+
+Until now an agent worked on a server only after an owner had registered it
+on the Servers page, named it in a project and ticked a tool on an agent;
+a user had no way at all, and a password written into the chat went to the
+model as it was and did nothing. Now a person writes in Chat how to sign in
+to their server, their site or their API and says what to do, and it is
+done. The assistant remembers the person across conversations.
+
+### Added
+
+- **Access handed over in a conversation.** A server (address, user,
+  password or private key), an account on a web site (address, name,
+  password) or a key (an API key, a bot token, a secret) written into a
+  message is found by its shape, **taken out before any model is asked and
+  before the message is stored**, and kept encrypted. A server is tried
+  first: the app reads its host key, signs in and runs one harmless command.
+  The message is stored and shown with `[password kept by the app as
+  "vps-203-0-113-7"]` in its place, and the page says under it what was kept
+  and what was not, and why. English and Indonesian wording, forms, JSON,
+  `ssh user@host -p …`, `203.0.113.7 root ********`.
+- **The assistant works with it**: `run_on_server` on the machines,
+  `use_browser` to sign in to the sites, `http_request` with the keys, which
+  it writes as `{{key:name}}`. The app puts a key's value in, in a web
+  request only for the site the key is tied to and in a command on a server
+  anywhere, and shows what comes back without it. What the app did not
+  recognise the assistant keeps itself with `keep_access`.
+- **The password of a database, of FTP, of a mailbox** (`db mysql: host …
+  password …`, `MYSQL_PASSWORD=…`) is kept as a key that a command on a
+  server names, not tried as a sign-in over SSH.
+- **It is the account's own.** Used by that account's conversations and by
+  the runs of its projects; on no page of anyone else, in no project's
+  list. Names are an account's own as well: two accounts can each have a
+  `vps-203-0-113-7`. `OWN_ACCESS` says who may hand access over (`everyone`,
+  `admins`, `owners`, `off`). Anyone but an owner reaches public addresses
+  only. After six sign-ins that failed within 15 minutes the app tries no
+  more for that account for the rest of them.
+- **Chat keeps its conversations**, with a list beside the transcript, and
+  shows what the assistant did with its tools. `POST /api/chat` with
+  `{message, chatId?}`; `GET` / `DELETE /api/chats`, `GET` / `PATCH` /
+  `DELETE /api/chats/{id}`, `POST /api/chats/{id}/stop`.
+- **An answer goes on when its page goes away** (a phone that sleeps, a
+  connection that drops) and is in the conversation when the page comes
+  back. Stop ends it, and what it was doing.
+- **Memory of an account.** Notes the assistant keeps (`remember`) or the
+  person writes, and what the account's other conversations said about the
+  same thing, are put in front of the assistant at the start of every
+  answer, and the notes in front of the planner and the agents of the
+  account's runs. The **Memory** page, for every account: the notes, and
+  everything that was handed over, to switch off, remove, or tie to a site.
+  `GET` / `POST` / `DELETE /api/memory`, `DELETE /api/memory/{id}`,
+  `PATCH` / `DELETE /api/access/{server|site|key}/{id}`.
+- **In projects.** How to sign in, written into a goal, into the
+  instruction of a run or of a schedule, goes the same way; the answers say
+  what was kept (`kept`, the header `x-access-kept` of a run's start,
+  `access_kept` in `POST /api/v1/projects/{id}/runs`). A run is handed what
+  its goal is about, each task what its text names, and the agent works with
+  it whatever tools are ticked.
+- **The log of the Servers page** has "Servers handed over in
+  conversations", for owners: what was run there, for whom, and never what
+  signs in. `GET /api/servers/commands?server=handed`.
+- A page of the browser that waits for a person is opened by the account
+  whose run or conversation it is, whatever its role.
+- **On the node: is the assistant able to act here?** `workforce.sh
+  --try-assistant` sends the assistant of Chat one message that it can only
+  do with a tool (keep a note), says which model answered and whether it
+  called the tool, and removes the note and the conversation again.
+  `--try-assistant-all` does it with each chat model that is switched on
+  and says which ones call a tool and which only answer; with
+  `--mark-tools` the ones that did are marked "Tool calling", which is what
+  Chat goes by when it chooses whom to ask first.
+  `--try-ssh <host>` has the app read the host key of a machine: whether
+  the app reaches it over SSH from where it runs. Nothing is signed in to.
+  They go with `--inventory-only`, and through the deploy workflow with
+  `options`.
 
 ### Changed
+
+- **A user's assistant and agents can now work on servers and in the
+  browser**, with what that user handed over themselves and with nothing
+  else. Before, no project of a user worked on a server or in a browser.
+  `OWN_ACCESS=admins` keeps it as it was for users.
+- **Where the app chooses the model of a conversation** (always, for a
+  user) it asks the models marked "Tool calling" that work first. Every
+  model is offered the tools; one whose provider refuses a request because
+  of them is asked again without, and is told to say what it would do
+  instead of writing as if it had done it. The former form of
+  `POST /api/chat` (`messages`) is answered as before.
+- A name of a server or of a site account has to be free among the ones of
+  its page, no longer among everything in the database.
+- An answer of the chat is no longer stopped by closing the page.
+
+What trying 1.10.0 on the server of this repository showed:
 
 - **VLM Run Gateway is no longer among the providers to start from.** Asked
   from a real server, its model refused every request of the app: "does not

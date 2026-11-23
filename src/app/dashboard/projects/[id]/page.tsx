@@ -1,3 +1,5 @@
+import { ownForRun } from "@/lib/access/for-run";
+import { siteOfKey } from "@/lib/access/rules";
 import { notFound, redirect } from "next/navigation";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "@/db";
@@ -22,6 +24,16 @@ import { operatorsOf, serversFor, serversOfProject } from "@/lib/ssh/servers";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Project" };
+
+/** What the project's account handed over itself and the goal is about: what a run would work with, as things are now. */
+function handedTo(project: { createdBy: string | null; title: string; goal: string }) {
+  const own = ownForRun(project.createdBy, `${project.title}\n${project.goal}`);
+  return [
+    ...own.servers.map((s) => ({ kind: "server" as const, name: s.name, where: `${s.username}@${s.host}` })),
+    ...own.accounts.map((a) => ({ kind: "site" as const, name: a.name, where: `${a.username} on ${siteHost(a.siteUrl)}` })),
+    ...own.keys.map((k) => ({ kind: "key" as const, name: k.name, where: siteOfKey(k.site) ? `${k.label}, for ${siteOfKey(k.site)}` : k.label })),
+  ];
+}
 
 export default function ProjectDetailPage({ params }: { params: { id: string } }) {
   const user = requirePageUser();
@@ -89,6 +101,7 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       // What a run of it is held to: the tokens its account has left, and no budget of the project.
       tokensLeft={tokensLeftFor(project.createdBy)}
       own={project.createdBy === user.id}
+      handed={project.createdBy === user.id ? handedTo(project) : []}
       chooses={sees}
       agentNames={agentNames}
       canRun={canRun && mayOperate}

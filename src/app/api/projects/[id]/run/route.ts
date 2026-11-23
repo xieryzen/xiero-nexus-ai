@@ -1,7 +1,10 @@
+import { KEPT_HEADER, keptToHeader, type Kept } from "@/lib/access/rules";
+import { takeAccessForProject } from "@/lib/access/store";
 import { handle } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
 import { loadOperableProject } from "@/lib/project-access";
+import { getClientMeta } from "@/lib/request";
 import { SSE_HEADERS, runEventStream } from "@/lib/run-bus";
 import { startRun } from "@/lib/runs";
 import { runStartSchema } from "@/lib/validation";
@@ -41,6 +44,18 @@ export const POST = handle(async (req, { params }) => {
     continueLast = parsed.data.continue === true;
   }
 
+  // What signs in is taken out of the instruction before the run is stored
+  // (src/lib/access). What became of it is said in a header: the answer
+  // itself is the stream of the run.
+  let kept: Kept[] = [];
+  if (input) {
+    const taken = await takeAccessForProject(user, project, input, getClientMeta(req));
+    input = taken.text;
+    kept = taken.kept;
+  }
+
   startRun(project, { trigger: "manual", requestedBy: user.id, input, continueLast });
-  return new Response(runEventStream(project.id, req.signal, user.role), { headers: SSE_HEADERS });
+  return new Response(runEventStream(project.id, req.signal, user.role), {
+    headers: kept.length > 0 ? { ...SSE_HEADERS, [KEPT_HEADER]: keptToHeader(kept) } : SSE_HEADERS,
+  });
 });

@@ -22,15 +22,16 @@ import {
   viewText,
   type Verification,
 } from "./rules";
-import { BrowserProblem } from "./service";
+import { BrowserProblem, browserStatus } from "./service";
 import { currentPage, handOver, keepSessions, runBrowser, signInOn, taskPages, visited, type RunBrowser, type RunSpec, type TaskSpec } from "./sessions";
 
 /** What the tool needs to know of the run and the task it works in. */
 export interface BrowserToolContext {
   runId: string;
-  projectId: string;
+  /** The project of the run. Null in a conversation, which has none. */
+  projectId: string | null;
   projectTitle: string;
-  /** The account of the app the project belongs to. */
+  /** The account of the app the project belongs to, or whose conversation it is. */
   userId: string | null;
   taskId: string;
   taskTitle: string;
@@ -42,7 +43,22 @@ export interface BrowserToolContext {
   progress?: (message: string, link?: string) => void;
   /** Which attempt at the task this is. A new attempt starts over, and is told what the earlier ones did. */
   attempt?: () => number;
+  /**
+   * The work is done for an account that may not work in the browser on its
+   * own (browser/rules.ts) and signs in with what it handed over itself. Its
+   * agent, and the person who takes a page over, steer a browser that runs
+   * in the network of this installation: so it is used only when its
+   * service says that it keeps pages from private networks, wherever a page
+   * leads. The address an agent opens is checked for everyone; what a page
+   * then loads and where it sends the browser only the service can check.
+   */
+  publicOnly?: boolean;
 }
+
+/** What an agent is told when the browser is not one to hand to this account. */
+export const NOT_FILTERED =
+  "The browser of this installation does not say that it keeps pages from private networks, so it is not used for this account. " +
+  "An owner has to run the browser service that comes with the app (Browser page). Do not try again: say in your answer that the site could not be opened from here.";
 
 const ACTIONS = ["open", "read", "click", "type", "select", "press", "back", "sign_in", "ask_person"] as const;
 type Action = (typeof ACTIONS)[number];
@@ -239,6 +255,7 @@ export function browserTool(ctx: BrowserToolContext): LoopTool {
 
       let browser: RunBrowser;
       let page: BrowserPage;
+      if (ctx.publicOnly && (await browserStatus()).filtered !== true) throw new ToolError(NOT_FILTERED);
       try {
         browser = await runBrowser(run);
         const pages = await taskPages(browser, ctx.taskId);

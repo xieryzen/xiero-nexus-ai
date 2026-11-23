@@ -41,7 +41,8 @@ import { signIn, type SignInOutcome } from "./signin";
 /** What is known of the run a page belongs to. */
 export interface RunSpec {
   runId: string;
-  projectId: string;
+  /** Null for a conversation, which has no project. */
+  projectId: string | null;
   projectTitle: string;
   /** The account of the app the project belongs to. */
   userId: string | null;
@@ -672,6 +673,8 @@ export interface LiveDTO {
   account: string | null;
   projectId: string | null;
   projectTitle: string | null;
+  /** The conversation it is a page of, when it is one of the Chat page's and not of a project's run. */
+  chatId: string | null;
   taskTitle: string | null;
   agentName: string | null;
   since: number;
@@ -692,6 +695,8 @@ function dto(live: Live): LiveDTO {
     account: live.account?.name ?? null,
     projectId: live.projectId,
     projectTitle: live.projectTitle,
+    // The answers of a conversation work under "chat:<id>" (chat/turn.ts).
+    chatId: !live.projectId && live.runId?.startsWith("chat:") ? live.runId.slice(5) : null,
     taskTitle: live.taskTitle,
     agentName: live.agentName,
     since: live.since,

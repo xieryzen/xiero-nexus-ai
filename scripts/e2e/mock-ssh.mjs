@@ -5,7 +5,10 @@
 //
 //   node scripts/e2e/mock-ssh.mjs <ssh port> <control port>
 //
-// It listens on 127.0.0.1 only, and takes two accounts:
+// It listens on 127.0.0.1, and on 127.0.0.2 where this system has it (Linux
+// answers on all of 127.0.0.0/8): the same machine under an address that is
+// on no list of private hosts the app was told it may reach. It takes two
+// accounts:
 //
 //   root    with the password "mock-ssh-password" (the control changes it)
 //   deploy  with a key: the private half is handed out by the control, plain
@@ -14,7 +17,8 @@
 // The control is plain HTTP, for the checks:
 //
 //   GET  /__state               what happened: connections, commands, sign-ins,
-//                               the host key and the keys of "deploy"
+//                               the host key and the keys of "deploy"; `alias`
+//                               is the second address, or null without one
 //   GET  /__reset               forget what happened (the counts and the lists)
 //   GET  /__drop                cut every open connection, as a network does
 //   GET  /__rekey               show another host key from now on, as a machine
@@ -198,7 +202,7 @@ let ssh = new Server({ hostKeys: [state.hostKey.private] }, serve);
 
 // The sockets are accepted here and handed to the SSH server, so that this
 // script sees when one last sent something.
-const listener = net.createServer((socket) => {
+function accept(socket) {
   sockets.add(socket);
   socket.lastHeard = Date.now();
   socket.on("data", () => {
@@ -207,16 +211,37 @@ const listener = net.createServer((socket) => {
   socket.on("close", () => sockets.delete(socket));
   socket.on("error", () => undefined);
   ssh.injectSocket(socket);
+}
+const listener = net.createServer(accept);
+// The same machine under a second address of this computer.
+const ALIAS = "127.0.0.2";
+const second = net.createServer(accept);
+let alias = null;
+second.on("error", () => {
+  // A system that answers on 127.0.0.1 alone: the checks are told.
+  alias = null;
 });
 let listening = false;
 function listen(on) {
   return new Promise((resolve) => {
     if (on === listening) return resolve();
     listening = on;
-    if (on) listener.listen(sshPort, HOST, resolve);
-    else {
+    if (on) {
+      listener.listen(sshPort, HOST, () => {
+        second.once("listening", () => {
+          alias = ALIAS;
+          resolve();
+        });
+        second.once("error", () => resolve());
+        second.listen(sshPort, ALIAS);
+      });
+    } else {
       for (const socket of sockets) socket.destroy();
-      listener.close(() => resolve());
+      const closed = () => listener.close(() => resolve());
+      if (alias) {
+        alias = null;
+        second.close(closed);
+      } else closed();
     }
   });
 }
@@ -246,6 +271,7 @@ const control = http.createServer(async (req, res) => {
       return send(res, 200, {
         port: sshPort,
         listening,
+        alias,
         connections: state.connections,
         open: clients.size,
         signIns: state.signIns,

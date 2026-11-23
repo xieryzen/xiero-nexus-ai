@@ -1,7 +1,7 @@
 import { handle, json } from "@/lib/api";
 import { audit } from "@/lib/audit";
 import { requireOwner } from "@/lib/auth";
-import { forgetSession, getAccount, serializeAccount } from "@/lib/browser/accounts";
+import { forgetSession, getAccount, savedAccount, serializeAccount } from "@/lib/browser/accounts";
 import { ONLY_OWNER, siteHost } from "@/lib/browser/rules";
 import { BrowserProblem, browserConfigured } from "@/lib/browser/service";
 import { liveLink, ownerSession } from "@/lib/browser/sessions";
@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 export const POST = handle(async (req, { params }) => {
   const user = requireOwner(ONLY_OWNER);
   const { ip, userAgent } = getClientMeta(req);
-  const account = getAccount(params.id!);
+  const account = savedAccount(params.id!);
   if (!account) throw Errors.notFound("Site account not found");
   if (!browserConfigured()) throw new AppError(400, "browser_not_set_up", "No browser service is set up on this server (BROWSER_URL).");
   const rate = rateLimit(`browser-session:${user.id}`, 20, 60_000);
@@ -47,7 +47,7 @@ export const POST = handle(async (req, { params }) => {
 export const DELETE = handle(async (req, { params }) => {
   const user = requireOwner(ONLY_OWNER);
   const { ip, userAgent } = getClientMeta(req);
-  const account = getAccount(params.id!);
+  const account = savedAccount(params.id!);
   if (!account) throw Errors.notFound("Site account not found");
   forgetSession(account.id);
   audit({

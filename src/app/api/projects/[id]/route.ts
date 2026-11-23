@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { projects } from "@/db/schema";
+import { takeAccessForProject } from "@/lib/access/store";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
@@ -42,11 +43,13 @@ export const PATCH = handle(async (req, { params }) => {
     checkedAccountIds({ role: owner?.role ?? "user" }, ids);
     setProjectAccounts(p.id, ids);
   }
+  // What signs in is taken out of a new goal before it is stored (src/lib/access).
+  const handed = body.goal !== undefined ? await takeAccessForProject(user, p, body.goal, { ip, userAgent }) : null;
   const updated = db
     .update(projects)
     .set({
       ...(body.title !== undefined ? { title: body.title } : {}),
-      ...(body.goal !== undefined ? { goal: body.goal } : {}),
+      ...(handed ? { goal: handed.text } : {}),
       ...(body.memory !== undefined ? { memory: body.memory } : {}),
       ...(body.standIns !== undefined ? { standIns: body.standIns } : {}),
       updatedAt: new Date(),
@@ -63,7 +66,7 @@ export const PATCH = handle(async (req, { params }) => {
     ip,
     userAgent,
   });
-  return json({ project: projectFor(user.role, serializeProject(updated, { withTasks: true })) });
+  return json({ project: projectFor(user.role, serializeProject(updated, { withTasks: true })), kept: handed?.kept ?? [] });
 });
 
 export const DELETE = handle(async (req, { params }) => {

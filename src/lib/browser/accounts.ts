@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { db } from "@/db";
 import {
   agents,
@@ -87,6 +87,16 @@ export function getAccount(id: string): SiteAccount | undefined {
   return db.select().from(siteAccounts).where(eq(siteAccounts.id, id)).get();
 }
 
+/**
+ * An account an owner saved on the Browser page, for the routes that manage
+ * those. One that was handed over in a conversation is its account's to
+ * manage (Memory page), and is not found here.
+ */
+export function savedAccount(id: string): SiteAccount | undefined {
+  const row = getAccount(id);
+  return row && row.ownerId === null ? row : undefined;
+}
+
 /** The accounts the projects of this user may sign in with. */
 export function accountsFor(user: Pick<User, "role">): SiteAccount[] {
   return db
@@ -94,7 +104,8 @@ export function accountsFor(user: Pick<User, "role">): SiteAccount[] {
     .from(siteAccounts)
     .orderBy(asc(siteAccounts.name))
     .all()
-    .filter((row) => mayUseAccount(user.role, row.access));
+    // What an account handed over in a conversation (src/lib/access) is its own, and no project names it.
+    .filter((row) => row.ownerId === null && mayUseAccount(user.role, row.access));
 }
 
 /** The password of an account, for the page it is typed into. */
@@ -139,7 +150,8 @@ export function checkedAccount(input: AccountInput, existing?: SiteAccount): Che
     const taken = db
       .select({ id: siteAccounts.id })
       .from(siteAccounts)
-      .where(existing ? and(eq(siteAccounts.name, name), ne(siteAccounts.id, existing.id)) : eq(siteAccounts.name, name))
+      // Among the accounts of the Browser page: what someone handed over in a conversation has names of its own.
+      .where(existing ? and(eq(siteAccounts.name, name), isNull(siteAccounts.ownerId), ne(siteAccounts.id, existing.id)) : and(eq(siteAccounts.name, name), isNull(siteAccounts.ownerId)))
       .get();
     if (taken) throw Errors.conflict(`There is an account "${name}" already.`);
   }

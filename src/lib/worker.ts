@@ -242,8 +242,10 @@ function housekeeping(): void {
   w.lastHousekeepingAt = now;
   // A connection to a machine belongs to a run that is executed here, and is
   // closed with it. None should be left over; this makes sure.
-  closeStraySessions(new Set(runtime().activeRuns.keys()));
-  closeStrayBrowsers(new Set(runtime().activeRuns.keys()));
+  // An answer of a conversation that is being worked on has its own (chat/turn.ts).
+  const working = new Set([...runtime().activeRuns.keys(), ...(runtime().chatTurns ?? [])]);
+  closeStraySessions(working);
+  closeStrayBrowsers(working);
   recoverJobs();
   for (const asset of failStaleRenders(RENDER_MAX_AGE_MS)) {
     notify(asset.userId, {

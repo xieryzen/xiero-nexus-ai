@@ -6,7 +6,10 @@ import {
   resolveChatModel,
   type ResolvedModel,
 } from "@/lib/gateway";
-import { requireAppChoices } from "@/lib/model-choice";
+import { createChat, loadChat } from "@/lib/chat/store";
+import { isAnswering, runChatTurn } from "@/lib/chat/turn";
+import { requireAppChoices, requireChatChoices } from "@/lib/model-choice";
+import { getClientMeta } from "@/lib/request";
 import { seesSetup } from "@/lib/roles";
 import { textFor } from "@/lib/shown";
 import type { ChatMessage } from "@/lib/adapters/types";
@@ -31,10 +34,23 @@ function sse(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
+/**
+ * POST /api/chat
+ *
+ * `{ message, chatId? }`: a message of a conversation that is kept (v1.11).
+ * What signs in is taken out of it and kept encrypted; the assistant is told
+ * what is remembered about the account, works with its tools, and the answer
+ * is written to the conversation. Events: `chat`, `user`, `progress`,
+ * `remembered`, `sources`, `reset`, `delta`, `tool`, `done`, `error`.
+ *
+ * `{ messages }`: the whole conversation as the caller holds it. One answer,
+ * without tools; nothing is kept. Events: `sources`, `delta`, `done`, `error`.
+ */
 export const POST = handle(async (req) => {
   const user = requireUser();
   const body = await parseBody(req, chatRequestSchema);
   assertTokensLeft(user.id); // 402 before anything is asked of a provider
+  const kept = body.message !== undefined;
   // Someone who is shown the setup names the model, or leaves it to the app.
   // Anyone else gets the app's choice, whatever the request names.
   const named = seesSetup(user.role) && body.modelRowId ? body.modelRowId : null;
@@ -43,9 +59,10 @@ export const POST = handle(async (req) => {
     candidates.push(resolveChatModel(named)); // throws safe errors
   } else {
     // The app's choices in turn: when the first cannot answer, the next is
-    // asked, since nobody is there to pick another model by hand.
+    // asked, since nobody is there to pick another model by hand. A
+    // conversation that works with tools asks the models that take them first.
     let problem: unknown = null;
-    for (const id of requireAppChoices("chat").slice(0, CHOICES_TRIED)) {
+    for (const id of (kept ? requireChatChoices() : requireAppChoices("chat")).slice(0, CHOICES_TRIED)) {
       try {
         candidates.push(resolveChatModel(id));
       } catch (err) {
@@ -55,13 +72,80 @@ export const POST = handle(async (req) => {
     if (candidates.length === 0) throw problem;
   }
 
+  const encoder = new TextEncoder();
+  const headers = {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    "x-accel-buffering": "no",
+  };
+
+  if (body.message !== undefined) {
+    const chat = body.chatId ? loadChat(user.id, body.chatId) : createChat(user.id, { modelRowId: named, systemPrompt: body.systemPrompt?.trim() || null });
+    if (isAnswering(chat.id)) {
+      throw new AppError(409, "chat_busy", "This conversation is still being answered. Wait for the answer, or stop it first.");
+    }
+    const collections = body.collectionIds?.length ? readableCollectionIds(body.collectionIds, user) : [];
+    const meta = getClientMeta(req);
+    const message = body.message;
+    // The page can go away while the answer is worked on: a phone that
+    // sleeps, a connection that drops. The answer goes on and is written to
+    // the conversation, where the page finds it; it is stopped by
+    // POST /api/chats/{id}/stop, not by hanging up.
+    let listening = true;
+    let beat: ReturnType<typeof setInterval> | null = null;
+    req.signal?.addEventListener("abort", () => {
+      listening = false;
+    });
+    const turn = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (chunk: string) => {
+          if (!listening) return;
+          try {
+            controller.enqueue(encoder.encode(chunk));
+          } catch {
+            listening = false;
+          }
+        };
+        // A tool can work for minutes without anything to say: a line now and
+        // then keeps what stands between the app and the page from closing.
+        beat = setInterval(() => send(": working\n\n"), 15_000);
+        try {
+          await runChatTurn({
+            user,
+            chat,
+            message,
+            candidates,
+            temperature: body.temperature,
+            systemPrompt: body.systemPrompt,
+            collectionIds: collections,
+            meta,
+            emit: (event) => send(sse(event)),
+          });
+        } finally {
+          if (beat) clearInterval(beat);
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+        }
+      },
+      cancel() {
+        listening = false;
+        if (beat) clearInterval(beat);
+      },
+    });
+    return new Response(turn, { headers });
+  }
+
   // Knowledge: the passages that fit the question are put in front of the model.
   let hits: KnowledgeHit[] = [];
   let knowledgeError: string | null = null;
   const collectionIds = body.collectionIds?.length
     ? readableCollectionIds(body.collectionIds, user)
     : [];
-  const question = [...body.messages].reverse().find((m) => m.role === "user")?.content;
+  const said = body.messages ?? [];
+  const question = [...said].reverse().find((m) => m.role === "user")?.content;
   if (collectionIds.length > 0 && question) {
     try {
       hits = await searchKnowledge(collectionIds, question, { limit: 6, userId: user.id });
@@ -89,9 +173,7 @@ export const POST = handle(async (req) => {
 
   const messages: ChatMessage[] = [];
   if (system) messages.push({ role: "system", content: system });
-  for (const m of body.messages) messages.push({ role: m.role, content: m.content });
-
-  const encoder = new TextEncoder();
+  for (const m of said) messages.push({ role: m.role, content: m.content });
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -181,11 +263,5 @@ export const POST = handle(async (req) => {
     },
   });
 
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "x-accel-buffering": "no",
-    },
-  });
+  return new Response(stream, { headers });
 });

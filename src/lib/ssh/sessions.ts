@@ -1,7 +1,8 @@
 import "server-only";
 import { Client } from "ssh2";
 import type { Server } from "@/db/schema";
-import { sanitizeUpstreamError } from "../errors";
+import { connectHostOf } from "../access/address";
+import { AppError, sanitizeUpstreamError } from "../errors";
 import { fingerprint, hostKeyLine, parseHostKey, sameHostKey } from "./host-key";
 import {
   CHANNELS_AT_ONCE,
@@ -261,6 +262,22 @@ function connect(target: Target): Promise<Client> {
   });
 }
 
+/**
+ * The same, for a connection that is made now. A machine that someone other
+ * than an owner handed over in a conversation is connected to only at an
+ * address on the public internet (access/address.ts).
+ */
+async function checkedTarget(server: Server): Promise<Target> {
+  const target = targetOf(server);
+  if (!server.ownerId) return target;
+  try {
+    return { ...target, host: await connectHostOf(server) };
+  } catch (err) {
+    const said = err instanceof AppError ? err.message : "The address of the machine could not be checked.";
+    throw new SshProblem("off", said, said);
+  }
+}
+
 export function targetOf(server: Server): Target {
   return {
     name: server.name,
@@ -458,6 +475,8 @@ interface Session {
   runId: string;
   serverId: string;
   serverName: string;
+  /** The account that handed the machine over in a conversation, when one did: said on every row of the log. */
+  ownerId: string | null;
   context: SessionContext;
   client: Client | null;
   connecting: Promise<Client> | null;
@@ -492,6 +511,7 @@ function sessionFor(runId: string, server: Server, context: SessionContext): Ses
       runId,
       serverId: server.id,
       serverName: server.name,
+      ownerId: server.ownerId,
       context,
       client: null,
       connecting: null,
@@ -510,7 +530,7 @@ function sessionFor(runId: string, server: Server, context: SessionContext): Ses
 
 function note(session: Session, command: string, status: "ok" | "lost" | "refused", output?: string): void {
   logCommand({
-    server: { id: session.serverId, name: session.serverName },
+    server: { id: session.serverId, name: session.serverName, ownerId: session.ownerId },
     kind: "session",
     projectId: session.context.projectId,
     projectTitle: session.context.projectTitle,
@@ -537,7 +557,7 @@ function liveClient(session: Session, server: Server): Promise<Client> {
         if (attempt > 0) await sleep(RECONNECT_WAITS_MS[attempt - 1]!);
         if (session.closing) throw new SshProblem("off", "The run has ended.", "The run has ended.");
         try {
-          const client = await connect(targetOf(server));
+          const client = await connect(await checkedTarget(server));
           if (session.closing) {
             client.end();
             throw new SshProblem("off", "The run has ended.", "The run has ended.");
@@ -608,6 +628,13 @@ export interface RunOnServer {
   timeoutSeconds: number;
   isCancelled?: () => boolean;
   onProgress?: (elapsedMs: number) => void;
+  /**
+   * Keys the person handed over (src/lib/access): `fill` puts their values
+   * in where the command names them, for the machine alone; `hide` takes
+   * them out of what the machine printed. What is written down and what the
+   * agent reads holds the names, never a value.
+   */
+  keys?: { fill(text: string): string; hide(text: string): string };
 }
 
 /**
@@ -620,7 +647,7 @@ export async function runOnServer(opts: RunOnServer): Promise<{ server: string; 
   const server = getServer(opts.serverId);
   if (!server) throw new SshProblem("off", "The server is not registered any more.", "That server is not registered any more.");
   const entry = {
-    server: { id: server.id, name: server.name },
+    server: { id: server.id, name: server.name, ownerId: server.ownerId },
     kind: "command" as const,
     projectId: opts.context.projectId,
     projectTitle: opts.context.projectTitle,
@@ -652,11 +679,12 @@ export async function runOnServer(opts: RunOnServer): Promise<{ server: string; 
       }
       try {
         result = await execOn(client, {
-          line: remoteCommand(opts.command),
+          line: remoteCommand(opts.keys ? opts.keys.fill(opts.command) : opts.command),
           timeoutMs: opts.timeoutSeconds * 1000,
           isCancelled: opts.isCancelled,
           onProgress: opts.onProgress,
         });
+        if (opts.keys) result = { ...result, stdout: opts.keys.hide(result.stdout), stderr: opts.keys.hide(result.stderr) };
       } catch (err) {
         if (!(err instanceof NotStarted)) throw err;
         if (tries >= 2) {

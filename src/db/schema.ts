@@ -249,6 +249,10 @@ export const modelCapabilities = sqliteTable(
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
+/**
+ * A conversation on the Chat page (v1.11). It belongs to one account, and
+ * nobody else is shown it.
+ */
 export const chats = sqliteTable(
   "chats",
   {
@@ -265,26 +269,57 @@ export const chats = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => ({
-    byUser: index("chats_user_idx").on(t.userId),
+    byUser: index("chats_user_idx").on(t.userId, t.updatedAt),
   }),
 );
 
+/**
+ * What was said in a conversation. `content` is the text as it is kept: a
+ * password or a key that the app took out of a message is not in it
+ * (src/lib/access). `chat_messages_fts` indexes `content` by this row's id,
+ * for what a later conversation is told of the earlier ones.
+ */
 export const chatMessages = sqliteTable(
   "chat_messages",
   {
-    id: id(),
+    id: integer("id").primaryKey({ autoIncrement: true }),
     chatId: text("chat_id")
       .notNull()
       .references(() => chats.id, { onDelete: "cascade" }),
-    role: text("role", { enum: ["system", "user", "assistant"] }).notNull(),
+    role: text("role", { enum: ["user", "assistant"] }).notNull(),
     content: text("content").notNull(),
+    // JSON. Of a message: what the app kept from it. Of an answer: the tools
+    // it used, the model that gave it, what was looked up, how it ended.
+    details: text("details"),
     promptTokens: integer("prompt_tokens"),
     completionTokens: integer("completion_tokens"),
     createdAt: createdAt(),
   },
   (t) => ({
-    byChat: index("chat_messages_chat_idx").on(t.chatId),
+    byChat: index("chat_messages_chat_idx").on(t.chatId, t.id),
   }),
+);
+
+/**
+ * What the AI remembers about an account, across its conversations and its
+ * projects (v1.11): short notes, kept by the assistant in a chat or written
+ * by the person. `account_memories_fts` indexes `content` by this row's id.
+ */
+export const accountMemories = sqliteTable(
+  "account_memories",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    // chat: the assistant kept it in a conversation; manual: the person wrote it.
+    source: text("source", { enum: ["chat", "manual"] }).notNull().default("chat"),
+    chatId: text("chat_id").references(() => chats.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+  },
+  (t) => ({ byUser: index("account_memories_user_idx").on(t.userId, t.createdAt) }),
 );
 
 // ─── Usage & audit ──────────────────────────────────────────────────────────
@@ -1143,10 +1178,20 @@ export const servers = sqliteTable(
     lastConnectedAt: integer("last_connected_at", { mode: "timestamp_ms" }),
     lastError: text("last_error"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    // Set: the account handed this machine to the AI in a conversation
+    // (src/lib/access). Only that account's chats and runs work on it, no
+    // project names it, and `access` does not apply. Null: an owner
+    // registered it on the Servers page.
+    ownerId: text("owner_id").references(() => users.id, { onDelete: "cascade" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => ({ byName: uniqueIndex("servers_name_unique").on(t.name) }),
+  (t) => ({
+    // A name is one machine among the ones an owner registered, and one among
+    // the ones an account handed over: two accounts can each have "vps-1-2-3-4".
+    byName: uniqueIndex("servers_name_unique").on(t.name).where(sql`${t.ownerId} is null`),
+    byOwnerName: uniqueIndex("servers_owner_name_unique").on(t.ownerId, t.name),
+  }),
 );
 
 /** The servers a project works on. */
@@ -1200,6 +1245,10 @@ export const serverCommands = sqliteTable(
     output: text("output"),
     outputBytes: integer("output_bytes").notNull().default(0),
     durationMs: integer("duration_ms"),
+    // The machine was one an account handed over in a conversation
+    // (servers.ownerId), not one of the Servers page. Kept on the row, which
+    // outlives the machine and the account.
+    handed: integer("handed", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => ({
@@ -1242,10 +1291,51 @@ export const siteAccounts = sqliteTable(
     // What stood in the way of the last sign-in, when something did.
     lastProblem: text("last_problem"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    // Set: the account handed this sign-in to the AI in a conversation
+    // (src/lib/access). Only that account's chats and runs sign in with it.
+    ownerId: text("owner_id").references(() => users.id, { onDelete: "cascade" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
-  (t) => ({ byName: uniqueIndex("site_accounts_name_unique").on(t.name) }),
+  (t) => ({
+    // As for servers: unique among the ones of the Browser page, and among the ones of each account.
+    byName: uniqueIndex("site_accounts_name_unique").on(t.name).where(sql`${t.ownerId} is null`),
+    byOwnerName: uniqueIndex("site_accounts_owner_name_unique").on(t.ownerId, t.name),
+  }),
+);
+
+/**
+ * A key an account handed to the AI in a conversation (v1.11): an API
+ * token, the token of a bot, the password of an app. The AI writes
+ * {{key:name}} where the value belongs and the app puts it in; no model is
+ * shown it (src/lib/access).
+ */
+export const accessKeys = sqliteTable(
+  "access_keys",
+  {
+    id: id(),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // How the AI names it: lower-case letters, digits, ".", "_", "-".
+    name: text("name").notNull(),
+    // What it is, in the person's words: "Discord bot token".
+    label: text("label").notNull(),
+    // The site it is for: the host it may be sent to in a web request, with
+    // everything under it. Null: it is sent in no web request.
+    site: text("site"),
+    // AES-256-GCM ciphertext of the value. Never leaves the server.
+    secretCiphertext: text("secret_ciphertext").notNull(),
+    // Its last characters, to tell one key from another.
+    hint: text("hint").notNull().default(""),
+    status: text("status", { enum: ["enabled", "disabled"] })
+      .notNull()
+      .default("enabled"),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => ({ byName: uniqueIndex("access_keys_owner_name_unique").on(t.ownerId, t.name) }),
 );
 
 /** The site accounts a project works with. */
@@ -1341,6 +1431,10 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type SkillFile = typeof skillFiles.$inferSelect;
 export type Server = typeof servers.$inferSelect;
+export type AccessKey = typeof accessKeys.$inferSelect;
+export type Chat = typeof chats.$inferSelect;
+export type ChatLine = typeof chatMessages.$inferSelect;
+export type AccountMemory = typeof accountMemories.$inferSelect;
 export type ServerCommand = typeof serverCommands.$inferSelect;
 export type SiteAccount = typeof siteAccounts.$inferSelect;
 export type BrowserAction = typeof browserActions.$inferSelect;

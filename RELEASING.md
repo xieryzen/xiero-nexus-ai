@@ -432,6 +432,45 @@ server.
   be done by any model that costs no more. Mark the models the app may
   choose by itself, if that is to be fewer.
 
+### From 1.10 to 1.11
+
+- Nothing has to be configured. At its first start 1.11 changes the
+  database: new tables for conversations' messages, for what an account
+  remembers and for its keys; `servers.owner_id`, `site_accounts.owner_id`
+  and `server_commands.handed`; and the names of servers and site accounts
+  are unique among the ones an owner registered, and among the ones of each
+  account, no longer among all. The table `chat_messages` of earlier
+  versions, which nothing ever wrote to, is made anew. **Back up `data/`
+  before the upgrade**; going back to 1.10 is done with that backup in its
+  place. 1.10 on the database of 1.11 was not tried, and what was handed
+  over in conversations would show on its Servers and Browser pages.
+- **Every account can now hand a server, a site account or a key to the
+  assistant in Chat, users included**, and its assistant and the runs of
+  its projects then work with it. Anyone but an owner reaches public
+  addresses only. Where that is not wanted: `OWN_ACCESS=admins`, `owners`
+  or `off` in `.env` before the first start.
+- **The app now makes SSH connections that no owner set up**: to the
+  machines people hand over. A firewall that lets the app out on port 22
+  only to certain machines keeps doing so; the sign-in then fails and the
+  person is told.
+- **Chat is a different page.** Conversations are kept and listed; there
+  is a Memory page in everyone's menu. A program that calls
+  `POST /api/chat` with `messages` gets what it got before.
+- Where the app chooses the model of a conversation (always, for a user),
+  it asks the models marked **Tool calling** that work first. Mark the
+  models that do call tools: `workforce.sh --try-assistant-all` says which
+  ones do, and `--mark-tools` marks them.
+- An answer that is being worked on goes on when the page is closed, for
+  up to half an hour, and is stopped with the Stop button.
+- **See whether the assistant can act on this installation.** It works on
+  what is handed over by calling tools, and a model that only answers
+  cannot. On the node, after the upgrade:
+  `sudo bash workforce.sh --server <id> --as-owner --inventory-only --try-assistant --try-ssh <a machine of yours>`
+  (through the deploy workflow: action `workforce`, with those as
+  `options`). It asks the assistant to keep one note and says whether its
+  model called the tool, and has the app read the machine's host key,
+  signing in to nothing ([scripts/host/README.md](scripts/host/README.md)).
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of

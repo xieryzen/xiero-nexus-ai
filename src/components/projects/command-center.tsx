@@ -7,6 +7,7 @@ import type { ProjectDTO } from "@/lib/workforce";
 import { DEFAULT_MAX_MEDIA, MAX_MEDIA_PER_RUN } from "@/lib/creative/prompt";
 import { MAX_PROJECT_TASKS } from "@/lib/limits";
 import { apiFetch, ApiError } from "@/lib/client";
+import type { Kept } from "@/lib/access/rules";
 import { RelativeTime } from "@/components/time";
 import { Alert, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -141,7 +142,7 @@ export function CommandCenter({
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch<{ project: ProjectDTO }>("/api/projects", {
+      const res = await apiFetch<{ project: ProjectDTO; kept?: Kept[] }>("/api/projects", {
         method: "POST",
         body: JSON.stringify({
           title,
@@ -164,6 +165,14 @@ export function CommandCenter({
           ...(siteAccountIds.length > 0 ? { siteAccountIds } : {}),
         }),
       });
+      // What the goal handed over, and what became of it, is said on the project's page.
+      if (res.kept && res.kept.length > 0) {
+        try {
+          window.sessionStorage.setItem(`xn:kept:${res.project.id}`, JSON.stringify(res.kept));
+        } catch {
+          // Without it the page says only what the run works with.
+        }
+      }
       router.push(`/dashboard/projects/${res.project.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not create project");
@@ -197,7 +206,11 @@ export function CommandCenter({
               <Field label="Title" htmlFor="p-title">
                 <Input id="p-title" value={title} onChange={(e) => setTitle(e.target.value)} required placeholder="e.g. Design a rate-limiter" />
               </Field>
-              <Field label="Goal" htmlFor="p-goal" hint="Describe what you want produced.">
+              <Field
+                label="Goal"
+                htmlFor="p-goal"
+                hint="Describe what you want produced. Where the work is on your own server, site or API, write how to sign in here (address, user name, password or key): the password is taken out before the goal is stored, kept encrypted, and the agents work with it."
+              >
                 <Textarea id="p-goal" value={goal} onChange={(e) => setGoal(e.target.value)} required className="min-h-[110px]" placeholder="Build a spec and reference implementation for a token-bucket rate limiter in TypeScript…" />
               </Field>
               <div className="grid gap-4 sm:grid-cols-2">

@@ -28,6 +28,10 @@ MOCK_PORT="${MOCK_PORT:-4020}"
 CDN_PORT="${CDN_PORT:-4021}"
 # A plain web server of this test, for skill files that are fetched from an address.
 WWW_PORT="${WWW_PORT:-4022}"
+# A machine to reach over SSH (scripts/e2e/mock-ssh.mjs), and what steers it.
+SSH_PORT="${SSH_PORT:-4023}"
+SSH_CONTROL_PORT="${SSH_CONTROL_PORT:-4024}"
+MACHINE="http://127.0.0.1:${SSH_CONTROL_PORT}"
 APP="http://127.0.0.1:${APP_PORT}"
 WWW="http://127.0.0.1:${WWW_PORT}"
 MOCK="http://127.0.0.1:${MOCK_PORT}"
@@ -754,6 +758,9 @@ check "  and says who does" says '"rina" is an administrator of the app, and onl
 is "  none was added" "2" "$(ask /api/admin/users 'len(d["users"])')"
 run NEXUS_PASSWORD="another-password-for-rina" -- --user rina --file "${FILE}" --dry-run
 is "  the workforce it can still read and compare" "0" "${CODE}"
+run NEXUS_PASSWORD="another-password-for-rina" -- --user rina --inventory-only --try-ssh 127.0.0.1
+is "  nor does it have the app reach a machine" "1" "${CODE}"
+check "    with who does" says "only an owner can have the app reach a machine"
 RINA_ID="$(ask /api/admin/users '[u["id"] for u in d["users"] if u["username"] == "rina"][0]')"
 api DELETE "/api/admin/users/${RINA_ID}" > /dev/null
 is "(the account of the test is deleted again)" "1" "$(ask /api/admin/users 'len(d["users"])')"
@@ -902,6 +909,104 @@ check "and says that there is none" says 'the file has no "tryRun"'
 run -- --user boss --file "${FILE}" --dry-run --try-run
 check "a dry run starts no project" says "no project was run"
 
+# ── The assistant of Chat, and the way to a machine ──────────────────────────
+
+section "The assistant of Chat is asked for a note, and the app for the host key of a machine"
+(cd "${root}" && exec node scripts/e2e/mock-ssh.mjs "${SSH_PORT}" "${SSH_CONTROL_PORT}") > "${WORK}/ssh.log" 2>&1 &
+PIDS+=("$!")
+for _ in $(seq 1 60); do
+  curl -fsS -m 2 "${MACHINE}/__state" > /dev/null 2>&1 && break
+  sleep 0.5
+done
+machine() { # EXPRESSION over "d", what the machine says of itself
+  curl -fsS -m 10 "${MACHINE}/__state" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print(eval(sys.argv[1]))' "$1" 2> /dev/null || echo "?"
+}
+mine() { printf '%s notes, %s conversations' "$(ask /api/memory 'len(d["notes"])')" "$(ask /api/chats 'len(d["chats"])')"; }
+before="$(mine)"
+is "(the owner has no note and no conversation)" "0 notes, 0 conversations" "${before}"
+run -- --user boss --inventory-only --try-assistant
+is "it ends well" "0" "${CODE}"
+check "the model was asked to keep a note, called the tool, and the note was there" line 'ok +.+ called "remember", and the note is there\. It answered: DONE after 1 tool results\.'
+check "  it says which model that was" line 'ok +[^ ].* \(.+\) called "remember"'
+check "  and what that means" says "The assistant of Chat can act with this model"
+check "the note and the conversation are removed again" line 'Tidied +The note and the conversation were removed again'
+is "  and they are" "${before}" "$(mine)"
+check_not "the workforce is not looked at" says "What the file asks for"
+curl -fsS "${MOCK}/__assistant?follows=0" > /dev/null
+run -- --user boss --inventory-only --try-assistant
+is "a model that only answers ends with 1" "1" "${CODE}"
+check "  it says that no tool was called, and what was answered" line 'FAILED +.+ answered without calling a tool: OUTPUT of'
+check "  and what that means" says "the assistant can only talk"
+check "  the conversation is removed again" line 'Tidied +The conversation was removed again'
+is "  and it is" "${before}" "$(mine)"
+curl -fsS "${MOCK}/__assistant?follows=1" > /dev/null
+# Each chat model in turn, named as an administrator names one in Chat.
+unmarked() { ask /api/models 'len([m for m in d["models"] if m.get("enabled", True) and any(c["capability"] == "text" for c in m["capabilities"]) and not any(c["capability"] == "tool_calling" for c in m["capabilities"])])'; }
+tools_line() { sed -n 's/^  Tools  *\([0-9]*\) of \([0-9]*\) chat models\{0,1\} called the tool when asked to.*/\1 of \2/p' "${OUT}"; }
+# The app of this test also has chat models that fail their check (the sections above): those are not asked.
+run -- --user boss --inventory-only --try-assistant-all
+is "each chat model is asked in turn, and it ends well" "0" "${CODE}"
+ASKED="$(grep -cE '^  ok +.+ called "remember", and the note is there' "${OUT}")"
+NOT_MARKED="$(grep -cE '^  ok +.+ It is not marked "Tool calling"\.$' "${OUT}")"
+check "  more than one model called the tool" test "${ASKED}" -gt 1
+is "  every one that was asked did, and it sums up" "${ASKED} of ${ASKED}" "$(tools_line)"
+is "  the models that fail their check are named and not asked" "$(ask /api/models 'len([m for m in d["models"] if m.get("enabled", True) and m.get("hidden")])')" "$(grep -cE '^  left out +.+ fails its check, so the app does not choose it\. Not asked\.' "${OUT}")"
+check "  it says which are not marked for it, and how they are" says "--mark-tools marks them"
+is "  nothing is left of it" "${before}" "$(mine)"
+UNMARKED="$(unmarked)"
+check "(some of the models that called the tool are not marked for tool calling)" test "${NOT_MARKED}" -gt 0
+run -- --user boss --inventory-only --try-assistant-all --mark-tools
+is "with --mark-tools it ends well" "0" "${CODE}"
+is "  it says which models it marked: the ones that called the tool and were not" "${NOT_MARKED}" "$(grep -cE '^  Marked +.+ is marked "Tool calling" now' "${OUT}")"
+is "  and they are marked, and no other" "$((UNMARKED - NOT_MARKED))" "$(unmarked)"
+run -- --user boss --inventory-only --try-assistant-all --mark-tools
+check "a second time there is nothing to mark" says 'every model that called the tool is marked "Tool calling" already'
+curl -fsS "${MOCK}/__assistant?follows=0" > /dev/null
+run -- --user boss --inventory-only --try-assistant-all --mark-tools
+is "when no model calls the tool it ends with 1" "1" "${CODE}"
+is "  each of them is said to only talk" "${ASKED}" "$(grep -cE '^  only talks +.+ answered without calling a tool' "${OUT}")"
+check "  one that is marked for tools and only talks is pointed out" says "Take the mark away on the Models page"
+check "  and it says what that means" says "With none of these models can the assistant of Chat act"
+is "  no mark is taken away" "$((UNMARKED - NOT_MARKED))" "$(unmarked)"
+is "  nothing is left of it" "${before}" "$(mine)"
+curl -fsS "${MOCK}/__assistant?follows=1" > /dev/null
+run -- --user boss --inventory-only --mark-tools
+is "--mark-tools without the check it goes with is a wrong option" "2" "${CODE}"
+# A model whose provider answers with an error: it gave no answer, and the others are counted.
+curl -fsS "${MOCK}/__force?model=chat-busy&status=500" > /dev/null
+run -- --user boss --inventory-only --try-assistant-all
+is "a model that does not answer is said to give no answer, with what its provider said" "1" "$(grep -cE '^  no answer +chat-busy of .+ gave no answer: .*500' "${OUT}")"
+is "  the others are counted, and it ends well" "0, $((ASKED - 1)) of ${ASKED}" "${CODE}, $(tools_line)"
+is "  nothing is left of it" "${before}" "$(mine)"
+curl -fsS "${MOCK}/__force?model=chat-busy&status=200" > /dev/null
+# The app rests a model that did not answer: asked for a word again, it is back (it says "not now" every other time).
+BUSY_ID="$(ask /api/models '[m["id"] for m in d["models"] if m["modelId"] == "chat-busy"][0]')"
+api POST "/api/models/${BUSY_ID}/test" '{}' > /dev/null
+api POST "/api/models/${BUSY_ID}/test" '{}' > /dev/null
+is "(the model is back among the ones the app chooses)" "False" "$(ask /api/models "[bool(m.get('hidden')) for m in d['models'] if m['id'] == '${BUSY_ID}'][0]")"
+run -- --user boss --file "${FILE}" --yes --try-assistant
+is "after the workforce of a file it is asked as well" "0" "${CODE}"
+check "  the file was looked at first" says "the app has everything the file asks for"
+check "  and the note was kept" line 'ok +.+ called "remember", and the note is there'
+run -- --user boss --file "${FILE}" --dry-run --try-assistant --try-ssh "127.0.0.1:${SSH_PORT}"
+check "a dry run asks neither the assistant nor a machine" says "no model was tried and no machine was asked for its host key"
+is "  nothing was left behind" "${before}, 0 connections" "$(mine), $(machine 'd["connections"]') connections"
+
+run -- --user boss --inventory-only --try-ssh "127.0.0.1:${SSH_PORT}"
+is "the app reads the host key of a machine" "0" "${CODE}"
+check "  the one the machine shows" says "$(machine 'd["fingerprint"]')"
+check "  and says where it reached" line "ok +the app reached port ${SSH_PORT} of 127\.0\.0\.1 and read its host key: ssh-"
+is "  nothing was signed in to" "0 sign-ins" "$(machine 'd["signIns"]') sign-ins"
+run -- --user boss --inventory-only --try-ssh "127.0.0.1:$((SSH_PORT + 5))"
+is "a port nothing answers at ends with 1" "1" "${CODE}"
+check "  with what the app said" line "FAILED +the app did not read a host key from port $((SSH_PORT + 5)) of 127\.0\.0\.1 \([0-9]+: "
+run -- --user boss --inventory-only --try-ssh "root@127.0.0.1"
+is "what is no host is a wrong option" "2" "${CODE}"
+run -- --user boss --inventory-only --try-ssh "127.0.0.1:99999"
+is "  and so is a port there is not" "2" "${CODE}"
+
 # ── On a node ────────────────────────────────────────────────────────────────
 
 section "workforce.sh finds the app of a server"
@@ -950,6 +1055,11 @@ ln -s "${WORK}/nexus.db" "${VOLUMES}/${UUID}/xiero-nexus-ai/data/nexus.db"
 node_run -- --file "${FILE}" --dry-run --as-owner
 is "with --as-owner it signs in although the password in .env is no longer right" "0" "${CODE}"
 check "  as the owner of the app" says '"boss", an owner'
+node_run -- --inventory-only --as-owner --try-assistant --try-ssh "127.0.0.1:${SSH_PORT}"
+is "the assistant and the way to a machine are tried from the node as well" "0" "${CODE}"
+check "  the note was kept" line 'ok +.+ called "remember", and the note is there'
+check "  and the host key was read" says "$(machine 'd["fingerprint"]')"
+is "  nothing is left of it" "${before}" "$(mine)"
 
 section "Sealed for the node: an account's password and a skill of your own"
 NODE_KEY="${WORK}/node-key"

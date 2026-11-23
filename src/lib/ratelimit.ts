@@ -36,6 +36,19 @@ export function rateLimit(
   };
 }
 
+/**
+ * Whether a bucket is full, without counting a call. For a limit on what
+ * failed: the failures are counted with rateLimit, and asked for with this
+ * before the next try.
+ */
+export function rateLimitFull(key: string, limit: number): RateResult {
+  const now = Date.now();
+  const existing = buckets.get(key);
+  if (!existing || existing.resetAt <= now) return { ok: true, remaining: limit, retryAfterMs: 0 };
+  if (existing.count >= limit) return { ok: false, remaining: 0, retryAfterMs: existing.resetAt - now };
+  return { ok: true, remaining: limit - existing.count, retryAfterMs: 0 };
+}
+
 /** Clear a bucket, e.g. after a successful login. */
 export function rateLimitReset(key: string): void {
   buckets.delete(key);

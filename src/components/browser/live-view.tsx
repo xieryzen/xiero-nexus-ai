@@ -26,7 +26,7 @@ const DONE: Record<Outcome, string> = {
  * that is taken again every second; a click on the picture is a click on
  * the page, and what is typed here is typed there.
  */
-export function LiveView({ id, initial }: { id: string; initial: LiveDTO | null }) {
+export function LiveView({ id, initial, seesBrowserPage = true }: { id: string; initial: LiveDTO | null; seesBrowserPage?: boolean }) {
   const [live, setLive] = useState(initial);
   const [gone, setGone] = useState(initial === null);
   const [done, setDone] = useState<Outcome | null>(null);
@@ -38,7 +38,12 @@ export function LiveView({ id, initial }: { id: string; initial: LiveDTO | null 
   const loading = useRef(false);
   const shown = useRef<string | null>(null);
   const stopped = useRef(initial === null);
-  const back = live?.projectId ? `/dashboard/projects/${live.projectId}` : "/dashboard/browser";
+  // Where the work is that the page belongs to: its project, or its conversation.
+  const work = live?.projectId ? `/dashboard/projects/${live.projectId}` : live?.chatId ? `/dashboard/chat?c=${live.chatId}` : null;
+  const workLabel = live?.projectId ? "Back to the project" : "Back to the conversation";
+  // The Browser page is for those who are shown the setup; anyone else goes back to their conversations.
+  const elsewhere = seesBrowserPage ? "/dashboard/browser" : "/dashboard/chat";
+  const elsewhereLabel = seesBrowserPage ? "Back to the Browser page" : "Back to Chat";
 
   const refresh = useCallback(async () => {
     if (loading.current || stopped.current) return;
@@ -162,12 +167,12 @@ export function LiveView({ id, initial }: { id: string; initial: LiveDTO | null 
   const leave = (to: string) => window.location.assign(to);
 
   if (done) {
-    const toProject = (done === "continue" || done === "give_up") && Boolean(live?.projectId);
+    const toWork = (done === "continue" || done === "give_up") && work !== null;
     return (
       <div className="space-y-6">
         <PageHeader title="A page in the browser" />
         <Alert tone="ok">{DONE[done]}</Alert>
-        <Button onClick={() => leave(toProject ? back : "/dashboard/browser")}>{toProject ? "Back to the project" : "Back to the Browser page"}</Button>
+        <Button onClick={() => leave(toWork ? work! : elsewhere)}>{toWork ? workLabel : elsewhereLabel}</Button>
       </div>
     );
   }
@@ -177,7 +182,7 @@ export function LiveView({ id, initial }: { id: string; initial: LiveDTO | null 
       <div className="space-y-6">
         <PageHeader title="A page in the browser" />
         <Alert tone="warn">This page does not wait any more: it was handed back, its time was up, or its run has ended.</Alert>
-        <Button variant="ghost" onClick={() => leave("/dashboard/browser")}>Back to the Browser page</Button>
+        <Button variant="ghost" onClick={() => leave(elsewhere)}>{elsewhereLabel}</Button>
       </div>
     );
   }
