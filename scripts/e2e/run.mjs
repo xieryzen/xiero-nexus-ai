@@ -500,7 +500,8 @@ async function stopAndStartAgain() {
   await fetch(`${mockUrl}/__force?model=health-switch&status=403`).catch(() => undefined);
   await fetch(`${mockUrl}/__reset`).catch(() => undefined);
   const hand = new Database(appEnv.DATABASE_PATH, { timeout: 5000 });
-  hand.prepare("UPDATE models SET last_tested_at = ?, last_test_status = 'ok', last_test_error = NULL, check_failures = 0").run(Date.now());
+  // (A check that a model passes also clears what real work held against it: its failures in a row, and its rest.)
+  hand.prepare("UPDATE models SET last_tested_at = ?, last_test_status = 'ok', last_test_error = NULL, check_failures = 0, use_failures = 0, retry_at = NULL").run(Date.now());
   const due = hand.prepare("UPDATE models SET last_tested_at = NULL, last_test_status = NULL WHERE model_id IN ('health-steady', 'health-switch')").run().changes;
   hand.close();
   running.splice(running.indexOf(before2), 1);
