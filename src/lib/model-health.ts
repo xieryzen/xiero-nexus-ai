@@ -82,8 +82,10 @@ export function recordOutcome(model: Model, provider: Provider, outcome: CheckOu
         lastTestedAt: new Date(),
         lastTestStatus: "ok",
         lastTestError: null,
-        checkFailures: 0,
-        // A model that real work had put away is back on probation (model-health-rules.ts: failuresAfterCheck).
+        // A model that real work had put away is back on probation (model-health-rules.ts:
+        // failuresAfterCheck): the next request that fails puts it away again, and the count of
+        // its failures stays, so that each time it is put away it waits longer for its next check.
+        checkFailures: sql`CASE WHEN ${models.useFailures} >= ${USE_FAILURES_TO_HIDE} THEN ${models.checkFailures} ELSE 0 END`,
         useFailures: sql`CASE WHEN ${models.useFailures} >= ${USE_FAILURES_TO_HIDE} THEN ${USE_FAILURES_TO_HIDE - 1} ELSE 0 END`,
         retryAt: null,
       })

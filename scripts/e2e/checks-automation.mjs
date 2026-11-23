@@ -3919,6 +3919,22 @@ export async function automation(ctx) {
     eq("the third in a row puts the model away, as a failed check does", [away?.lastTestStatus, away?.hidden, away?.useFailures, /^Provider responded 500/.test(away?.lastTestError ?? "")], ["error", true, 3, true]);
     check("  the audit log says so, and that it was real work", audited("model.health.hidden", "si-first").some((m) => m.by === "use" && /Provider responded 500/.test(m.error ?? "")), audited("model.health.hidden", "si-first"));
     check("  it is gone from the list a chat offers", !(await admin.raw("/dashboard/chat").then((r) => r.text())).includes("si-first"), null);
+    // A model that answers one word and no real request.
+    await model("si-flap", openai, "si-flap", ["text"], freeOfCharge);
+    await force("si-flap", "status=500");
+    for (let i = 0; i < 3; i++) await ask("si-flap");
+    await free("si-flap");
+    const checked = await admin.post("/api/models/health", { modelIds: [state.models["si-flap"]], wait: true });
+    const probation = await known("si-flap");
+    eq("a model that real work put away and a check brings back is on probation", [checked.data?.round?.restored?.length, probation?.lastTestStatus, probation?.hidden, probation?.useFailures, probation?.checkFailures], [1, "ok", false, 2, 1]);
+    await force("si-flap", "status=500");
+    await ask("si-flap");
+    const flapped = await known("si-flap");
+    eq("  the next request without an answer puts it away again, and it waits longer for its next check", [flapped?.lastTestStatus, flapped?.hidden, flapped?.useFailures, flapped?.checkFailures], ["error", true, 3, 2]);
+    await free("si-flap");
+    await ask("si-flap");
+    eq("  a request that names it and is answered gives it back, with nothing held against it", [await standing("si-flap"), (await known("si-flap"))?.checkFailures], [["ok", false, 0, "free"], 0]);
+    await admin.patch(`/api/models/${state.models["si-flap"]}`, { enabled: false });
     await force("si-gone", "status=404");
     await ask("si-gone");
     eq("a model its provider does not have is put away at the first request", await standing("si-gone"), ["error", true, 1, "free"]);

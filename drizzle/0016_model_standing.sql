@@ -8,4 +8,11 @@
 --   is set".
 ALTER TABLE `models` ADD `use_failures` integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE `models` ADD `retry_at` integer;--> statement-breakpoint
-ALTER TABLE `projects` ADD `stand_ins` integer;
+ALTER TABLE `projects` ADD `stand_ins` integer;--> statement-breakpoint
+-- A model that is marked for audio and not for text writes down what is said:
+-- it cannot answer a chat request, and from this version the check does not
+-- ask it one. What the check wrote on such a model until now (it failed, each
+-- time) says nothing about it, and would keep it out of the lists for good.
+UPDATE `models` SET `last_test_status` = NULL, `last_test_error` = NULL, `last_tested_at` = NULL, `check_failures` = 0
+WHERE `id` IN (SELECT `model_row_id` FROM `model_capabilities` WHERE `capability` = 'audio')
+  AND `id` NOT IN (SELECT `model_row_id` FROM `model_capabilities` WHERE `capability` = 'text');

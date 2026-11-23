@@ -534,7 +534,8 @@ async function stopAndStartAgain() {
   const healthNow = await (await fetch(`${appUrl}/api/models/health`, { headers: { cookie } })).json().catch(() => null);
   check("  the Models page can say that the check is on, how often, and what the last round found", healthNow?.health?.automatic === true && healthNow.health.intervalMinutes === 360 && healthNow.health.last?.checked === 2 && healthNow.health.last?.failed === 1, healthNow?.health);
   const auditDb = new Database(appEnv.DATABASE_PATH, { readonly: true, timeout: 5000 });
-  const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL").get().n;
+  // By the check that runs by itself: what real work put away is there too, marked as such, and is not counted here.
+  const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL AND coalesce(metadata, '') NOT LIKE '%\"by\":\"use\"%'").get().n;
   auditDb.close();
   check("  the audit log says that the system took the model away", hiddenBySystem === 1, hiddenBySystem);
 

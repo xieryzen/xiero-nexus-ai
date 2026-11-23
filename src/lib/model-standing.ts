@@ -86,7 +86,8 @@ export function noteFailure(model: Model, provider: Provider, err: unknown): voi
           lastTestedAt: new Date(now),
           lastTestStatus: "error",
           lastTestError: message,
-          checkFailures: Math.max(row.checkFailures, 1),
+          // One more than it had: a model that a check brought back and real work puts away again waits twice as long for its next check.
+          checkFailures: row.checkFailures + 1,
         })
         .where(eq(models.id, model.id))
         .run();

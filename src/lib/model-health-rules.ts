@@ -155,7 +155,10 @@ export function afterUseFailure(prev: { failing: boolean; useFailures: number },
 /**
  * The count of failed requests after a check passed. A model that real work
  * had put away comes back on probation: it answers one word, and the next
- * request of real work that fails puts it away again.
+ * request of real work that fails puts it away again. Each time that happens
+ * it waits twice as long for its next check (its failed checks are counted
+ * on), until a request of real work is answered: a model that answers one
+ * word and nothing longer is asked less and less.
  */
 export function failuresAfterCheck(useFailures: number): number {
   return useFailures >= USE_FAILURES_TO_HIDE ? USE_FAILURES_TO_HIDE - 1 : 0;
