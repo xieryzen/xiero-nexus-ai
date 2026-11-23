@@ -777,10 +777,6 @@ def host_session(app, path, user):
     as_root = hasattr(os, "geteuid") and os.geteuid() == 0
     token = secrets.token_urlsafe(32)
     try:
-        if as_root:
-            # As the one the database belongs to: no file next to it becomes root's.
-            os.setegid(owner.st_gid)
-            os.seteuid(owner.st_uid)
         try:
             db = sqlite3.connect(path, timeout=20)
             try:
@@ -814,8 +810,15 @@ def host_session(app, path, user):
             raise Stop(3, "--as-owner: the app's database could not be written (%s)." % err)
     finally:
         if as_root:
-            os.seteuid(0)
-            os.setegid(0)
+            # A file that this made next to the database is the app's, not root's:
+            # the app, which runs as another user, has to be able to write it.
+            for suffix in ("-wal", "-shm", "-journal"):
+                try:
+                    side = os.stat(path + suffix)
+                    if (side.st_uid, side.st_gid) != (owner.st_uid, owner.st_gid):
+                        os.chown(path + suffix, owner.st_uid, owner.st_gid)
+                except OSError:
+                    pass
     app.cookie = "nexus_session=" + token
     status, data = app.call("GET", "/api/account/me", timeout=20)
     me = data.get("user") if isinstance(data, dict) else None
