@@ -617,13 +617,12 @@ the order of the table: the owner's standard first.
 
 ### Providers that cost nothing
 
-The committed file adds six providers that take no key, and uses no model
-that is billed:
+The committed file adds five providers that take no key that an agent can
+work with, and uses no model that is billed:
 
 | Provider | What it has | What it allows from one address |
 | --- | --- | --- |
 | [BlockRun](https://blockrun.ai/free) | A few free chat models with tools; it may answer with another free model than the one asked for | 30 requests a minute and 300 an hour, all models together |
-| [VLM Run Gateway](https://vlm.run) | Two small open models, in beta; its larger one has asked for a key since November 2026 | 10 requests a minute, 30 an hour, 100 a day |
 | [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | 200 requests an hour by its documentation, all models together; about a hundred when it was counted on one server |
 | [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
 | [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and an allowance for a day that a few tasks use up |
@@ -640,14 +639,19 @@ finished. From v1.10.0 a task whose models do not answer is done by another
 model of the app that works (a stand-in), and a model that does not answer
 is left out until it does: the more providers the app has, the more often
 one of them answers. The
-agents have their first model with Kilo Gateway and their second with the
-Gemini key (Gemma 4, which the free tier gives much of) or with BlockRun.
+agents have their first model with Kilo Gateway and their second with
+BlockRun, which answered one word in a second or two from that server
+(Gemma 4 with the Gemini key answered too, in most of a minute, and is there
+to stand in).
 None depends on OVHcloud any more: from the address the server of this
 repository moved to in November 2026, every one of its models answered "API
 rate limit exceeded" for days, where from the address before they answered.
 None depends on LLM7, whose allowance was used up after
-a few tasks, on VLM Run Gateway, or on the one model of Pollinations: those
-are in the app to be picked by hand, and to stand in. When Kilo
+a few tasks, or on the one model of Pollinations: those
+are in the app to be picked by hand, and to stand in. A sixth provider
+without a key, VLM Run Gateway, is in the file switched off: tried on that
+server, its model refused every request of the app, which names a
+temperature the model does not take. When Kilo
 Gateway's allowance is used up it answers "sign up for free or come back
 later", and every agent works on its second model: on one server each of
 the eleven agents then did its small task there, in ten minutes instead of a
@@ -665,9 +669,9 @@ file. Which providers give what for nothing changes by the month: the lists
 this was taken from are
 [awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) and
 [awesome-free-ai-coding](https://github.com/mvalentsev/awesome-free-ai-coding),
-read on 2026-11-23. BlockRun and VLM Run Gateway are in the file by what the
-second list published on 2026-11-19; `--test` says whether they answer from
-your server.
+read on 2026-11-23. BlockRun is in the file by what the second list
+published on 2026-11-19, and answered from the server of this repository on
+2026-11-23; `--test` says whether it answers from yours.
 
 ## The browser: `browser-service.sh`
 

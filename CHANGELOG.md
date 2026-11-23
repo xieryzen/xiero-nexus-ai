@@ -5,6 +5,28 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [Unreleased]
+
+What trying 1.10.0 on the server of this repository showed.
+
+### Changed
+
+- **VLM Run Gateway is no longer among the providers to start from.** Asked
+  from a real server, its model refused every request of the app: "does not
+  accept 'temperature'", which the app sends with every request. The
+  workforce file keeps the provider, with its model switched off and the
+  reason.
+- **The workforce file**: the second model of the agents is one of BlockRun,
+  which answered one word in a second or two from that server, in place of
+  Gemma 4 with the Gemini key, which answered in most of a minute. Gemma 4
+  stays in the app and stands in.
+- **The try-run of the host program** says "with ... as the manager model"
+  where it said "planned by" and "summed up by": from 1.10.0 the app plans
+  and sums up with another model that works when the manager model does not
+  answer. On that server the manager model of the try-run was not asked at
+  all (it is rate-limited there), and both of its projects were planned,
+  done and summed up.
+
 ## [1.10.0] - 2026-11-23
 
 A task asked the two models of its agent and the manager model of its

@@ -2315,7 +2315,9 @@ def try_project(state, definition, spec, manager, keep, every_agent):
         if every_agent:
             row("Given", "one task to each of %s, two at a time; %s" % (plural(len(tasks), "agent"), took))
         else:
-            row("Planned", "by %s: %s; %s" % (manager["label"], plural(len(tasks), "task"), took))
+            # The project's manager model. From version 1.10 the app plans and sums up with
+            # another model that works when this one does not answer, and does not say which.
+            row("Planned", "with %s as the manager model: %s; %s" % (manager["label"], plural(len(tasks), "task"), took))
         attempts = attempts_of(state, project["id"])
         for task in tasks:
             good = task.get("status") == "succeeded"
@@ -2339,7 +2341,7 @@ def try_project(state, definition, spec, manager, keep, every_agent):
                 failed += 1
                 row("FAILED", "the tasks were not summed up: %s did not answer. %s" % (manager["label"], short(summary, 400)))
             else:
-                row("ok", 'the project ended as "%s"; summed up by %s, beginning: %s' % (ended, manager["label"], short(summary, 200)))
+                row("ok", 'the project ended as "%s"; summed up (manager model: %s), beginning: %s' % (ended, manager["label"], short(summary, 200)))
             notes = now.get("reviewNotes") or ""
             verdict = [line for line in notes.splitlines() if "VERDICT" in line.upper()]
             row("Review", verdict[-1].strip() if verdict else "there was none: no model of the reviewer answered")
