@@ -4656,14 +4656,16 @@
           "columns": [
             "name"
           ],
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"servers\".\"owner_id\" is null"
         },
-        "servers_owner_idx": {
-          "name": "servers_owner_idx",
+        "servers_owner_name_unique": {
+          "name": "servers_owner_name_unique",
           "columns": [
-            "owner_id"
+            "owner_id",
+            "name"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {
@@ -4919,14 +4921,16 @@
           "columns": [
             "name"
           ],
-          "isUnique": true
+          "isUnique": true,
+          "where": "\"site_accounts\".\"owner_id\" is null"
         },
-        "site_accounts_owner_idx": {
-          "name": "site_accounts_owner_idx",
+        "site_accounts_owner_name_unique": {
+          "name": "site_accounts_owner_name_unique",
           "columns": [
-            "owner_id"
+            "owner_id",
+            "name"
           ],
-          "isUnique": false
+          "isUnique": true
         }
       },
       "foreignKeys": {

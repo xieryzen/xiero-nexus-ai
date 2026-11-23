@@ -3,18 +3,21 @@ import { and, desc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { accessKeys, servers, siteAccounts, users, type AccessKey, type Server, type SiteAccount, type User } from "@/db/schema";
 import { audit } from "../audit";
-import { forgetSession } from "../browser/accounts";
+import { accountsFor, forgetSession } from "../browser/accounts";
 import { accountName, pairOfOneSite, siteHost, siteUrlProblem } from "../browser/rules";
 import { AppError } from "../errors";
-import { rateLimit } from "../ratelimit";
+import { rateLimit, rateLimitFull } from "../ratelimit";
 import { decryptSecret, encryptSecret, last4 } from "../secrets";
 import { fingerprint, normalizeHostKey } from "../ssh/host-key";
 import { hostProblem, portOf, serverName, usernameProblem } from "../ssh/rules";
+import { serversFor } from "../ssh/servers";
 import { SshProblem, checkServer, readHostKey, type Target } from "../ssh/sessions";
 import { assertWebAddress } from "../web-fetch";
 import { publicAddressOf } from "./address";
 import { findAccess, replaceSpans, type FoundItem, type FoundKey, type FoundServer, type FoundSite } from "./find";
 import {
+  FAILED_KEEPS_MAX,
+  FAILED_KEEPS_WINDOW_MS,
   HANDED_AT_ONCE,
   KEEPS_PER_MINUTE,
   OWN_KEYS_MAX,
@@ -143,9 +146,41 @@ function limited(user: Who): string | null {
   return rate.ok ? null : "Too many sign-ins were tried for this account in a minute. Nothing was kept; send it again in a minute.";
 }
 
-function takenNames(table: "servers" | "sites"): Set<string> {
-  const rows = table === "servers" ? db.select({ name: servers.name }).from(servers).all() : db.select({ name: siteAccounts.name }).from(siteAccounts).all();
-  return new Set(rows.map((r) => r.name));
+/** Too many sign-ins of this account failed: nothing more is tried for a while. */
+function failedTooOften(user: Who): string | null {
+  const full = rateLimitFull(`access-failed:${user.id}`, FAILED_KEEPS_MAX);
+  if (full.ok) return null;
+  const minutes = Math.max(1, Math.ceil(full.retryAfterMs / 60_000));
+  return `Too many sign-ins failed for this account, so the app tries no more for ${minutes} ${minutes === 1 ? "minute" : "minutes"}. Nothing was kept. Check the address, the user name and the password, and send them again then.`;
+}
+
+/** A sign-in that was tried and failed: counted, and written down for an owner, without what was tried. */
+function failed(user: Who, item: FoundServer, port: number, why: string, opts: KeepOptions): void {
+  rateLimit(`access-failed:${user.id}`, FAILED_KEEPS_MAX, FAILED_KEEPS_WINDOW_MS);
+  audit({
+    actorUserId: user.id,
+    action: "access.server_refused",
+    targetType: "server",
+    targetId: `${item.username}@${item.host}:${port}`.slice(0, 200),
+    metadata: { host: item.host, port, username: item.username, why: why.slice(0, 200), how: "conversation" },
+    ip: opts.ip,
+    userAgent: opts.userAgent,
+  });
+}
+
+/**
+ * The names that are taken for an account: of what it handed over itself,
+ * and of what an owner opened to its role, since its conversations work with
+ * both. What other accounts handed over has names of its own: two accounts
+ * can each have a "vps-1-2-3-4", and neither learns of the other's.
+ */
+function takenNames(user: Who, table: "servers" | "sites"): Set<string> {
+  if (table === "servers") {
+    const own = db.select({ name: servers.name }).from(servers).where(eq(servers.ownerId, user.id)).all();
+    return new Set([...own, ...serversFor(user)].map((r) => r.name));
+  }
+  const own = db.select({ name: siteAccounts.name }).from(siteAccounts).where(eq(siteAccounts.ownerId, user.id)).all();
+  return new Set([...own, ...accountsFor(user)].map((r) => r.name));
 }
 
 export interface KeepOptions {
@@ -167,7 +202,7 @@ export async function keepServer(user: Who, item: FoundServer, opts: KeepOptions
   if (wrong) return no(wrong);
   const secret = item.privateKey ?? item.password ?? "";
   if (!secret) return no("There was no password and no private key with it.");
-  const tooMany = limited(user);
+  const tooMany = failedTooOften(user) ?? limited(user);
   if (tooMany) return no(tooMany);
 
   const host = item.host.trim();
@@ -204,11 +239,13 @@ export async function keepServer(user: Who, item: FoundServer, opts: KeepOptions
     output = (await checkServer(target)).output;
   } catch (err) {
     if (err instanceof SshProblem) {
+      failed(user, item, port, err.kind, opts);
       return no(
         `The app could not sign in to ${where}: ${err.message}` +
           (existing && err.kind === "host_key" ? " It is not the key this machine showed when it was first handed over; remove the server on the Memory page if the machine was set up anew." : ""),
       );
     }
+    failed(user, item, port, "error", opts);
     return no(`The app could not sign in to ${where}.`);
   }
 
@@ -233,7 +270,7 @@ export async function keepServer(user: Who, item: FoundServer, opts: KeepOptions
     db.update(servers).set({ ...values, notes: opts.notes ? notes : existing.notes ?? notes }).where(eq(servers.id, existing.id)).run();
   } else {
     const wanted = opts.name ? serverName(opts.name) : null;
-    name = freeName(wanted ?? serverNameFor(host), takenNames("servers"));
+    name = freeName(wanted ?? serverNameFor(host), takenNames(user, "servers"));
     db.insert(servers)
       .values({ ...values, name, access: "owners", notes, createdBy: user.id, ownerId: user.id })
       .run();
@@ -292,7 +329,7 @@ export async function keepSite(user: Who, item: FoundSite, opts: KeepOptions = {
     forgetSession(existing.id);
   } else {
     const wanted = opts.name ? accountName(opts.name) : "";
-    name = freeName(wanted || accountNameFor(url), takenNames("sites"));
+    name = freeName(wanted || accountNameFor(url), takenNames(user, "sites"));
     db.insert(siteAccounts)
       .values({ name, siteUrl: url, username: item.username.trim(), secretCiphertext: encryptSecret(item.password), access: "owners", notes, createdBy: user.id, ownerId: user.id })
       .run();
@@ -325,8 +362,9 @@ export function keepKey(user: Who, item: FoundKey, opts: KeepOptions = {}): Kept
   const site = siteOfKey(item.site) || null;
   const mine = db.select().from(accessKeys).where(eq(accessKeys.ownerId, user.id)).all();
   const wanted = keyNameFor(opts.name || label);
-  // The same thing handed over again replaces its value: by its name, or by the value itself.
-  const existing = mine.find((row) => row.name === wanted) ?? mine.find((row) => safeValue(row) === item.value);
+  // The same thing handed over again replaces its value: by its name, or by
+  // the value itself. A key of that name for another site is another key.
+  const existing = mine.find((row) => row.name === wanted && (!site || !row.site || row.site === site)) ?? mine.find((row) => safeValue(row) === item.value);
   if (!existing && mine.length >= OWN_KEYS_MAX) return no(`This account has ${OWN_KEYS_MAX} keys kept already. Remove one on the Memory page first.`);
   let name: string;
   if (existing) {

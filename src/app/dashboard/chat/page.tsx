@@ -3,6 +3,7 @@ import { handsOver } from "@/lib/access/store";
 import { requirePageUser } from "@/lib/auth";
 import { listChats, loadChat, messagesOf } from "@/lib/chat/store";
 import { reachOf } from "@/lib/chat/tools";
+import { isAnswering } from "@/lib/chat/turn";
 import { listCollections } from "@/lib/knowledge/service";
 import { kindsAvailable } from "@/lib/model-choice";
 import { chatModels } from "@/lib/model-options";
@@ -28,12 +29,13 @@ export default function ChatPage({ searchParams }: { searchParams?: { c?: string
     : [];
 
   // The conversation the address names, when it is one of this account's.
-  let initial: { id: string; title: string; systemPrompt: string | null; messages: ChatMessageItem[] } | null = null;
+  let initial: { id: string; title: string; systemPrompt: string | null; messages: ChatMessageItem[]; answering: boolean } | null = null;
   const asked = typeof searchParams?.c === "string" ? searchParams.c : "";
   if (asked) {
     try {
       const chat = loadChat(user.id, asked);
-      initial = { id: chat.id, title: chat.title, systemPrompt: chat.systemPrompt, messages: messagesOf(chat.id) };
+      // An answer that is still being worked on (the page was closed meanwhile) is followed by the page.
+      initial = { id: chat.id, title: chat.title, systemPrompt: chat.systemPrompt, messages: messagesOf(chat.id), answering: isAnswering(chat.id) };
     } catch {
       // Not there, or someone else's: the page opens with a new conversation.
     }

@@ -40,6 +40,13 @@ export const OWN_KEYS_MAX = 50;
 export const HANDED_AT_ONCE = 6;
 /** Sign-ins the app tries for an account in a minute, to keep what a conversation hands over. */
 export const KEEPS_PER_MINUTE = 12;
+/**
+ * Sign-ins that may fail for an account before the app tries no more for a
+ * while. A conversation must not be a way to guess passwords on machines of
+ * other people from this installation's address.
+ */
+export const FAILED_KEEPS_MAX = 6;
+export const FAILED_KEEPS_WINDOW_MS = 15 * 60_000;
 
 // ─── Names ───────────────────────────────────────────────────────────────────
 
@@ -91,7 +98,7 @@ export function freeName(base: string, taken: ReadonlySet<string>, max = 40): st
 // ─── Keys ────────────────────────────────────────────────────────────────────
 
 /** How a key is named where its value belongs: {{key:discord-bot-token}}. */
-export const KEY_MARK = /\{\{\s*key\s*:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*\}\}/g;
+export const KEY_MARK = /\{\{\s*key\s*:\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*\}\}/gi;
 
 export function keyMark(name: string): string {
   return `{{key:${name}}}`;

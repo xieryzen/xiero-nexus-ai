@@ -662,7 +662,8 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
   const machines: ServerToolContext["servers"] = [...(own?.servers ?? [])];
   if (chosen.has(SERVER_TOOL)) {
     for (const server of ctx.servers?.servers ?? []) {
-      if (!machines.some((m) => m.id === server.id)) machines.push(server);
+      // A name is one machine for the agent: what the account handed over itself comes first.
+      if (!machines.some((m) => m.id === server.id || m.name === server.name)) machines.push(server);
     }
   }
   if (ctx.servers && machines.length > 0) {
@@ -688,7 +689,7 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
     const accounts = [...(own?.accounts ?? [])];
     if (ticked) {
       for (const account of ctx.browser.accounts) {
-        if (accounts.some((a) => a.id === account.id) || pairOfOneSite([...accounts, account])) continue;
+        if (accounts.some((a) => a.id === account.id || a.name === account.name) || pairOfOneSite([...accounts, account])) continue;
         accounts.push(account);
       }
     }

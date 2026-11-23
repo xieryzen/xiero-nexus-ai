@@ -90,13 +90,18 @@ function memoryTools(ctx: ChatToolContext): LoopTool[] {
 
 /** What a conversation of this account can reach, without building a tool: for the page. */
 export function reachOf(user: User): { servers: Server[]; accounts: SiteAccount[]; keys: AccessKey[]; browser: boolean } {
-  const servers = [...ownServers(user.id), ...serversFor(user).filter((s) => s.status === "enabled")].slice(0, HANDED_AT_ONCE);
+  // A name is one machine for the assistant: what the account handed over itself comes first.
+  const servers: Server[] = [];
+  for (const server of [...ownServers(user.id), ...serversFor(user).filter((s) => s.status === "enabled")]) {
+    if (servers.length >= HANDED_AT_ONCE) break;
+    if (!servers.some((s) => s.name === server.name)) servers.push(server);
+  }
   const accounts: SiteAccount[] = [];
   const browser = browserConfigured() && (mayUseBrowser(user.role) || ownAccounts(user.id).length > 0);
   for (const account of [...ownAccounts(user.id), ...accountsFor(user).filter((a) => a.status === "enabled")]) {
     if (accounts.length >= HANDED_AT_ONCE) break;
     // One browser is signed in to a site as one account at a time: what the person handed over comes first.
-    if (pairOfOneSite([...accounts, account])) continue;
+    if (accounts.some((a) => a.name === account.name) || pairOfOneSite([...accounts, account])) continue;
     accounts.push(account);
   }
   return { servers, accounts, keys: ownKeys(user.id).slice(0, HANDED_AT_ONCE * 2), browser };

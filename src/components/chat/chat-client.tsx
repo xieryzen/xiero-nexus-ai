@@ -83,7 +83,7 @@ export function ChatClient({
   /** The conversations of the account, the ones written in last first. */
   chats?: ChatListItem[];
   /** The conversation the page was opened with. */
-  initial?: { id: string; title: string; systemPrompt: string | null; messages: ChatMessageItem[] } | null;
+  initial?: { id: string; title: string; systemPrompt: string | null; messages: ChatMessageItem[]; answering?: boolean } | null;
   reach?: ChatReach;
 }) {
   // "" is the app's own choice: the models in turn, the ones that take tools first.
@@ -119,13 +119,52 @@ export function ChatClient({
     window.history.replaceState(null, "", url.toString());
   }, []);
 
-  const reload = useCallback(async (id: string) => {
-    const res = await fetch(`/api/chats/${id}`);
+  /** The conversation as it is kept now. Resolves to whether it is still being answered. */
+  const reload = useCallback(async (id: string): Promise<boolean> => {
+    const res = await fetch(`/api/chats/${id}`, { cache: "no-store" });
     if (!res.ok) return false;
-    const data = (await res.json()) as { chat: { title: string; systemPrompt: string | null }; messages: ChatMessageItem[] };
+    const data = (await res.json()) as { chat: { title: string; systemPrompt: string | null }; messages: ChatMessageItem[]; answering?: boolean };
     setMessages(data.messages);
-    return true;
+    return data.answering === true;
   }, []);
+
+  /**
+   * An answer goes on when the page stops listening: a phone that slept, a
+   * connection that dropped, a page that was opened again. The page then
+   * asks now and then until the answer is in the conversation.
+   */
+  const following = useRef<string | null>(null);
+  const follow = useCallback(
+    async (id: string) => {
+      if (following.current === id) return;
+      following.current = id;
+      setStreaming(true);
+      setProgress({ text: "The assistant is still working on this. What it does is kept here as it goes." });
+      try {
+        for (let round = 0; round < 1200 && following.current === id; round++) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          if (following.current !== id) return;
+          const still = await reload(id).catch(() => true);
+          if (!still) break;
+        }
+      } finally {
+        if (following.current === id) {
+          following.current = null;
+          setStreaming(false);
+          setProgress(null);
+        }
+      }
+    },
+    [reload],
+  );
+  const openedWith = useRef(initial?.answering ? initial.id : null);
+  useEffect(() => {
+    if (openedWith.current) void follow(openedWith.current);
+    openedWith.current = null;
+    return () => {
+      following.current = null;
+    };
+  }, [follow]);
 
   async function open(id: string) {
     if (streaming || id === chatId) {
@@ -143,6 +182,7 @@ export function ChatClient({
       setMessages(data.messages as ChatMessageItem[]);
       setSystemPrompt(data.chat?.systemPrompt ?? "");
       address(id);
+      if (data.answering === true) void follow(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "The conversation could not be opened");
     } finally {
@@ -204,6 +244,8 @@ export function ChatClient({
     abortRef.current = controller;
     let current = chatId;
     let finished = false;
+    let counted = false;
+    let resume: string | null = null;
 
     try {
       const res = await fetch("/api/chat", {
@@ -270,7 +312,9 @@ export function ChatClient({
             address(id);
             setChats((list) => {
               const known = list.find((c) => c.id === id);
-              const item: ChatListItem = { id, title, messages: (known?.messages ?? 0) + 1, updatedAt: Date.now() };
+              // Said twice: at once, and again when the conversation has its name.
+              const item: ChatListItem = { id, title, messages: (known?.messages ?? 0) + (counted ? 0 : 1), updatedAt: Date.now() };
+              counted = true;
               return [item, ...list.filter((c) => c.id !== id)];
             });
           } else if (evt.user) {
@@ -305,19 +349,13 @@ export function ChatClient({
         // What was done before it failed is in the conversation.
         if (current) await reload(current);
       } else if (!finished && current) {
-        await reload(current);
+        // The connection ended before the answer did: the answer goes on, and is followed.
+        resume = (await reload(current)) ? current : null;
       }
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
-        // Stopped: what there was of the answer is kept a moment later.
-        if (current) {
-          const id = current;
-          await new Promise((resolve) => setTimeout(resolve, 700));
-          await reload(id);
-        }
-      } else {
-        setError(err instanceof Error ? err.message : "Request failed");
-      }
+      // The connection broke. The answer goes on where the conversation is known; it is followed.
+      if (current) resume = (await reload(current).catch(() => false)) ? current : null;
+      else if (!(err instanceof DOMException && err.name === "AbortError")) setError(err instanceof Error ? err.message : "Request failed");
     } finally {
       setStreaming(false);
       setDraft("");
@@ -325,10 +363,23 @@ export function ChatClient({
       setProgress(null);
       abortRef.current = null;
     }
+    if (resume) void follow(resume);
   }
 
-  function stop() {
-    abortRef.current?.abort();
+  /** Stop the answer: the app ends what it is doing, and keeps what was done. */
+  async function stop() {
+    const id = chatId ?? following.current;
+    if (!id) {
+      // Nothing is known of the conversation yet: nothing was asked of a model either.
+      abortRef.current?.abort();
+      return;
+    }
+    setProgress({ text: "Stopping…" });
+    try {
+      await fetch(`/api/chats/${id}/stop`, { method: "POST" });
+    } catch {
+      setError("The answer could not be stopped: the app did not answer. It goes on, and is kept in this conversation.");
+    }
   }
 
   if (!chooses && !ready) {
@@ -627,6 +678,7 @@ function Footnote({ details }: { details: MessageDetails }) {
   }
   if (details.model) parts.push(details.model);
   if (details.stopped === "cancelled") parts.push("stopped before it was finished");
+  if (details.stopped === "time") parts.push("ended after half an hour of work, the longest one answer may take");
   if (details.stopped === "max_steps") parts.push("ended at the most steps one answer may take");
   if (details.stopped === "tokens") parts.push("ended because the tokens of the account are used up");
   return (

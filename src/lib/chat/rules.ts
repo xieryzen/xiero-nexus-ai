@@ -13,6 +13,8 @@ export const HISTORY_MESSAGES = 40;
 export const HISTORY_CHARS = 60_000;
 /** Model calls one answer may take, the answer itself included. */
 export const CHAT_MAX_STEPS = 16;
+/** How long one answer may work, with everything its tools do. */
+export const ANSWER_MAX_MS = 30 * 60_000;
 /** Conversations an account keeps; the ones written in longest ago make way. */
 export const CHATS_KEPT = 300;
 /** Longest message. */
@@ -49,7 +51,7 @@ export interface MessageDetails {
   /** What was put in front of the model from the account's memory. */
   remembered?: { notes: number; passages: number };
   /** Why it ended, when it did not end with the answer. */
-  stopped?: "cancelled" | "max_steps" | "tokens";
+  stopped?: "cancelled" | "max_steps" | "tokens" | "time";
   error?: string;
 }
 

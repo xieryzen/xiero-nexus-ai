@@ -18,7 +18,7 @@ import { textFor } from "../shown";
 import { closeRun } from "../ssh/sessions";
 import { hasTokensLeft } from "../tokens";
 import { computeCost, estimateTokens, recordUsage } from "../usage";
-import { CHAT_MAX_STEPS, callLine, type MessageDetails, type SourceNote, type ToolNote } from "./rules";
+import { ANSWER_MAX_MS, CHAT_MAX_STEPS, callLine, type MessageDetails, type SourceNote, type ToolNote } from "./rules";
 import { addMessage, historyFor, nameFromFirst, scrubChat, type MessageDTO } from "./store";
 import { chatTools, type ChatToolContext } from "./tools";
 
@@ -56,8 +56,8 @@ export interface TurnInput {
   /** Knowledge collections the person may read, to look the message up in. */
   collectionIds: string[];
   meta?: { ip?: string; userAgent?: string };
+  /** What the page is told while it listens. An answer goes on when nobody listens any more. */
   emit(event: TurnEvent): void;
-  isCancelled(): boolean;
 }
 
 /** The key the connections and the browser of a conversation's answer are kept under. */
@@ -68,6 +68,18 @@ export function turnKeyOf(chatId: string): string {
 /** Whether a conversation is being answered in this process. */
 export function isAnswering(chatId: string): boolean {
   return runtime().chatTurns.has(turnKeyOf(chatId));
+}
+
+/**
+ * Stop the answer a conversation is being given. An answer does not end
+ * because the page that asked went away (a phone that sleeps, a connection
+ * that drops, while a command runs on a server): it ends when it is there,
+ * or when the person stops it here. False when nothing is being answered.
+ */
+export function stopAnswer(chatId: string): boolean {
+  if (!isAnswering(chatId)) return false;
+  runtime().chatStops.add(turnKeyOf(chatId));
+  return true;
 }
 
 function instructions(opts: { username: string; tools: string[]; access: string; memory: string; knowledge: string; own: string }): string {
@@ -106,6 +118,15 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
   const { user, chat, emit } = input;
   const key = turnKeyOf(chat.id);
   runtime().chatTurns.add(key);
+  const until = Date.now() + ANSWER_MAX_MS;
+  let outOfTime = false;
+  /** Told to stop by the person, or worked as long as an answer may. */
+  const isCancelled = (): boolean => {
+    if (runtime().chatStops.has(key)) return true;
+    if (Date.now() > until) outOfTime = true;
+    return outOfTime;
+  };
+  const stoppedAs = (): "cancelled" | "time" => (outOfTime && !runtime().chatStops.has(key) ? "time" : "cancelled");
   const taken: string[] = [];
   const toolNotes: ToolNote[] = [];
   let promptTokens = 0;
@@ -133,6 +154,8 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
   };
 
   try {
+    // The page learns at once which conversation this is: it can stop it, and find it again.
+    emit({ chat: { id: chat.id, title: chat.title } });
     // ── What signs in goes out of the message before anything else sees it.
     const found = findAccess(input.message);
     for (const one of found) {
@@ -188,7 +211,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
       chatTitle: title,
       turnKey: key,
       meta: input.meta,
-      isCancelled: input.isCancelled,
+      isCancelled,
       progress: (message, link) => emit(link ? { progress: message, link } : { progress: message }),
       personSaid: () =>
         historyFor(chat.id)
@@ -292,7 +315,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
           });
           lastFailure = err;
           // Part of an answer is on the page: another model does not go on from there.
-          if (wrote || input.isCancelled()) throw err;
+          if (wrote || isCancelled()) throw err;
           if (withTools && step === 1 && (!(err instanceof AppError) || mayBeAboutTools(err))) aboutTools = true;
           current++;
           const next = candidates[current];
@@ -308,7 +331,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
       maxSteps: CHAT_MAX_STEPS,
       outOfTokens: () => !hasTokensLeft(user.id),
       estimateTokens,
-      isCancelled: input.isCancelled,
+      isCancelled,
       onToolCall: (event) => {
         const note: ToolNote = {
           name: event.name,
@@ -330,7 +353,8 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
 
     if (taken.length > 0) scrubChat(chat.id, taken);
     if (result.stopped === "cancelled") {
-      store(draft, { stopped: "cancelled" });
+      const stored = store(draft, { stopped: stoppedAs() });
+      emit({ done: true, finishReason: stoppedAs(), usage: { promptTokens, completionTokens }, message: stored });
       return;
     }
     const content =
@@ -340,8 +364,9 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
     emit({ done: true, finishReason: result.stopped, usage: { promptTokens, completionTokens }, message: stored });
   } catch (err) {
     if (taken.length > 0) scrubChat(chat.id, taken);
-    if (input.isCancelled()) {
-      store(draft, { stopped: "cancelled" });
+    if (isCancelled()) {
+      const stored = store(draft, { stopped: stoppedAs() });
+      emit({ done: true, finishReason: stoppedAs(), usage: { promptTokens, completionTokens }, message: stored });
       return;
     }
     const failure = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
@@ -352,6 +377,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
     emit({ error: shown });
   } finally {
     runtime().chatTurns.delete(key);
+    runtime().chatStops.delete(key);
     closeRun(key, "the answer of the conversation is there");
     await closeRunBrowser(key).catch(() => undefined);
   }

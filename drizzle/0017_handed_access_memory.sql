@@ -44,10 +44,14 @@ CREATE INDEX `chat_messages_chat_idx` ON `chat_messages` (`chat_id`,`id`);--> st
 DROP INDEX IF EXISTS `chats_user_idx`;--> statement-breakpoint
 CREATE INDEX `chats_user_idx` ON `chats` (`user_id`,`updated_at`);--> statement-breakpoint
 ALTER TABLE `servers` ADD `owner_id` text REFERENCES users(id) ON DELETE cascade;--> statement-breakpoint
-CREATE INDEX `servers_owner_idx` ON `servers` (`owner_id`);--> statement-breakpoint
+DROP INDEX IF EXISTS `servers_name_unique`;--> statement-breakpoint
+CREATE UNIQUE INDEX `servers_owner_name_unique` ON `servers` (`owner_id`,`name`);--> statement-breakpoint
+CREATE UNIQUE INDEX `servers_name_unique` ON `servers` (`name`) WHERE "servers"."owner_id" is null;--> statement-breakpoint
 ALTER TABLE `site_accounts` ADD `owner_id` text REFERENCES users(id) ON DELETE cascade;--> statement-breakpoint
+DROP INDEX IF EXISTS `site_accounts_name_unique`;--> statement-breakpoint
+CREATE UNIQUE INDEX `site_accounts_owner_name_unique` ON `site_accounts` (`owner_id`,`name`);--> statement-breakpoint
+CREATE UNIQUE INDEX `site_accounts_name_unique` ON `site_accounts` (`name`) WHERE "site_accounts"."owner_id" is null;--> statement-breakpoint
 ALTER TABLE `server_commands` ADD `handed` integer DEFAULT false NOT NULL;--> statement-breakpoint
-CREATE INDEX `site_accounts_owner_idx` ON `site_accounts` (`owner_id`);--> statement-breakpoint
 CREATE VIRTUAL TABLE `account_memories_fts` USING fts5(`content`, content='account_memories', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
 --> statement-breakpoint
 CREATE TRIGGER `account_memories_fts_insert` AFTER INSERT ON `account_memories` BEGIN

@@ -1187,8 +1187,10 @@ export const servers = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => ({
-    byName: uniqueIndex("servers_name_unique").on(t.name),
-    byOwner: index("servers_owner_idx").on(t.ownerId),
+    // A name is one machine among the ones an owner registered, and one among
+    // the ones an account handed over: two accounts can each have "vps-1-2-3-4".
+    byName: uniqueIndex("servers_name_unique").on(t.name).where(sql`${t.ownerId} is null`),
+    byOwnerName: uniqueIndex("servers_owner_name_unique").on(t.ownerId, t.name),
   }),
 );
 
@@ -1296,8 +1298,9 @@ export const siteAccounts = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => ({
-    byName: uniqueIndex("site_accounts_name_unique").on(t.name),
-    byOwner: index("site_accounts_owner_idx").on(t.ownerId),
+    // As for servers: unique among the ones of the Browser page, and among the ones of each account.
+    byName: uniqueIndex("site_accounts_name_unique").on(t.name).where(sql`${t.ownerId} is null`),
+    byOwnerName: uniqueIndex("site_accounts_owner_name_unique").on(t.ownerId, t.name),
   }),
 );
 

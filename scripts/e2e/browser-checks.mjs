@@ -625,6 +625,7 @@ try {
     "/dashboard/agents",
     "/dashboard/workflows",
     "/dashboard/chat",
+    "/dashboard/memory",
     "/dashboard/studio",
     "/dashboard/knowledge",
     "/dashboard/skills",
@@ -776,7 +777,7 @@ try {
   check(
     "the menu of a user has no Providers, Models, Servers, Browser, Skills, Users, Audit and Observability",
     ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/browser", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
-      ["/dashboard/projects", "/dashboard/chat", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
+      ["/dashboard/projects", "/dashboard/chat", "/dashboard/memory", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
     menu,
   );
   check("the overview of a user is about their own work", (await page.$("#own-overview")) !== null && (await namedOnPage()).length === 0, await namedOnPage());
@@ -787,8 +788,15 @@ try {
   check("  and so does the Servers page", page.url().endsWith("/dashboard"), page.url());
   await open("/dashboard/browser");
   check("  and the Browser page", page.url().endsWith("/dashboard"), page.url());
+  // A page of the browser that waits for a person is opened by whose work it is, whatever the role: one that is not there says so.
   await open("/dashboard/browser/live/00000000-0000-4000-8000-000000000000");
-  check("  and a page of the browser that waits for a person", page.url().endsWith("/dashboard"), page.url());
+  check("  a page of the browser that waits for nobody says so, and leads a user back to Chat, not to the Browser page", (await has("This page does not wait any more")) && (await clickableText(/Back to Chat/)) && !(await clickableText(/Browser page/)), (await text()).slice(0, 200));
+  await open("/dashboard/memory");
+  check(
+    "the Memory page of a user says what the assistant can be handed, and what it remembers",
+    (await has("Access you handed over")) && (await has("Nothing handed over yet")) && (await has("What the assistant remembers")) && (await namedOnPage()).length === 0,
+    (await text()).slice(0, 300),
+  );
 
   await open("/dashboard/chat");
   check("Chat has no model to choose", (await page.$("main select")) === null && (await page.$("textarea[placeholder^='Message']")) !== null, null);
@@ -1194,6 +1202,101 @@ try {
     check("the owner removes an account", await waitText('"browser-shop" was removed.'), null);
     check("  it is gone from the list, and what was done with it stays in the log", (await page.$(account("browser-shop"))) === null && (await page.$(account("shop"))) !== null && (await browserLog()).some((row) => row.includes("browser-shop")), null);
     check("the Browser page holds nothing wider than the screen", (await sideways()) <= 0, await sideways());
+  }
+
+  // ─── Access handed over in a conversation ─────────────────────────────────
+  // The machine is the mock SSH server; the assistant is the mock provider,
+  // which does what the lines "DO: {…}" of a message say.
+  begin("Browser: a server handed over in Chat, and what is remembered");
+  {
+    const now = await machine();
+    const transcript = () => page.$eval('[data-testid="transcript"]', (el) => el.innerText).catch(() => "");
+    /** Put a text of several lines into the message field, as pasting does. */
+    const write = (value) =>
+      page.evaluate((v) => {
+        const field = document.querySelector("textarea[placeholder^='Message']");
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(field, v);
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }, value);
+    const chooseModel = async () => page.select("main select", await page.$$eval("main select option", (options) => options.find((o) => o.textContent.startsWith("chat-mini"))?.value ?? ""));
+    const mine = async () => (await api("/api/memory")).data;
+    for (const item of (await mine())?.access ?? []) await api(`/api/access/${item.kind}/${item.id}`, { method: "DELETE" });
+
+    await open("/dashboard/chat");
+    check("Chat says that the assistant can be handed a server, a site or a key", (await has("Write how to sign in to a server, a web site or an API")) && (await has("What you tell it is remembered")), (await text()).slice(0, 300));
+    await chooseModel();
+    await write(`ini vps ku, tolong cek\nIP: 127.0.0.1\nPort: ${SSH_PORT}\nUser: root\nPass: ${now.password}\nDO: {"tool":"run_on_server","args":{"command":"echo from-the-chat-page; id -un"}}`);
+    await clickText(/^\s*Send\s*$/);
+    check("the assistant works on the server that was written into the message", await waitText("DONE after 1 tool results.", 40_000), (await transcript()).slice(0, 400));
+    const said = await transcript();
+    check("  the message is shown without its password, with what became of it", !said.includes(now.password) && said.includes('Pass: [password kept by the app as "vps-127-0-0-1"]'), said.slice(0, 300));
+    const keptLine = await page.$eval('[data-testid="kept"]', (el) => el.innerText).catch(() => "");
+    check("  under it: that the server was tried and kept, and under which name", keptLine.includes(`root@127.0.0.1:${SSH_PORT}`) && keptLine.includes('kept as "vps-127-0-0-1"') && keptLine.includes(now.fingerprint), keptLine);
+    await clickText(/with tools/);
+    check("  what the assistant did with its tools can be read", (await waitText("echo from-the-chat-page; id -un")) && (await has("from-the-chat-page")), (await transcript()).slice(0, 400));
+    check("  no password is anywhere on the page", !(await text()).includes(now.password), null);
+    await snap("chat-handover");
+    const chatUrl = page.url();
+    check("  the address names the conversation", /\/dashboard\/chat\?c=[0-9a-f-]{36}$/.test(chatUrl), chatUrl);
+    await page.reload({ waitUntil: "networkidle2" });
+    check("  opened again, it is as it was left", (await transcript()).includes("DONE after 1 tool results.") && (await transcript()).includes("kept by the app as") && !(await text()).includes(now.password), (await transcript()).slice(0, 300));
+    check("  it is in the list of conversations under its first line", (await page.$$eval('ul[aria-label="Conversations"] li', (rows) => rows.map((li) => li.innerText))).some((row) => row.includes("ini vps ku, tolong cek")), null);
+
+    await clickText(/New conversation/);
+    await chooseModel();
+    await page.type("textarea[placeholder^='Message']", "Server mana saja yang kamu punya?");
+    await clickText(/^\s*Send\s*$/);
+    check("a new conversation has the server without being told again", await waitText("servers=vps-127-0-0-1", 30_000), (await transcript()).slice(0, 400));
+
+    // An answer that works for a while: the page is left, and finds the answer when it comes back.
+    await clickText(/New conversation/);
+    await chooseModel();
+    await write('tolong tunggu sebentar\nDO: {"tool":"run_on_server","args":{"command":"sleep 5; echo finished-while-away"}}');
+    await clickText(/^\s*Send\s*$/);
+    await page.waitForFunction(() => /\?c=[0-9a-f-]{36}$/.test(location.href), { timeout: 15_000 }).catch(() => undefined);
+    const awayUrl = page.url();
+    await open("/dashboard/memory");
+    check("the Memory page lists the server, without what signs in", (await page.$eval('[data-testid="access-list"]', (el) => el.innerText).catch(() => "")).includes("vps-127-0-0-1") && (await has(`root@127.0.0.1:${SSH_PORT}`)) && !(await text()).includes(now.password), (await text()).slice(0, 300));
+    await page.type('textarea[aria-label="A note for the assistant"]', "Laporan selalu dalam bahasa Indonesia.");
+    await clickText(/Add note/);
+    check("  a note can be written by hand", (await waitText("Written by you")) && (await page.$eval('[data-testid="notes-list"]', (el) => el.innerText).catch(() => "")).includes("Laporan selalu dalam bahasa Indonesia."), null);
+    await snap("memory");
+    await page.goto(awayUrl, { waitUntil: "networkidle2" });
+    check("an answer that was left to itself is there when the page comes back", await waitText("finished-while-away", 40_000), (await transcript()).slice(0, 400));
+    await page.waitForFunction(() => ![...document.querySelectorAll("main button")].some((b) => b.innerText.trim() === "Stop"), { timeout: 15_000 }).catch(() => undefined);
+    check("  and the conversation takes the next message: nothing is being worked on any more", (await clickableText(/^\s*Stop\s*$/)) === false && (await page.$("textarea[placeholder^='Message']")) !== null, null);
+
+    // A project whose goal says how to sign in.
+    await open("/dashboard/projects");
+    await clickText(/New project/);
+    await page.waitForSelector("#p-goal");
+    await fill("#p-title", "Cek VPS dari halaman");
+    await page.evaluate((v) => {
+      const field = document.querySelector("#p-goal");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(field, v);
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }, `Cek disk di VPS 127.0.0.1 port ${SSH_PORT} user root pass ${now.password} lalu laporkan.`);
+    await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30_000 }).catch(() => undefined), clickText(/Create project/)]);
+    const keptNow = await page.$eval('[data-testid="kept-now"]', (el) => el.innerText).catch(() => "");
+    check("a project whose goal says how to sign in: the page says what was kept, and the goal holds no password", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && keptNow.includes('kept again as "vps-127-0-0-1"') && !(await text()).includes(now.password) && (await has("[password kept by the app as")), [page.url(), keptNow]);
+    const handed = await page.$eval('[data-testid="handed"]', (el) => el.innerText).catch(() => "");
+    check("  and what its runs work with", handed.includes("vps-127-0-0-1"), handed);
+    await snap("project-handed");
+
+    await page.setViewport({ width: 390, height: 780 });
+    await open("/dashboard/chat");
+    const chatWide = await sideways();
+    await open("/dashboard/memory");
+    check("Chat and Memory hold nothing wider than a phone's screen", chatWide <= 0 && (await sideways()) <= 0, [chatWide, await sideways()]);
+    await page.setViewport({ width: 1360, height: 900 });
+
+    await open("/dashboard/memory");
+    await page.evaluate(() => {
+      const row = [...document.querySelectorAll('[data-testid="access-list"] li')].find((li) => li.innerText.includes("vps-127-0-0-1"));
+      [...(row?.querySelectorAll("button") ?? [])].find((b) => b.innerText.includes("Remove"))?.click();
+    });
+    check("what was handed over is removed on the Memory page", (await waitText("Nothing handed over yet")) && ((await mine())?.access ?? []).length === 0, null);
+    for (const note of (await mine())?.notes ?? []) await api(`/api/memory/${note.id}`, { method: "DELETE" });
   }
 
   // ─── Model checks ─────────────────────────────────────────────────────────

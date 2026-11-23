@@ -75,7 +75,7 @@ export function isHost(text: string): boolean {
  * time the text is saved.
  */
 const APP_MARKS =
-  /\[(?:(?:password|private key|passphrase|key) )?(?:kept by the app[^\]\n]{0,100}|taken out by the app)\]|\[not kept in a note\]|\{\{key:[^{}\s]{0,80}\}\}/g;
+  /\[(?:(?:password|private key|passphrase|key) )?(?:kept by the app[^\]\n]{0,100}|taken out by the app)\]|\[not kept in a note\]|\{\{\s*key\s*:[^{}\n]{0,80}\}\}/gi;
 
 /** Where the app's own marks stand in a text. */
 export function appMarks(text: string): Span[] {
@@ -269,7 +269,8 @@ function fieldsOf(text: string, taken: Span[]): Field[] {
   for (let m = word.exec(text); m; m = word.exec(text)) {
     const kind = kindOfLabel(m[2]!);
     const raw = m[3]!;
-    if (kind) add(kind, raw, m.index + m[0].length - raw.length, m[2]!, false);
+    // "password ssh: …", "pass vps = …": the next word is the rest of the label, which the pairs above have read.
+    if (kind && !/[:=]$/.test(raw)) add(kind, raw, m.index + m[0].length - raw.length, m[2]!, false);
     word.lastIndex = m.index + m[1]!.length + m[2]!.length;
   }
 
@@ -287,6 +288,27 @@ function fieldsOf(text: string, taken: Span[]): Field[] {
     fields.push({ kind: "host", value: host, start: hostStart, end: hostStart + host.length, label: "ssh", explicit: true });
     if (m[5]) fields.push({ kind: "port", value: m[5], start: hostStart + host.length + 1, end: hostStart + host.length + 1 + m[5].length, label: "ssh", explicit: true });
   }
+  // "203.0.113.9 root Rahasia#123": the address, root, and what can only be
+  // its password, in a row and without a word that says so.
+  const row = /(^|[\s,;|(])((?:\d{1,3}\.){3}\d{1,3})(?::(\d{2,5}))?[ \t]+(root)[ \t]+(\S{6,128})(?=$|\s)/gi;
+  for (let m = row.exec(text); m; m = row.exec(text)) {
+    const value = m[5]!.replace(/[,;]+$/, "");
+    const kinds = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((re) => re.test(value)).length;
+    // Not a path, an option, an address or a version: a word of letters, digits and signs mixed.
+    if (!isIpv4(m[2]!) || /^[-/~.]|:\/\/|^[\d.]+$/.test(value) || kinds < 3 || kindOfLabel(value.replace(/[:=].*$/, ""))) continue;
+    const hostStart = m.index + m[1]!.length;
+    const passStart = m.index + m[0].length - m[5]!.length;
+    if (!free(passStart, passStart + value.length)) continue;
+    // The address may have been read already ("vps 203.0.113.9 …"): what is missing is added.
+    const hostEnd = hostStart + m[2]!.length;
+    if (free(hostStart, hostEnd)) fields.push({ kind: "host", value: m[2]!, start: hostStart, end: hostEnd, label: "", explicit: false });
+    if (m[3] && free(hostEnd + 1, hostEnd + 1 + m[3].length)) fields.push({ kind: "port", value: m[3], start: hostEnd + 1, end: hostEnd + 1 + m[3].length, label: "", explicit: false });
+    // Only blanks stand between the address and "root".
+    const rootAt = text.toLowerCase().indexOf("root", hostEnd + (m[3] ? m[3].length + 1 : 0));
+    if (free(rootAt, rootAt + m[4]!.length)) fields.push({ kind: "user", value: m[4]!, start: rootAt, end: rootAt + m[4]!.length, label: "", explicit: false });
+    fields.push({ kind: "pass", value, start: passStart, end: passStart + value.length, label: "", explicit: false });
+  }
+
   // "masuk sebagai deploy", "login as ubuntu".
   const as = /\b(?:masuk|login|log in|sign in|signin)[ \t]+(?:sebagai|as)[ \t]+([a-z_][a-z0-9_.-]{0,31})(?=$|[\s,;.)])/gi;
   for (let m = as.exec(text); m; m = as.exec(text)) {
@@ -338,6 +360,62 @@ const SSH_WORDS = /\b(ssh|vps|root|dedicated|ubuntu|debian|centos|almalinux|linu
 /** Words that say a machine even where "login" or "panel" is said as well. */
 const SSH_FIRST = /\b(ssh|vps|root)\b/i;
 const WEB_WORDS = /\b(login|log in|sign in|masuk|panel|dashboard|cpanel|website|web|situs|site|admin page|wp-admin)\b/i;
+/** Words that say a page in a browser, also where the address is a number: "panel 203.0.113.9:8080". */
+const WEB_ONLY = /\b(panel|dashboard|cpanel|whm|plesk|aapanel|webmin|website|web|situs|wp-admin|phpmyadmin|pterodactyl)\b/i;
+
+/**
+ * What else listens on a machine and takes a password: a database, FTP,
+ * mail. The app cannot try such a sign-in, and it is not one over SSH: the
+ * password is kept as a key, which a command on a server can name.
+ */
+const OTHER_SERVICES = ["mysql", "mariadb", "postgresql", "postgres", "psql", "mongodb", "mongo", "redis", "ftp", "smtp", "imap", "pop3", "rdp", "vnc", "database", "db"] as const;
+const CREDENTIAL_WORD = /^(?:password|passwd|pass|pwd|pw|sandi|kata sandi|akun|account|login|user|username|host|server)(?![a-z0-9])/;
+const CREDENTIAL_BEFORE = /(?:^|[^a-z0-9])(?:password|passwd|pass|pwd|pw|sandi|akun|account|login|user|username)\s+$/;
+
+/** The other service a password is called after: "MYSQL_PASSWORD", "db password", "password ftp". */
+function otherServiceInLabel(label: string): string | null {
+  const plain = label.toLowerCase().replace(/_+/g, " ");
+  for (const name of OTHER_SERVICES) {
+    if (new RegExp(`(?:^|[^a-z0-9])${name}(?![a-z0-9])`).test(plain)) return name;
+  }
+  return null;
+}
+
+/**
+ * The other service the details in a text are of, when the text says so
+ * where it names the sign-in: "mysql: host … user … password …", "akun
+ * ftp", "ftp 203.0.113.9 user …". A service that is only spoken of
+ * ("install mysql on it") says nothing about the password.
+ */
+function otherServiceNear(around: string): string | null {
+  const text = around.toLowerCase().replace(/_+/g, " ");
+  let first: { at: number; name: string } | null = null;
+  for (const name of OTHER_SERVICES) {
+    const re = new RegExp(`(?:^|[^a-z0-9])(${name})(?![a-z0-9])`, "g");
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const start = m.index + m[0].length - name.length;
+      const next = text.slice(start + name.length).replace(/^[ \t]+/, "");
+      const says = /^[:=]/.test(next) || CREDENTIAL_WORD.test(next) || /^(?:\d{1,3}\.){3}\d{1,3}(?![\w.]*\w)/.test(next) || CREDENTIAL_BEFORE.test(text.slice(0, start));
+      // The first that says so: "db mysql: …" is MySQL's, by the name that is the more exact of two on one spot.
+      if (says && (!first || start < first.at)) first = { at: start, name };
+    }
+  }
+  if (!first) return null;
+  // "db mysql:", "database postgres:": the kind and then the product. The product is the better name.
+  const general = first.name === "db" || first.name === "database";
+  if (general) {
+    const rest = text.slice(first.at + first.name.length);
+    const product = /^[ \t]+(mysql|mariadb|postgresql|postgres|mongodb|mongo|redis)(?![a-z0-9])/.exec(rest);
+    if (product) return product[1]!;
+  }
+  return first.name;
+}
+
+/** The service a text names, for a key: who it is of and where it is sent. Names of settings count: "OPENAI_API_KEY". */
+function serviceOf(...texts: string[]): [RegExp, string, string] | undefined {
+  const plain = texts.map((t) => t.replace(/_+/g, " "));
+  return SERVICES.find(([re]) => plain.some((t) => re.test(t)));
+}
 
 /** The parts of a text that are apart from each other: what an empty line divides. */
 function blocksOf(text: string): Span[] {
@@ -379,7 +457,7 @@ function nearest(fields: Field[], kind: FieldKind, at: number, within: Span | nu
 }
 
 function labelOfKey(field: Field, around: string): { label: string; site: string | null } {
-  const service = SERVICES.find(([re]) => re.test(field.label) || re.test(around));
+  const service = serviceOf(field.label, around);
   const words = field.label.replace(/[_.]+/g, " ").replace(/\s+/g, " ").trim();
   const named = words && !/^(token|key|secret|api key|apikey|bearer)$/i.test(words) ? words : "";
   if (service) {
@@ -425,20 +503,35 @@ export function findAccess(text: string): Found[] {
   const fields = fieldsOf(text, taken);
   const blocks = blocksOf(text);
   const blockOf = (at: number): Span => blocks.find((b) => at >= b.start && at <= b.end) ?? { start: 0, end: text.length };
+  const lineOfAt = (at: number): Span => {
+    const start = text.lastIndexOf("\n", Math.max(0, at - 1)) + 1;
+    const end = text.indexOf("\n", at);
+    return { start, end: end === -1 ? text.length : end };
+  };
+  const inside = (f: Span, span: Span | null) => !span || (f.start >= span.start && f.end <= span.end);
   const passwords = fields.filter((f) => f.kind === "pass");
   // With one password in all, everything in the message is about it.
   const whole = passwords.length + keyBlocks.length <= 1;
 
-  const hostFor = (at: number, block: Span) => nearest(fields, "host", at, whole ? null : block) ?? nearest(fields, "host", at, whole ? null : block, true);
-  const portFor = (host: Field, block: Span): number => {
-    // The port that stands right after the host, else the one of the block.
-    const next = fields.find((f) => f.kind === "port" && !f.used && f.start === host.end + 1) ?? nearest(fields, "port", host.start, whole ? null : block);
-    if (!next) return 22;
+  // What the words of the text say is read without the secrets in it: a
+  // password "Panel#123" does not make its machine a panel.
+  const hidden: Span[] = [...taken, ...fields.filter((f) => f.kind === "pass" || f.kind === "passphrase" || f.kind === "token")];
+  let masked = text;
+  for (const span of hidden) masked = masked.slice(0, span.start) + " ".repeat(span.end - span.start) + masked.slice(span.end);
+  const wordsOf = (span: Span | null) => (span ? masked.slice(span.start, span.end) : masked);
+
+  const hostIn = (at: number, scope: Span | null) => nearest(fields, "host", at, scope) ?? nearest(fields, "host", at, scope, true);
+  const hostFor = (at: number, block: Span) => hostIn(at, whole ? null : block);
+  /** The port that was said for a host: the one right after it, else the one of what is looked through. Null when none was. */
+  const portSaid = (host: Field, scope: Span | null): number | null => {
+    const next = fields.find((f) => f.kind === "port" && !f.used && f.start === host.end + 1) ?? nearest(fields, "port", host.start, scope);
+    if (!next) return null;
     const port = Number(next.value);
-    if (!(port >= 1 && port <= 65535)) return 22;
+    if (!(port >= 1 && port <= 65535)) return null;
     next.used = true;
     return port;
   };
+  const portFor = (host: Field, block: Span): number => portSaid(host, whole ? null : block) ?? 22;
 
   // A private key signs in to the machine that is named with it.
   for (const key of keyBlocks) {
@@ -460,21 +553,47 @@ export function findAccess(text: string): Found[] {
   for (const pass of passwords) {
     if (pass.used) continue;
     const block = blockOf(pass.start);
-    const scope = whole ? null : block;
-    const around = whole ? text : text.slice(block.start, block.end);
-    const host = hostFor(pass.start, block);
+    const line = lineOfAt(pass.start);
+    // Several passwords stand together: each is of what its own line names,
+    // where that line names a machine or a site ("VPS A: … pass …" a line
+    // each). A form with a field on every line is read as one.
+    const together = !whole && passwords.some((p) => p !== pass && inside(p, block));
+    const ownLine = together && fields.some((f) => (f.kind === "host" || f.kind === "url") && inside(f, line));
+    const scope: Span | null = whole ? null : ownLine ? line : block;
+    const around = wordsOf(scope);
+    const host = hostIn(pass.start, scope);
     const url = nearest(fields, "url", pass.start, scope);
     const user = nearest(fields, "user", pass.start, scope);
-    const sshish = SSH_WORDS.test(around) || fields.some((f) => f.label === "ssh" && (!scope || (f.start >= scope.start && f.end <= scope.end)));
+    const sshNamed = (span: Span | null) => fields.some((f) => f.label === "ssh" && inside(f, span));
+    const sshish = SSH_WORDS.test(around) || sshNamed(scope);
     const webish = Boolean(url) || WEB_WORDS.test(around);
+
+    // The password of a database, of FTP, of a mailbox: not a sign-in the app
+    // can try. Kept as a key, for a command on a server to name. By what the
+    // password is called; else by what stands before it, on its own line
+    // where several passwords stand together, and only where nothing there
+    // says a machine to sign in to.
+    const before: Span = { start: together ? line.start : (scope?.start ?? 0), end: pass.start };
+    const said = wordsOf(before);
+    const other = otherServiceInLabel(pass.label) ?? (url || SSH_WORDS.test(said) || sshNamed(before) ? null : otherServiceNear(said));
+    if (other) {
+      pass.used = true;
+      found.push({
+        item: { kind: "key", label: `${other === "db" ? "database" : other} password`, value: pass.value, site: null },
+        secrets: [{ start: pass.start, end: pass.end, what: "password" }],
+      });
+      continue;
+    }
 
     // Where a web address and a machine are both named, the password is of
     // the one it stands with.
     const siteFirst = Boolean(url && user && farFrom(url, pass.start) < farFrom(host, pass.start));
+    // A page on a machine that has a number and no name: "panel 203.0.113.9:8080 user admin pass …".
+    const pageOnAddress = Boolean(host && isIpv4(host.value) && !url && user && WEB_ONLY.test(around) && !sshish);
     // A machine: an address, and nothing that makes it a web site instead.
-    const asServer = host && !siteFirst && (isIpv4(host.value) || (sshish && !webish) || (sshish && !url && SSH_FIRST.test(around)));
+    const asServer = host && !siteFirst && !pageOnAddress && (isIpv4(host.value) || (sshish && !webish) || (sshish && !url && SSH_FIRST.test(around)));
     if (host && asServer) {
-      const port = portFor(host, block);
+      const port = portSaid(host, scope) ?? 22;
       host.used = true;
       pass.used = true;
       // An email address is not the account on a machine.
@@ -486,8 +605,12 @@ export function findAccess(text: string): Found[] {
       });
       continue;
     }
-    // A site: where to sign in, and as whom.
-    const where = url?.value ?? (host && webish && !isIpv4(host.value) ? `https://${host.value}` : null);
+    // A site: where to sign in, and as whom. A bare address is asked without TLS: a panel on one seldom has a certificate.
+    let where = url?.value ?? (host && webish && !isIpv4(host.value) ? `https://${host.value}` : null);
+    if (!where && host && pageOnAddress) {
+      const port = portSaid(host, scope);
+      where = `http://${host.value}${port && port !== 80 ? `:${port}` : ""}`;
+    }
     if (where && user) {
       if (url) url.used = true;
       else if (host) host.used = true;
@@ -501,10 +624,7 @@ export function findAccess(text: string): Found[] {
   }
 
   // Keys: what is called one, and what has the shape of one.
-  const lineOf = (at: number) => {
-    const block = blockOf(at);
-    return text.slice(block.start, block.end);
-  };
+  const lineOf = (at: number) => wordsOf(blockOf(at));
   const siteNear = (at: number): string | null => {
     const scope = whole ? null : blockOf(at);
     const url = nearest(fields, "url", at, scope, true);
@@ -527,9 +647,11 @@ export function findAccess(text: string): Found[] {
     });
   }
   for (const key of shaped) {
-    const service = SERVICES.find(([re]) => re.test(lineOf(key.span.start)));
+    const service = serviceOf(lineOf(key.span.start));
+    // A shape that many services share ("sk-…") is of the one the text names.
+    const label = key.label === "API key" && service ? `${service[1]} API key` : key.label;
     found.push({
-      item: { kind: "key", label: key.label, value: key.value, site: key.site ?? service?.[2] ?? siteNear(key.span.start) },
+      item: { kind: "key", label, value: key.value, site: key.site ?? service?.[2] ?? siteNear(key.span.start) },
       secrets: [{ ...key.span, what: "key" }],
     });
   }

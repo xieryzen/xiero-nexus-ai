@@ -87,19 +87,23 @@ export const POST = handle(async (req) => {
     const collections = body.collectionIds?.length ? readableCollectionIds(body.collectionIds, user) : [];
     const meta = getClientMeta(req);
     const message = body.message;
-    let cancelled = false;
+    // The page can go away while the answer is worked on: a phone that
+    // sleeps, a connection that drops. The answer goes on and is written to
+    // the conversation, where the page finds it; it is stopped by
+    // POST /api/chats/{id}/stop, not by hanging up.
+    let listening = true;
     let beat: ReturnType<typeof setInterval> | null = null;
     req.signal?.addEventListener("abort", () => {
-      cancelled = true;
+      listening = false;
     });
     const turn = new ReadableStream<Uint8Array>({
       async start(controller) {
         const send = (chunk: string) => {
+          if (!listening) return;
           try {
             controller.enqueue(encoder.encode(chunk));
           } catch {
-            // The page went away: what is being done is stopped.
-            cancelled = true;
+            listening = false;
           }
         };
         // A tool can work for minutes without anything to say: a line now and
@@ -116,7 +120,6 @@ export const POST = handle(async (req) => {
             collectionIds: collections,
             meta,
             emit: (event) => send(sse(event)),
-            isCancelled: () => cancelled,
           });
         } finally {
           if (beat) clearInterval(beat);
@@ -128,7 +131,7 @@ export const POST = handle(async (req) => {
         }
       },
       cancel() {
-        cancelled = true;
+        listening = false;
         if (beat) clearInterval(beat);
       },
     });

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray, lt, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lt, ne } from "drizzle-orm";
 import { db } from "@/db";
 import {
   agents,
@@ -150,7 +150,8 @@ export function checkedAccount(input: AccountInput, existing?: SiteAccount): Che
     const taken = db
       .select({ id: siteAccounts.id })
       .from(siteAccounts)
-      .where(existing ? and(eq(siteAccounts.name, name), ne(siteAccounts.id, existing.id)) : eq(siteAccounts.name, name))
+      // Among the accounts of the Browser page: what someone handed over in a conversation has names of its own.
+      .where(existing ? and(eq(siteAccounts.name, name), isNull(siteAccounts.ownerId), ne(siteAccounts.id, existing.id)) : and(eq(siteAccounts.name, name), isNull(siteAccounts.ownerId)))
       .get();
     if (taken) throw Errors.conflict(`There is an account "${name}" already.`);
   }
