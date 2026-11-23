@@ -9,14 +9,14 @@ import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
 import { auditFields, checkedServer, limitConnections } from "@/lib/ssh/register";
 import { mayUseServer } from "@/lib/ssh/rules";
-import { getServer, logCommand, serializeServer } from "@/lib/ssh/servers";
+import { registeredServer, logCommand, serializeServer } from "@/lib/ssh/servers";
 import { serverUpdateSchema } from "@/lib/validation";
 
 export const dynamic = "force-dynamic";
 
 export const GET = handle(async (_req, { params }) => {
   const user = requireAdmin();
-  const row = getServer(params.id!);
+  const row = registeredServer(params.id!);
   // The same answer for a machine that is not there and for one this account may not use.
   if (!row || !mayUseServer(user.role, row.access)) throw Errors.notFound("Server not found");
   return json({ server: serializeServer(row) });
@@ -30,7 +30,7 @@ export const GET = handle(async (_req, { params }) => {
 export const PATCH = handle(async (req, { params }) => {
   const user = requireOwner(ONLY_OWNER);
   const { ip, userAgent } = getClientMeta(req);
-  const existing = getServer(params.id!);
+  const existing = registeredServer(params.id!);
   if (!existing) throw Errors.notFound("Server not found");
   const body = await parseBody(req, serverUpdateSchema);
   limitConnections(user);
@@ -65,7 +65,7 @@ export const PATCH = handle(async (req, { params }) => {
 export const DELETE = handle(async (req, { params }) => {
   const user = requireOwner(ONLY_OWNER);
   const { ip, userAgent } = getClientMeta(req);
-  const existing = getServer(params.id!);
+  const existing = registeredServer(params.id!);
   if (!existing) throw Errors.notFound("Server not found");
   db.delete(servers).where(eq(servers.id, existing.id)).run();
   audit({ actorUserId: user.id, action: "server.delete", targetType: "server", targetId: existing.id, metadata: auditFields(existing), ip, userAgent });

@@ -142,22 +142,45 @@ export const modelUpdateSchema = z.object({
   notes: z.string().trim().max(1000).nullable().optional(),
 });
 
-export const chatRequestSchema = z.object({
-  // Left out, the app chooses the model; it always does for a user (model-choice.ts).
-  modelRowId: z.string().min(1).nullable().optional(),
-  systemPrompt: z.string().max(8000).optional(),
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string().min(1).max(32_000),
-      }),
-    )
-    .min(1)
-    .max(100),
-  temperature: z.number().min(0).max(2).optional(),
-  // Knowledge collections to look the question up in before answering (v1.5).
-  collectionIds: z.array(z.string().min(1)).max(10).optional(),
+export const chatRequestSchema = z
+  .object({
+    // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+    modelRowId: z.string().min(1).nullable().optional(),
+    systemPrompt: z.string().max(8000).optional(),
+    // A conversation that is kept (v1.11): the message to answer, and the
+    // conversation it belongs to. Without `chatId` a new one is started. The
+    // assistant works with its tools and with what is remembered.
+    chatId: z.string().min(1).max(64).nullable().optional(),
+    message: z.string().trim().min(1).max(32_000).optional(),
+    // Or the whole conversation as the caller holds it: one answer, without
+    // tools, and nothing is kept.
+    messages: z
+      .array(
+        z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string().min(1).max(32_000),
+        }),
+      )
+      .min(1)
+      .max(100)
+      .optional(),
+    temperature: z.number().min(0).max(2).optional(),
+    // Knowledge collections to look the question up in before answering (v1.5).
+    collectionIds: z.array(z.string().min(1)).max(10).optional(),
+  })
+  .refine((body) => (body.message !== undefined) !== (body.messages !== undefined), {
+    message: "Send `message` (a conversation that is kept) or `messages` (the whole conversation, nothing kept), one of the two",
+    path: ["messages"],
+  });
+
+export const chatRenameSchema = z.object({ title: z.string().trim().min(1).max(80) });
+
+export const accountNoteSchema = z.object({ content: z.string().trim().min(1).max(2000) });
+
+export const accessChangeSchema = z.object({
+  status: z.enum(["enabled", "disabled"]).optional(),
+  // A key: the site it may be sent to in a web request. Empty unties it.
+  site: z.string().trim().max(253).nullable().optional(),
 });
 
 // ─── AI Workforce (v1.1.0) ────────────────────────────────────────────────────

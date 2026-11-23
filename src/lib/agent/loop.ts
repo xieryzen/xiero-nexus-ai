@@ -69,6 +69,12 @@ export interface LoopOptions {
   onStep?(step: number): void;
   /** After each tool call. */
   onToolCall?(event: ToolCallEvent): void;
+  /**
+   * After the tool calls of a step: the tools as they are now, when a call
+   * changed what there is to work with (a conversation in which a server was
+   * handed over can work on it in the same answer). Null when nothing changed.
+   */
+  toolsChanged?(): LoopTool[] | null;
 }
 
 export type LoopStop = "answer" | "max_steps" | "tokens" | "cancelled";
@@ -106,8 +112,8 @@ const WRAP_UP =
 
 export async function runToolLoop(opts: LoopOptions): Promise<LoopResult> {
   const messages = [...opts.messages];
-  const definitions = opts.tools.map((t) => t.definition);
-  const byName = new Map(opts.tools.map((t) => [t.definition.name, t] as const));
+  let definitions = opts.tools.map((t) => t.definition);
+  let byName = new Map(opts.tools.map((t) => [t.definition.name, t] as const));
   const maxResult = opts.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS;
   const maxSteps = Math.max(1, opts.maxSteps);
 
@@ -222,6 +228,12 @@ export async function runToolLoop(opts: LoopOptions): Promise<LoopResult> {
         isError,
         durationMs: Date.now() - started,
       });
+    }
+
+    const now = opts.toolsChanged?.();
+    if (now) {
+      definitions = now.map((t) => t.definition);
+      byName = new Map(now.map((t) => [t.definition.name, t] as const));
     }
 
     if (opts.isCancelled?.()) return done("", "cancelled");

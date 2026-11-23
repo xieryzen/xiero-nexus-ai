@@ -6,7 +6,7 @@ import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
 import { fingerprint } from "@/lib/ssh/host-key";
 import { limitConnections } from "@/lib/ssh/register";
-import { getServer, logCommand, noteConnection, serializeServer } from "@/lib/ssh/servers";
+import { getServer, registeredServer, logCommand, noteConnection, serializeServer } from "@/lib/ssh/servers";
 import { SshProblem, checkServer, targetOf } from "@/lib/ssh/sessions";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export const dynamic = "force-dynamic";
 export const POST = handle(async (req, { params }) => {
   const user = requireOwner(ONLY_OWNER);
   const { ip, userAgent } = getClientMeta(req);
-  const server = getServer(params.id!);
+  const server = registeredServer(params.id!);
   if (!server) throw Errors.notFound("Server not found");
   limitConnections(user);
   const record = (result: "ok" | "error") =>

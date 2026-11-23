@@ -87,6 +87,16 @@ export function getAccount(id: string): SiteAccount | undefined {
   return db.select().from(siteAccounts).where(eq(siteAccounts.id, id)).get();
 }
 
+/**
+ * An account an owner saved on the Browser page, for the routes that manage
+ * those. One that was handed over in a conversation is its account's to
+ * manage (Memory page), and is not found here.
+ */
+export function savedAccount(id: string): SiteAccount | undefined {
+  const row = getAccount(id);
+  return row && row.ownerId === null ? row : undefined;
+}
+
 /** The accounts the projects of this user may sign in with. */
 export function accountsFor(user: Pick<User, "role">): SiteAccount[] {
   return db

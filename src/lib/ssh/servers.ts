@@ -81,6 +81,16 @@ export function getServer(id: string): Server | undefined {
 }
 
 /**
+ * A machine an owner registered on the Servers page, for the routes that
+ * manage those. One an account handed over in a conversation is that
+ * account's to manage (Memory page), and is not found here.
+ */
+export function registeredServer(id: string): Server | undefined {
+  const row = getServer(id);
+  return row && row.ownerId === null ? row : undefined;
+}
+
+/**
  * The machines an owner registered that the projects of this account may
  * work on, by name. A machine an account handed over in a conversation
  * (`ownerId`, src/lib/access) is not among them: no project names it, and
