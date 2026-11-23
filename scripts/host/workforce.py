@@ -84,7 +84,35 @@
 #                        with its own model and tools. It takes minutes, and
 #                        each of its requests is one the provider counts.
 #   --keep-try-run       Keep what --try-run made on the Projects page.
+#   --try-assistant      Afterwards, one message to the assistant of Chat that
+#                        it can only do with a tool: it is asked to keep a
+#                        note that holds a number made up for this check. Says
+#                        which model answered, which tools it called and
+#                        whether the note is there, and removes the note and
+#                        the conversation again. An assistant that only
+#                        answers cannot work on a server someone hands over in
+#                        a conversation either. A few requests that the
+#                        provider counts. For the app from 1.11.
+#   --try-assistant-all  The same with each chat model that is switched on,
+#                        one after the other, named as an administrator names
+#                        one in Chat: which models of this installation call
+#                        a tool when they are asked to, which only answer,
+#                        and which do not answer. A few requests to each. It
+#                        ends with 1 when none of them called the tool.
+#   --mark-tools         With --try-assistant-all: mark the models that
+#                        called the tool as "Tool calling" where they are
+#                        not, so that Chat asks them before the others. No
+#                        mark is taken away.
+#   --try-ssh <host>     Afterwards, have the app read the host key of that
+#                        machine (host or host:port), which is the first
+#                        thing it does with a server that is handed over in a
+#                        conversation: whether the app reaches it over SSH
+#                        from where it runs. Nothing is signed in to and
+#                        nothing is kept. Needs to sign in as an owner.
 #   --inventory-only     Say what the app has, and stop. No file is needed.
+#                        With --try-assistant, --try-assistant-all or
+#                        --try-ssh: say it, do those, and stop; the workforce
+#                        is not looked at.
 #
 # In the file, a skill can also be one of your own: `"my-skill": {"uploaded":
 # true}` names a skill that is uploaded on the Skills page (or with
@@ -2238,6 +2266,219 @@ EVERY_AGENT = (
 )
 
 
+# How long the assistant is waited for while it says nothing: with the model
+# the app chooses (it may ask three, one after the other), and with one model
+# that is named.
+ASSISTANT_WAIT_S = 600
+ASSISTANT_EACH_WAIT_S = 180
+
+
+def ask_assistant(app, model_id=None, wait=ASSISTANT_WAIT_S):
+    """Ask the assistant of Chat to keep a note, and take the note and the conversation away again.
+
+    The assistant works on a server that someone hands over in a conversation
+    by calling a tool, and it keeps what it is told with one. A model that
+    only answers does neither, however well it writes: this asks for a note,
+    which needs no server and no password, and looks whether the note is
+    there afterwards. `model_id` names the model, as an administrator does in
+    Chat; without it the app chooses, as it does for a user.
+
+    Returns what became of it: "how" is "kept" (the note is there), "talked"
+    (an answer, and no tool was called), "missed" (tools were called, and no
+    note is there), "silent" (no answer) or "refused" (the app did not take
+    the message).
+    """
+    number = str(secrets.randbelow(900000) + 100000)
+    message = ('This is a check of this installation, made by its owner. Keep a note with your tool "remember" '
+               "that says exactly: The number of the check is %s. Then answer with one word: done." % number)
+    body = {"message": message}
+    if model_id:
+        body["modelRowId"] = model_id
+    status, data, events = app.follow("/api/chat", body, timeout=wait)
+    result = {"how": "refused", "status": status, "model": "", "tools": [], "answer": "", "error": "", "ended": "", "left": [], "tidied": ""}
+    if status != 200:
+        result["error"] = "%s%s" % (status, reason_of(data))
+        return result
+    chat = ""
+    for event in events:
+        if isinstance(event.get("chat"), dict) and event["chat"].get("id"):
+            chat = str(event["chat"]["id"])
+        if isinstance(event.get("tool"), dict):
+            result["tools"].append(event["tool"])
+        if event.get("error"):
+            result["error"] = str(event["error"])
+        if event.get("done"):
+            result["ended"] = str(event.get("finishReason") or "answer")
+            stored = event.get("message") if isinstance(event.get("message"), dict) else {}
+            result["answer"] = str(stored.get("content") or "")
+            details = stored.get("details") if isinstance(stored.get("details"), dict) else {}
+            result["model"] = str(details.get("model") or "")
+    notes = []
+    try:
+        if not result["ended"] and not result["error"]:
+            # The answer goes on in the app when nobody follows it: it is told to stop.
+            if chat:
+                app.call("POST", "/api/chats/%s/stop" % chat, {}, timeout=20)
+            result["error"] = "nothing came for %d minutes, and it was told to stop" % (wait // 60)
+        status, memory = app.call("GET", "/api/memory", timeout=30)
+        if status == 200 and isinstance(memory, dict):
+            notes = [n for n in memory.get("notes") or [] if isinstance(n, dict) and number in str(n.get("content") or "")]
+        if notes:
+            result["how"] = "kept"
+        elif result["error"]:
+            result["how"] = "silent"
+        elif result["tools"]:
+            result["how"] = "missed"
+        else:
+            result["how"] = "talked"
+    finally:
+        for note in notes:
+            if app.call("DELETE", "/api/memory/%s" % note.get("id"), timeout=20)[0] != 200:
+                result["left"].append("the note")
+        if chat:
+            gone = app.call("DELETE", "/api/chats/%s" % chat, timeout=20)[0]
+            for _ in range(3):
+                if gone != 409:
+                    break
+                # Still being answered: once more, when it has been told to stop.
+                time.sleep(3)
+                gone = app.call("DELETE", "/api/chats/%s" % chat, timeout=20)[0]
+            if gone != 200:
+                result["left"].append("the conversation (the app answered %s)" % gone)
+        if result["left"]:
+            result["tidied"] = "could not be removed: %s. It is on the Chat and Memory pages of the account that signed in." % ", ".join(result["left"])
+        elif chat or notes:
+            result["tidied"] = "%s removed again." % ("The note and the conversation were" if notes else "The conversation was")
+    return result
+
+
+def assistant_said(result, who):
+    """What became of one message to the assistant, in a line: (label, text)."""
+    called = ", ".join('"%s"' % str(t.get("name") or "?") for t in result["tools"])
+    refused = [t for t in result["tools"] if t.get("isError")]
+    if result["how"] == "kept":
+        return "ok", "%s called %s, and the note is there. It answered: %s" % (who, called or "a tool", short(result["answer"], 160) or "(nothing)")
+    if result["how"] == "refused":
+        return "FAILED", "the app did not take the message (%s).%s" % (
+            result["error"], " The assistant that works with tools comes with 1.11 of the app." if result["status"] in (400, 404, 422) else "")
+    if result["how"] == "silent":
+        return "FAILED", "%s gave no answer: %s" % (who, short(result["error"], 500))
+    if result["how"] == "talked":
+        return "FAILED", "%s answered without calling a tool: %s" % (who, short(result["answer"], 300) or "(nothing)")
+    return "FAILED", "%s called %s, and no note with the number is there%s." % (
+        who, called, ": " + short(str(refused[-1].get("result") or ""), 300) if refused else "")
+
+
+def try_assistant(app):
+    """One message to the assistant of Chat that it can only do with a tool, with the model the app chooses. Returns how many things failed."""
+    head("The assistant of Chat, asked for something it needs a tool for")
+    result = ask_assistant(app)
+    label, text = assistant_said(result, result["model"] or "The model that answered")
+    row(label, text)
+    if result["how"] == "kept":
+        more("The assistant of Chat can act with this model: keep what it is told, and work on what is handed over in a conversation.", indent=15)
+    elif result["how"] == "talked":
+        more("With the model Chat asks first, the assistant can only talk: it keeps no note, and does no work on a server that is "
+             'handed over in a conversation. Chat asks the models first that are marked "Tool calling" and that work: mark one that '
+             "does call tools (the Models page; --try-assistant-all says which ones do), or add one.", indent=15)
+    if result["ended"] and result["ended"] != "answer" and not result["error"]:
+        row("Note", 'the answer ended as "%s".' % result["ended"])
+    if result["tidied"]:
+        row("Tidied", result["tidied"])
+    return 0 if result["how"] == "kept" else 1
+
+
+def try_assistant_all(state, mark):
+    """The same message to each chat model that is switched on, named one after the other. Returns how many things failed.
+
+    Which models of the installation call a tool when they are asked to, and
+    which only answer: the app cannot know that of a model before it is
+    tried. With `mark`, the ones that did are marked for tool calling, which
+    is what Chat goes by when it chooses whom to ask first.
+    """
+    head("The assistant of Chat with each chat model: which ones call a tool")
+    providers = dict((p["id"], p) for p in state.providers)
+    wanted = []
+    out = []
+    for model in sorted(state.models, key=lambda m: (providers.get(m.get("providerId"), {}).get("name", ""), m.get("modelId", ""))):
+        provider = providers.get(model.get("providerId"), {})
+        if model.get("enabled", True) and provider.get("status", "enabled") == "enabled" and kind_of(caps_of(model)) == "chat" and not is_media_only(caps_of(model)):
+            label = "%s of %s" % (label_of(model), provider.get("name", "a provider"))
+            # A model that fails its check is one the app does not choose: it is not asked here either.
+            (out if model.get("hidden") else wanted).append((model, label))
+    for model, label in out:
+        row("left out", "%s fails its check, so the app does not choose it. Not asked." % label)
+    if not wanted:
+        row("Nothing", "the app has no chat model that is switched on and passes its check.")
+        return 1
+    kept = []
+    left = []
+    for index, (model, label) in enumerate(wanted):
+        if index:
+            time.sleep(1.5)  # a free provider takes one request a second
+        result = ask_assistant(state.app, model["id"], ASSISTANT_EACH_WAIT_S)
+        tag, text = assistant_said(result, label)
+        marked = "tool_calling" in caps_of(model)
+        if result["how"] == "kept":
+            kept.append((model, label, marked))
+            row("ok", text + ("" if marked else ' It is not marked "Tool calling".'))
+        elif result["how"] == "refused":
+            row("FAILED", text)
+            return 1
+        else:
+            # Not a failure of the check: it says what this model does.
+            row("only talks" if result["how"] == "talked" else "no answer" if result["how"] == "silent" else "no note", text)
+            if marked and result["how"] == "talked":
+                more('%s is marked "Tool calling", so Chat asks it before the others. Take the mark away on the Models page if it keeps answering like this.' % label, indent=15)
+        left += result["left"]
+    say()
+    row("Tools", "%s of %s called the tool when asked to%s." % (
+        len(kept), plural(len(wanted), "chat model"), ": " + ", ".join(label for _, label, _ in kept) if kept else ""))
+    if left:
+        row("Left", "some of what the check made could not be removed: it is on the Chat and Memory pages of the account that signed in.")
+    else:
+        row("Tidied", "the notes and the conversations of the check were removed again.")
+    if not kept:
+        more("With none of these models can the assistant of Chat act: it keeps no note, and does no work on a server that is handed over in a "
+             "conversation. Add a model that calls tools.", indent=15)
+        return 1
+    unmarked = [(model, label) for model, label, marked in kept if not marked]
+    if mark:
+        for model, label in unmarked:
+            status, data = state.app.call("PATCH", "/api/models/%s" % model["id"], {"capabilities": caps_of(model) + ["tool_calling"]}, timeout=30)
+            if status == 200:
+                row("Marked", '%s is marked "Tool calling" now: Chat asks it before the models that are not.' % label)
+            else:
+                row("FAILED", "%s could not be marked (%s%s)." % (label, status, reason_of(data)))
+                return 1
+        if not unmarked:
+            row("Marked", 'every model that called the tool is marked "Tool calling" already.')
+    elif unmarked:
+        more('Chat asks the models first that are marked "Tool calling" and that work. Not marked: %s. '
+             "--mark-tools marks them, or tick it on the Models page." % ", ".join(label for _, label in unmarked), indent=15)
+    return 0
+
+
+def try_ssh(app, host, port):
+    """Whether the app reaches a machine over SSH: it reads the host key, and signs in to nothing. Returns how many things failed."""
+    head("The way from the app to %s over SSH" % (host if port == 22 else "%s:%d" % (host, port)))
+    status, data = app.call("POST", "/api/servers/host-key", {"host": host, "port": port}, timeout=60)
+    if status == 200 and isinstance(data, dict) and data.get("fingerprint"):
+        row("ok", "the app reached port %d of %s and read its host key: %s %s" % (port, host, data.get("type") or "a key of an unknown kind", data["fingerprint"]))
+        more("Nothing was signed in to, and nothing was kept. A server at this address that is handed over in a conversation can be tried by the app; "
+             "compare the key with the one the machine itself shows (ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub).", indent=15)
+        return 0
+    if status == 404:
+        row("FAILED", "this version of the app cannot be asked for a machine's host key (it can from 1.9).")
+    elif status == 403:
+        row("FAILED", "only an owner can have the app reach a machine, and the account that signed in is none. Sign in as one: --as-owner, or --user with an owner's name.")
+    else:
+        row("FAILED", "the app did not read a host key from port %d of %s (%s%s)." % (port, host, status, reason_of(data)))
+        more("The app could not reach the machine from where it runs, or what answers there is no SSH server. "
+             "A server at this address that is handed over in a conversation is refused with the same words.", indent=15)
+    return 1
+
+
 def try_run(state, definition, slots, keep):
     """Small projects done by the models of the file. Returns how many things failed."""
     spec = definition.get("tryRun")
@@ -2421,6 +2662,10 @@ def options_from(argv):
     parser.add_argument("--only-usable", action="store_true")
     parser.add_argument("--try-run", action="store_true")
     parser.add_argument("--keep-try-run", action="store_true")
+    parser.add_argument("--try-assistant", action="store_true")
+    parser.add_argument("--try-assistant-all", action="store_true")
+    parser.add_argument("--mark-tools", action="store_true")
+    parser.add_argument("--try-ssh", default="")
     parser.add_argument("--test-media", action="store_true")
     parser.add_argument("--keep-test-media", action="store_true")
     parser.add_argument("--inventory-only", action="store_true")
@@ -2458,6 +2703,16 @@ def options_from(argv):
         options.account = {"username": name, "email": email, "role": role}
     else:
         options.account = None
+    if options.mark_tools and not options.try_assistant_all:
+        raise Wrong("--mark-tools goes with --try-assistant-all, which finds the models that call tools.")
+    if options.try_ssh:
+        found = re.match(r"^([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(?::([0-9]{1,5}))?$", options.try_ssh.strip())
+        port = int(found.group(2)) if found and found.group(2) else 22
+        if not found or not 1 <= port <= 65535:
+            raise Wrong("--try-ssh is a host name or an IPv4 address, with :port when it is not 22.")
+        options.try_ssh = (found.group(1), port)
+    else:
+        options.try_ssh = None
     # Addresses of skill files: named as options, and one a line in the environment.
     options.skill_url = [u.strip() for u in options.skill_url + os.environ.get("NEXUS_SKILL_URLS", "").splitlines() if u.strip()]
     for url in options.skill_url:
@@ -2499,6 +2754,15 @@ def run(argv):
         state = State(app).read().read_server()
         show_inventory(state, me)
         if options.inventory_only:
+            # What the app has, and what it can do without a file: the workforce is not looked at.
+            if options.dry_run:
+                if not_tried(options, "%s"):
+                    say("Dry run: %s." % not_tried(options, "%s"))
+                return 0
+            failed += more_checks(state, options)
+            if failed:
+                head("%s failed." % plural(failed, "check"))
+                return 1
             return 0
 
         plan = make_plan(state, definition, options, me)
@@ -2592,6 +2856,7 @@ def run(argv):
             failed += test_media(state, definition, plan.slots, options.keep_test_media)
         if options.try_run:
             failed += try_run(state, definition, plan.slots, options.keep_try_run)
+        failed += more_checks(state, options)
         if failed:
             head("%s failed. The workforce itself is as the file says." % plural(failed, "check"))
             return 1
@@ -2602,12 +2867,26 @@ def run(argv):
 
 def not_tried(options, text):
     """What a dry run leaves out of the checks that were asked for."""
-    tests = options.test or options.test_all or options.test_media or options.only_usable
-    if tests and options.try_run:
-        return text % "no model was tried and no project was run"
+    left = []
+    if options.test or options.test_all or options.test_media or options.only_usable or options.try_assistant or options.try_assistant_all:
+        left.append("no model was tried")
     if options.try_run:
-        return text % "no project was run"
-    return text % "no model was tried" if tests else ""
+        left.append("no project was run")
+    if options.try_ssh:
+        left.append("no machine was asked for its host key")
+    return text % " and ".join(left) if left else ""
+
+
+def more_checks(state, options):
+    """The checks that need no file: the assistant of Chat, and the way to a machine over SSH. Returns how many failed."""
+    failed = 0
+    if options.try_assistant:
+        failed += try_assistant(state.app)
+    if options.try_assistant_all:
+        failed += try_assistant_all(state.read(), options.mark_tools)
+    if options.try_ssh:
+        failed += try_ssh(state.app, options.try_ssh[0], options.try_ssh[1])
+    return failed
 
 
 def main():

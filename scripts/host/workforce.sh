@@ -66,7 +66,21 @@
 #   --try-run            Afterwards, a small project on the models of the file,
 #                        and a task for each agent where the file asks for it;
 #                        deleted again when it has ended.
-#   --inventory-only     Say what the app has, and stop.
+#   --try-assistant      Afterwards, one message to the assistant of Chat that it
+#                        can only do with a tool (keep a note), and whether it
+#                        did; the note and the conversation are removed again.
+#   --try-assistant-all  The same with each chat model that is switched on:
+#                        which ones call a tool, which only answer. With
+#                        --mark-tools, the ones that did are marked "Tool
+#                        calling", so that Chat asks them first.
+#   --try-ssh <host>     Afterwards, have the app read the host key of that
+#                        machine (host or host:port): whether the app reaches
+#                        it over SSH from where it runs, as it has to for a
+#                        server that is handed over in a conversation. Nothing
+#                        is signed in to. Needs an owner (--as-owner).
+#   --inventory-only     Say what the app has, and stop. With --try-assistant,
+#                        --try-assistant-all or --try-ssh: say it, do those,
+#                        and stop.
 #
 # The password is read from the app's .env by workforce.py, or taken from
 # NEXUS_PASSWORD when that is set; it is not printed and is on no command
@@ -105,14 +119,14 @@ while [ "$#" -gt 0 ]; do
     --env-file) need_value "$@"; ENV_FILE="$2"; shift 2 ;;
     --volumes) need_value "$@"; VOLUMES="$2"; shift 2 ;;
     --wings-config) need_value "$@"; WINGS_CONFIG="$2"; shift 2 ;;
-    --file | --user | --only | --account | --account-email | --account-role | --upload-skill | --skill-url) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
+    --file | --user | --only | --account | --account-email | --account-role | --upload-skill | --skill-url | --try-ssh) need_value "$@"; PASS_ON+=("$1" "$2"); shift 2 ;;
     --skill-url-sealed) need_value "$@"; SEALED_URLS+=("$2"); shift 2 ;;
     --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
-    --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --try-assistant | --try-assistant-all | --mark-tools | --inventory-only) PASS_ON+=("$1"); shift ;;
     --as-owner) AS_OWNER="1"; shift ;;
     -h | --help)
-      sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,94p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;

@@ -70,6 +70,18 @@ done. The assistant remembers the person across conversations.
   signs in. `GET /api/servers/commands?server=handed`.
 - A page of the browser that waits for a person is opened by the account
   whose run or conversation it is, whatever its role.
+- **On the node: is the assistant able to act here?** `workforce.sh
+  --try-assistant` sends the assistant of Chat one message that it can only
+  do with a tool (keep a note), says which model answered and whether it
+  called the tool, and removes the note and the conversation again.
+  `--try-assistant-all` does it with each chat model that is switched on
+  and says which ones call a tool and which only answer; with
+  `--mark-tools` the ones that did are marked "Tool calling", which is what
+  Chat goes by when it chooses whom to ask first.
+  `--try-ssh <host>` has the app read the host key of a machine: whether
+  the app reaches it over SSH from where it runs. Nothing is signed in to.
+  They go with `--inventory-only`, and through the deploy workflow with
+  `options`.
 
 ### Changed
 
@@ -77,8 +89,12 @@ done. The assistant remembers the person across conversations.
   browser**, with what that user handed over themselves and with nothing
   else. Before, no project of a user worked on a server or in a browser.
   `OWN_ACCESS=admins` keeps it as it was for users.
-- **Chat for a user asks the models that take tools first.** The former
-  form of `POST /api/chat` (`messages`) is answered as before.
+- **Where the app chooses the model of a conversation** (always, for a
+  user) it asks the models marked "Tool calling" that work first. Every
+  model is offered the tools; one whose provider refuses a request because
+  of them is asked again without, and is told to say what it would do
+  instead of writing as if it had done it. The former form of
+  `POST /api/chat` (`messages`) is answered as before.
 - A name of a server or of a site account has to be free among the ones of
   its page, no longer among everything in the database.
 - An answer of the chat is no longer stopped by closing the page.

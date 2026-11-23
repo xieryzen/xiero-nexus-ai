@@ -456,10 +456,20 @@ server.
 - **Chat is a different page.** Conversations are kept and listed; there
   is a Memory page in everyone's menu. A program that calls
   `POST /api/chat` with `messages` gets what it got before.
-- A user's chat asks the models marked for tool calling first. With no
-  such model that works, it answers as before, without tools.
+- Where the app chooses the model of a conversation (always, for a user),
+  it asks the models marked **Tool calling** that work first. Mark the
+  models that do call tools: `workforce.sh --try-assistant-all` says which
+  ones do, and `--mark-tools` marks them.
 - An answer that is being worked on goes on when the page is closed, for
   up to half an hour, and is stopped with the Stop button.
+- **See whether the assistant can act on this installation.** It works on
+  what is handed over by calling tools, and a model that only answers
+  cannot. On the node, after the upgrade:
+  `sudo bash workforce.sh --server <id> --as-owner --inventory-only --try-assistant --try-ssh <a machine of yours>`
+  (through the deploy workflow: action `workforce`, with those as
+  `options`). It asks the assistant to keep one note and says whether its
+  model called the tool, and has the app read the machine's host key,
+  signing in to nothing ([scripts/host/README.md](scripts/host/README.md)).
 
 ### Roll back
 

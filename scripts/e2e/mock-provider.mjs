@@ -215,6 +215,9 @@ function embedding(text, dimensions = 24) {
  * The assistant of a conversation (the Chat page) does what the last message
  * of the person lists, a line each, in that order:
  *                     DO: {"tool": "run_on_server", "args": {"command": "uname -a"}}
+ * and, asked in plain words to keep a note with its tool "remember" that
+ * says exactly something (the check of scripts/host/workforce.py), keeps
+ * that note. `/__assistant?follows=0` makes it a model that only answers.
  *
  * Returns the tool calls of this step, or null to answer in text.
  */
@@ -233,6 +236,9 @@ function nextToolCalls(body) {
       }
     });
     const made = messages.slice(at + 1).filter((m) => m.role === "tool").length;
+    // Asked in words, as a person or a check asks a real model.
+    const note = said.match(/Keep a note with your tool "remember" that says exactly: (.+?\.) Then answer/);
+    if (calls.length === 0 && note) return assistantFollows && made === 0 && offered.has("remember") ? [{ name: "remember", args: { note: note[1] } }] : null;
     const next = calls[made];
     if (!next) return null;
     // "args_b64": the arguments as base64 of their JSON, for what a message must not say in plain text.
@@ -342,6 +348,8 @@ function nextToolCalls(body) {
 
 /** How the instructions of the assistant of a conversation begin (src/lib/chat/turn.ts). */
 const ASSISTANT = "You are the assistant of Xiero Nexus AI";
+/** Whether the assistant does what it is asked in words with its tools, or only answers. */
+let assistantFollows = true;
 
 /**
  * What the assistant of a conversation was shown, for the checks: its tools,
@@ -1103,6 +1111,10 @@ const api = http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
   if (url.pathname === "/__jobs") return send(res, 200, [...jobs.values()]);
+  if (url.pathname === "/__assistant") {
+    assistantFollows = url.searchParams.get("follows") !== "0";
+    return send(res, 200, { ok: true, follows: assistantFollows });
+  }
   if (url.pathname === "/__force") {
     const model = url.searchParams.get("model") ?? "";
     const status = Number(url.searchParams.get("status") ?? 200);

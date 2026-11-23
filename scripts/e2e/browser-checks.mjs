@@ -1225,28 +1225,29 @@ try {
     await open("/dashboard/chat");
     check("Chat says that the assistant can be handed a server, a site or a key", (await has("Write how to sign in to a server, a web site or an API")) && (await has("What you tell it is remembered")), (await text()).slice(0, 300));
     await chooseModel();
-    await write(`ini vps ku, tolong cek\nIP: 127.0.0.1\nPort: ${SSH_PORT}\nUser: root\nPass: ${now.password}\nDO: {"tool":"run_on_server","args":{"command":"echo from-the-chat-page; id -un"}}`);
+    await write(`ini vps ku, tolong cek\nIP: 127.0.0.1\nPort: ${SSH_PORT}\nUser: root\nPass: ${now.password}\nDO: {"tool":"run_on_server","args":{"server":"vps-127-0-0-1","command":"echo from-the-chat-page-$((6*7)); id -un"}}`);
     await clickText(/^\s*Send\s*$/);
-    check("the assistant works on the server that was written into the message", await waitText("DONE after 1 tool results.", 40_000), (await transcript()).slice(0, 400));
+    // What the machine printed, which is in no message: the command says $((6*7)), the shell 42.
+    check("the assistant works on the server that was written into the message", (await waitText("DONE after 1 tool results.", 40_000)) && (await waitText("from-the-chat-page-42")), (await transcript()).slice(0, 400));
     const said = await transcript();
     check("  the message is shown without its password, with what became of it", !said.includes(now.password) && said.includes('Pass: [password kept by the app as "vps-127-0-0-1"]'), said.slice(0, 300));
     const keptLine = await page.$eval('[data-testid="kept"]', (el) => el.innerText).catch(() => "");
     check("  under it: that the server was tried and kept, and under which name", keptLine.includes(`root@127.0.0.1:${SSH_PORT}`) && keptLine.includes("Server kept: vps-127-0-0-1") && keptLine.includes(now.fingerprint), keptLine);
     await clickText(/with tools/);
-    check("  what the assistant did with its tools can be read", (await waitText("echo from-the-chat-page; id -un")) && (await has("from-the-chat-page")), (await transcript()).slice(0, 400));
+    check("  what the assistant did with its tools can be read: the command, and what it printed", (await waitText("echo from-the-chat-page-$((6*7)); id -un")) && (await has("from-the-chat-page-42")), (await transcript()).slice(0, 400));
     check("  no password is anywhere on the page", !(await text()).includes(now.password), null);
     await snap("chat-handover");
     const chatUrl = page.url();
 
     // What an owner is shown of it: what was run, apart from the machines of the Servers page.
     await open("/dashboard/servers");
-    check("the log of the Servers page is the one of its own machines", (await logRows()).length > 0 && !(await logRows()).some((row) => row.includes("vps-127-0-0-1")), (await logRows()).slice(0, 3));
+    check("the log of the Servers page is the one of its own machines: what the conversation ran is not in it", (await logRows()).length > 0 && !(await logRows()).some((row) => row.includes("from-the-chat-page")), (await logRows()).slice(0, 3));
     await page.select('select[aria-label="Show the log of"]', "handed");
     await page.waitForFunction(() => document.querySelector('[data-testid="server-log"]')?.innerText.includes("from-the-chat-page"), { timeout: 15_000 }).catch(() => undefined);
     const handedRows = await logRows();
     check(
       "  asked for, it lists what was run on the servers handed over in conversations, and for whom",
-      handedRows.some((row) => row.includes("vps-127-0-0-1") && row.includes("echo from-the-chat-page; id -un") && row.includes("for admin")) && !(await text()).includes(now.password),
+      handedRows.some((row) => row.includes("vps-127-0-0-1") && row.includes("echo from-the-chat-page-$((6*7)); id -un") && row.includes("for admin")) && !(await text()).includes(now.password),
       handedRows.slice(0, 3),
     );
     await page.goto(chatUrl, { waitUntil: "networkidle2" });
@@ -1264,7 +1265,7 @@ try {
     // An answer that works for a while: the page is left, and finds the answer when it comes back.
     await clickText(/New conversation/);
     await chooseModel();
-    await write('tolong tunggu sebentar\nDO: {"tool":"run_on_server","args":{"command":"sleep 5; echo finished-while-away"}}');
+    await write('tolong tunggu sebentar\nDO: {"tool":"run_on_server","args":{"server":"vps-127-0-0-1","command":"sleep 5; echo finished-while-away-$((6*7))"}}');
     await clickText(/^\s*Send\s*$/);
     await page.waitForFunction(() => /\?c=[0-9a-f-]{36}$/.test(location.href), { timeout: 15_000 }).catch(() => undefined);
     const awayUrl = page.url();
@@ -1275,7 +1276,7 @@ try {
     check("  a note can be written by hand", (await waitText("Written by you")) && (await page.$eval('[data-testid="notes-list"]', (el) => el.innerText).catch(() => "")).includes("Laporan selalu dalam bahasa Indonesia."), null);
     await snap("memory");
     await page.goto(awayUrl, { waitUntil: "networkidle2" });
-    check("an answer that was left to itself is there when the page comes back", await waitText("finished-while-away", 40_000), (await transcript()).slice(0, 400));
+    check("an answer that was left to itself is there when the page comes back", await waitText("finished-while-away-42", 40_000), (await transcript()).slice(0, 400));
     await page.waitForFunction(() => ![...document.querySelectorAll("main button")].some((b) => b.innerText.trim() === "Stop"), { timeout: 15_000 }).catch(() => undefined);
     check("  and the conversation takes the next message: nothing is being worked on any more", (await clickableText(/^\s*Stop\s*$/)) === false && (await page.$("textarea[placeholder^='Message']")) !== null, null);
 

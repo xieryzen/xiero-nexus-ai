@@ -1125,11 +1125,16 @@ back. One answer takes up to 16 steps and half an hour.
   waits for the account whose conversation it is, whatever its role: the
   conversation shows the link, and a notification is sent.
 - **Which model.** An owner or an administrator picks one, or leaves it to
-  the app. For a user the app chooses: the models that take tools first, the
-  ones that work before the ones that rest. A step a model does not answer
-  is asked of the next one, which goes on from what was done so far. Where
-  no model takes tools, the assistant answers without them and is told so,
-  so that it does not write as if it had done anything.
+  the app. For a user the app chooses: the models marked **Tool calling**
+  first, the ones that work before the ones that rest; up to three are
+  asked. A step a model does not answer is asked of the next one, which
+  goes on from what was done so far. Every model is offered the tools.
+  Where a provider refuses a request because of them, the model is asked
+  again without, and is told so, so that it does not write as if it had
+  done anything. A model that takes the tools and never calls one only
+  talks: which models of an installation do call them is found out with
+  `workforce.sh --try-assistant-all`
+  ([scripts/host/README.md](scripts/host/README.md)).
 - The former form of `POST /api/chat`, the whole conversation in `messages`,
   is answered as before: one answer, no tools, nothing kept.
 
@@ -1182,7 +1187,11 @@ What this is not, and what was tested:
   the finder on some sixty messages in English and Indonesian
   (`tests/access-find.test.ts`). **Not tested: how well a particular real
   model uses these tools.** That depends on the model: one that does not
-  take tools can only answer.
+  take tools can only answer. On the machine the app runs on,
+  `workforce.sh --try-assistant` asks the assistant of that installation
+  for one thing it needs a tool for and says whether its model called it,
+  and `--try-ssh <host>` whether the app reaches a machine over SSH from
+  where it runs ([scripts/host/README.md](scripts/host/README.md)).
 
 ## Provider adapters
 
@@ -1762,8 +1771,12 @@ host is a site's, where a password may be typed, which cookies are a
 site's session, what asks for a person, what an agent reads of a page and
 what is kept out of it; the gate of the browser service: private addresses
 however they are written, where a page may go, its proxy with real
-connections, the token), and the release tooling (channels, version
-ordering, release selection, checksums).
+connections, the token), access handed over in a conversation (what is found
+in a message and what is left where it is, in English and Indonesian; who
+may hand access over; where a key may be sent; what a run is handed; the
+marks the app writes are nobody's password), the upgrade of a 1.10
+database, and the release tooling
+(channels, version ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, the end-to-end checks
 below, and the tests of the [host scripts](scripts/host#tests). It then builds
@@ -1831,7 +1844,16 @@ answer done by a stand-in, and the run's result with it; a model that rests
 after one request without an answer, is put away after three or after one
 answer that asking again does not change, and is back when it answers; a
 model that is put away asked last; a project that wants no stand-in; and
-never a stand-in that costs more. At the end the server
+never a stand-in that costs more. From v1.11.0: a server, a site account
+and a key written into a message of Chat, by a user and by an owner: taken
+out before the provider is asked (the mock records every request, and none
+holds a password), tried against the SSH server and the site of the tests,
+used by the assistant in that conversation and in a new one, by the
+account's project runs, and by nobody else; a wrong password, an address
+on a private network, sign-ins that keep failing; a key that is sent to its
+site and to no other; notes and earlier conversations in front of the
+assistant; an answer that goes on when its page goes away, and one that is
+stopped. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with

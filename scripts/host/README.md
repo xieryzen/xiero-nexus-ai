@@ -340,6 +340,8 @@ sudo bash workforce.sh --server 1a2b3c4d --dry-run        # what the app has, wh
 sudo bash workforce.sh --server 1a2b3c4d --yes --test     # add it, then ask each chat model for one word
 sudo bash workforce.sh --server 1a2b3c4d --yes --try-run  # add it, then have the agents do a small project
 sudo bash workforce.sh --server 1a2b3c4d --yes --only-usable  # add it, then switch off the models that cannot be used
+sudo bash workforce.sh --server 1a2b3c4d --as-owner --inventory-only --try-assistant --try-ssh 203.0.113.7
+                                                          # can the assistant of Chat act, and does the app reach that machine
 ```
 
 `workforce.sh` finds the port the server's app answers on and the app's
@@ -456,6 +458,30 @@ when it names no team), so that each is seen at work with its own first model
 and its tools. Both are deleted again (`--keep-try-run` keeps them). One word
 from a model says that it answers; whether a provider allows the many
 requests of a project is only seen in one.
+
+`--try-assistant` is about Chat, from 1.11 of the app. The assistant works on
+a server that someone hands over in a conversation by **calling a tool**, and
+a model that only answers cannot, however well it writes. This sends the
+assistant one message that it can only do with a tool ("keep a note that says
+exactly: the number of the check is 482913"), and looks whether the note is
+there afterwards. It says which model answered and which tools it called, and
+removes the note and the conversation again. No server and no password are
+part of it. When it fails with "answered without calling a tool", Chat on
+this installation talks and does nothing: mark a model that does call tools
+as **Tool calling** on the Models page (Chat asks those first), or add one.
+Which models do is not something the app can know before they are tried:
+`--try-assistant-all` sends the same message to each chat model that is
+switched on, named one after the other, and says for each whether it called
+the tool, only answered, or did not answer. With `--mark-tools` the ones that
+called it are marked **Tool calling** where they are not; no mark is taken
+away. It ends with 1 when none of them called the tool.
+
+`--try-ssh <host>` (or `host:port`) has the app read the host key of that
+machine, which is the first thing the app does with a server that is handed
+over: it says whether the app reaches the machine over SSH **from where it
+runs**, which a container behind a firewall may not. Nothing is signed in to
+and nothing is kept; it needs an owner. Both go with `--inventory-only`, and
+then the workforce is not looked at.
 
 From 1.8 the app itself leaves a chat model that fails its check out of its
 lists, and takes it back when it answers again. `--only-usable` goes further
@@ -868,6 +894,8 @@ bash scripts/host/over-ssh.sh site
 # The workforce of workforce.json:
 bash scripts/host/over-ssh.sh workforce-plan            # changes nothing
 bash scripts/host/over-ssh.sh workforce -- --test
+# Can the assistant of Chat act on this installation, and does the app reach a machine (the workforce is not looked at):
+bash scripts/host/over-ssh.sh workforce -- --as-owner --inventory-only --try-assistant --try-ssh 203.0.113.7
 
 # The browser agents work in:
 bash scripts/host/over-ssh.sh browser-plan              # changes nothing
@@ -1026,7 +1054,9 @@ bash scripts/host/test/site.sh
 
 # The workforce (under a minute, after "npm run build"): starts the built app
 # with the mock providers of the end-to-end tests, puts the committed
-# workforce.json into it, and runs both of its workflows in a project.
+# workforce.json into it, and runs both of its workflows in a project. The
+# assistant of Chat is asked for a note, by the app's choice and with each
+# model, and the app for the host key of the SSH server of the tests.
 bash scripts/host/test/workforce.sh
 
 # The browser service on a made-up host (a few seconds): stand-ins for docker
