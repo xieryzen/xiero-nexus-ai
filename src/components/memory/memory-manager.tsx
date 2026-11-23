@@ -84,7 +84,7 @@ export function MemoryManager({
 
       <Card
         title="Access you handed over"
-        description="Servers, site accounts and keys you wrote in a conversation or in a project. The app took the password out of the text before any model saw it and keeps it encrypted; the assistant and the agents of your projects work with it by name."
+        description="Servers, site accounts and keys you wrote in a conversation or in a project. The app took the password out of the text before the AI saw it and keeps it encrypted; the assistant and the agents of your projects work with it by name."
       >
         {!handsOver && (
           <div className="mb-4">

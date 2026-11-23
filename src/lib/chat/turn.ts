@@ -359,7 +359,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
     }
     const content =
       result.content.trim() ||
-      (toolNotes.length > 0 ? "The model ended without an answer. What it did is listed with this message." : "The model gave an empty answer. Send the message again.");
+      (toolNotes.length > 0 ? "No answer was written. What was done is listed with this message." : "The answer came back empty. Send the message again.");
     const stored = store(content, result.stopped === "answer" ? {} : { stopped: result.stopped });
     emit({ done: true, finishReason: result.stopped, usage: { promptTokens, completionTokens }, message: stored });
   } catch (err) {

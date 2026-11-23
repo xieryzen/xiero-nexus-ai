@@ -47,7 +47,7 @@ test("OWN_ACCESS: everyone hands access over unless it names fewer", () => {
 });
 
 test("names: a machine by its address, a site by its host, a key by what it is called", () => {
-  assert.equal(serverNameFor("103.150.60.19"), "vps-103-150-60-19");
+  assert.equal(serverNameFor("203.0.113.7"), "vps-203-0-113-7");
   assert.equal(serverNameFor(" SRV1.Example.com "), "srv1.example.com");
   assert.equal(serverNameFor("a-very-long-name-of-a-machine.in-a-long-zone.example.com").length <= 36, true);
   assert.equal(serverNameFor("???"), "server");

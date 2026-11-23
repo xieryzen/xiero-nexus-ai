@@ -61,7 +61,7 @@ function slug(text: string, max: number): string {
     .replace(/[^a-z0-9]+$/g, "");
 }
 
-/** The name a machine is kept under, from where it is: "vps-103-150-60-19", "srv1.example.com". */
+/** The name a machine is kept under, from where it is: "vps-203-0-113-7", "srv1.example.com". */
 export function serverNameFor(host: string): string {
   const bare = host.trim().toLowerCase();
   if (/^[\d.]+$/.test(bare)) return `vps-${bare.replace(/\./g, "-")}`;
@@ -241,7 +241,7 @@ export interface Kept {
   kind: "server" | "site" | "key";
   /** The name it is kept under. Empty when nothing was kept. */
   name: string;
-  /** Where it is, without what signs in: "root@103.150.60.19:22", "admin at panel.example.com", "Discord bot token". */
+  /** Where it is, without what signs in: "root@203.0.113.7:22", "admin at panel.example.com", "Discord bot token". */
   where: string;
   ok: boolean;
   /** It was there already and what signs in was replaced. */

@@ -23,7 +23,8 @@ export default function ServersPage() {
         open: open.filter((s) => s.serverId === row.id).map(({ serverId: _serverId, ...rest }) => rest),
       }))}
       // An owner reads all of the log; an administrator, of the machines opened to administrators.
-      initialLog={listCommands({ among: owner ? undefined : rows.map((r) => r.id), limit: 30 })}
+      // The machines of this page. What accounts handed over in conversations is listed apart, when an owner asks for it.
+      initialLog={listCommands({ among: owner ? undefined : rows.map((r) => r.id), handed: false, limit: 30 })}
       canManage={owner}
       keepaliveSeconds={Math.round(keepaliveMs() / 1000)}
     />

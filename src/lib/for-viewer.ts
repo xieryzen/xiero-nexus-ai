@@ -114,9 +114,11 @@ export function projectFor(role: Role, project: ProjectDTO): ProjectDTO {
     imageModelRowId: null,
     videoModelRowId: null,
     speechModelRowId: null,
-    // Servers are part of the setup, and no project of a user works on one.
+    // The servers and the site accounts a project names are part of the
+    // setup, and a user's project names none. What the user handed over
+    // themselves is not in these lists: the page says it under the goal
+    // (src/lib/access).
     servers: [],
-    // Nor does one sign in with a site account.
     siteAccounts: [],
     finalDeliverable: deliverableFor(role, project.finalDeliverable),
     error: textFor(role, project.error),

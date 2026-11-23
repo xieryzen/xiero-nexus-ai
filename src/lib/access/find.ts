@@ -321,7 +321,7 @@ function fieldsOf(text: string, taken: Span[]): Field[] {
     if (free(start, start + m[1]!.length)) fields.push({ kind: "port", value: m[1]!, start, end: start + m[1]!.length, label: "ssh", explicit: true });
   }
 
-  // An address that stands alone: "https://panel.example.com/login", "103.150.60.19".
+  // An address that stands alone: "https://panel.example.com/login", "203.0.113.7".
   const link = /https?:\/\/[^\s<>"'`)\]]+/gi;
   for (let m = link.exec(text); m; m = link.exec(text)) {
     const value = m[0].replace(/[.,;!?]+$/, "");

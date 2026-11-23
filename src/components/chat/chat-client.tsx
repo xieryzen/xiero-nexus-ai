@@ -535,7 +535,7 @@ export function ChatClient({
               {reach?.handsOver !== false && (
                 <p className="max-w-xl text-xs">
                   Write how to sign in to a server, a web site or an API (address, user name, password or key) in a message and say what to do: the app
-                  takes the password out before any model sees it, keeps it encrypted, and the assistant works with it from then on, in every conversation.
+                  takes the password out before the AI sees it, keeps it encrypted, and the assistant works with it from then on, in every conversation.
                 </p>
               )}
               <p className="max-w-xl text-xs">What you tell it is remembered: a new conversation starts with what the earlier ones established.</p>

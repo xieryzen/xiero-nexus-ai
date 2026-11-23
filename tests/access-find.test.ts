@@ -42,7 +42,7 @@ function each(cases: [string, string[]][]): void {
 
 test("a server: an address, who to sign in as, and a password", () => {
   each([
-    ["ini vps ku, tolong cek\nIP: 103.150.60.19\nPort: 22\nUser: root\nPass: Rahasia#123", ["server root@103.150.60.19:22 Rahasia#123"]],
+    ["ini vps ku, tolong cek\nIP: 203.0.113.7\nPort: 22\nUser: root\nPass: Rahasia#123", ["server root@203.0.113.7:22 Rahasia#123"]],
     ["VPS 203.0.113.9 port 2222 user deploy pass Abc123!x, tolong restart nginx", ["server deploy@203.0.113.9:2222 Abc123!x"]],
     ["ssh root@203.0.113.9 password Abc123!x", ["server root@203.0.113.9:22 Abc123!x"]],
     ["ssh deploy@srv1.example.com -p 2200 pw: s3cr3t.Pass", ["server deploy@srv1.example.com:2200 s3cr3t.Pass"]],
@@ -193,7 +193,7 @@ test("what hands nothing over stays as it was written", () => {
 });
 
 test("the secrets are struck where they stand, and nothing else", () => {
-  assert.equal(struck("ini vps ku\nIP: 103.150.60.19\nUser: root\nPass: Rahasia#123\ntolong cek disk"), "ini vps ku\nIP: 103.150.60.19\nUser: root\nPass: [password]\ntolong cek disk");
+  assert.equal(struck("ini vps ku\nIP: 203.0.113.7\nUser: root\nPass: Rahasia#123\ntolong cek disk"), "ini vps ku\nIP: 203.0.113.7\nUser: root\nPass: [password]\ntolong cek disk");
   assert.equal(struck('{"host": "203.0.113.9", "username": "root", "password": "p@ss,w0rd"}'), '{"host": "203.0.113.9", "username": "root", "password": "[password]"}');
   assert.equal(struck("VPS 203.0.113.9 user deploy pass Abc123!x, tolong restart nginx"), "VPS 203.0.113.9 user deploy pass [password], tolong restart nginx");
   assert.equal(struck("token api toko: tk_live_9f8e7d6c5b4a39281706XYZ untuk https://toko.example.com"), "token api toko: [key] untuk https://toko.example.com");

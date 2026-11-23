@@ -667,8 +667,9 @@ for administrators and owners.
 | Which model does the work | the app chooses | they choose |
 | Agents, teams, workflows | who they are and what they are for | also what they are told, their models, tools and skills |
 | Skills | not shown | everything |
-| Servers | not shown; no project of a user works on one | an owner registers them; an administrator sees the ones opened to administrators |
-| Browser | not shown; no agent of a user's project works in one | their agents work in it; an owner saves the site accounts, an administrator sees the ones opened to administrators |
+| Servers | not shown. Their assistant and the runs of their projects work on the machines they handed over themselves ([v1.11.0](#access-you-hand-over-in-a-conversation-and-memory-v1110)), and on no other | an owner registers them; an administrator sees the ones opened to administrators |
+| Browser | not shown. Their assistant and their agents sign in with the site accounts they handed over themselves (v1.11.0), and open nothing else in it | their agents work in it; an owner saves the site accounts, an administrator sees the ones opened to administrators |
+| Chat and Memory | their conversations, what they handed over and what is remembered about them; no model to choose | the same of their own, and the model can be chosen |
 | Usage | their tokens and requests | everyone's, with providers, models and costs |
 | When something fails | that it did not work, and what to do | what the provider answered |
 
@@ -879,7 +880,9 @@ How signing in works:
 - **Whose projects.** Agents work in the browser in the projects of owners
   and administrators. An owner's projects may sign in with any account; an
   administrator's with the ones the owner opened to administrators; a
-  user's projects get no browser. A project that names site accounts is
+  user's projects get the browser only to sign in with the site accounts
+  that user handed over in a conversation (v1.11.0), and only while the
+  browser service keeps pages from private networks. A project that names site accounts is
   run, changed, scheduled and approved only by an account whose own
   projects may use them.
 - **What an agent can do on a site** is whatever the account can. Save an
@@ -1009,6 +1012,177 @@ the next model, as before. What was tested is the app against providers of
 the tests that answer the way Gemini and the OpenAI-style providers are
 documented and reported to answer; **no run was waited through against a
 live provider's quota**.
+
+## Access you hand over in a conversation, and memory (v1.11.0)
+
+In **Chat**, write how to sign in to your server, to a web site or to an API,
+and say what you want done:
+
+```text
+ini vps ku, tolong cek kenapa nginx mati
+IP: 203.0.113.7
+User: root
+Pass: ********
+```
+
+The app takes the password out of the message **before any model is asked and
+before the message is stored**, signs in once to try it, keeps it encrypted,
+and gives the assistant a name for it (`vps-203-0-113-7`). The assistant then
+does the work with its tools, in that conversation and in every later one,
+and so do the agents in the runs of your projects. Nothing has to be set up
+on the Servers or the Browser page, and no agent needs a tool ticked for it.
+
+- **What is recognised**, by its shape and without a model:
+  - *a server*: a password or a private key that comes with an IP address,
+    or with a host name and words such as `ssh`, `vps`, `root`
+    (`ssh deploy@srv.example.com -p 2200 pw: …`, a form of `IP:` / `User:` /
+    `Pass:` lines, a JSON object, `203.0.113.7 root ********`, Indonesian
+    `usernya … passwordnya …`). Without a user name it is `root`;
+  - *an account on a web site*: a web address, a name and a password
+    (`https://panel.example.com/login user budi pass …`); a panel on a bare
+    address (`panel 203.0.113.7:8080 user admin pass …`) is asked as
+    `http://203.0.113.7:8080`;
+  - *a key*: what is called a token, an API key, a secret or a bearer, and
+    what has the shape of one (GitHub, Discord, Telegram, Slack, Stripe,
+    OpenAI-style `sk-…` and others). `OPENAI_API_KEY=…` and
+    `DISCORD_TOKEN=…` are understood by the name of the setting;
+  - *the password of something else on a machine*: a database, FTP, a
+    mailbox (`db mysql: host … user app password …`, `MYSQL_PASSWORD=…`).
+    The app cannot try such a sign-in; it keeps the password as a key
+    (`mysql-password`) that a command on a server can name.
+
+  A password that comes with nothing it opens (`password: …` alone) is left
+  where it is. So is everything in a shape the app does not know: **that goes
+  to the model as you wrote it**, and the assistant is told to keep it with
+  its tool `keep_access` first, after which it is taken out of the stored
+  conversation as well. Look at what the page shows under your message: it
+  says what was kept under which name, and what was not and why.
+- **What becomes of it.**
+  - A server is tried before it is kept: the app reads its host key, signs
+    in, and runs one harmless command. The key the machine showed then is the
+    one it has to show from then on (remove the server on the Memory page
+    when the machine was set up anew). A sign-in that fails is not kept, and
+    the password is taken out of the message all the same.
+  - A site account is kept, and tried when it is first used: in the
+    [browser](#the-browser-v180), where the app types the password on the
+    site's own sign-in page. It needs the browser service; without one the
+    account is kept and the assistant says that it cannot sign in from here.
+  - A key is written by the assistant as `{{key:name}}`, and the app puts the
+    value in. **In a web request** (`http_request`) only to the site the key
+    is tied to: the site you named with it, the one its shape says
+    (`github.com` for a GitHub token), or the one you set on the Memory page;
+    a key tied to no site is sent in no web request. **In a command on a
+    server** it can be written anywhere. What comes back from the site or
+    the machine is shown with the name in place of the value.
+  - In the text as it is stored and shown, the secret is
+    `[password kept by the app as "vps-203-0-113-7"]`, or
+    `[password taken out by the app]` when it was not kept.
+  - The same server (address, port and user), the same site and user, or a
+    key of the same name handed over again **replaces** what signs in. An
+    account keeps up to 20 servers, 20 site accounts and 50 keys.
+- **It is yours alone.** What an account hands over is used by that
+  account's conversations and by the runs of its own projects. It is not on
+  the Servers or the Browser page, no project can name it, and nobody else,
+  no administrator and no owner, is shown it or works with it. Two accounts
+  can hand over the same machine: each has it under the same name, as its
+  own. An account that is deleted takes all of it along.
+  One thing an owner does see, because the owner answers for what the
+  installation does: **what was run**. The log on the Servers page has
+  "Servers handed over in conversations", with every command, the account it
+  was run for and its output, and never what signs in; the log of the
+  Browser page lists what was opened. Both stay after the machine or the
+  account is removed.
+- **Who may.** Every account, by default. `OWN_ACCESS` narrows it:
+  `admins`, `owners`, or `off`. Anyone but an owner hands over machines and
+  sites **on the public internet only**: an address on a private network, or
+  a name that leads to one, is refused before anything is tried
+  (`AGENT_HTTP_PRIVATE_HOSTS` lists exceptions). A user's assistant gets the
+  browser only for the site accounts the user handed over, and only when the
+  browser service says that it keeps pages from private networks (the one
+  that comes with the app does).
+  The app tries at most 12 sign-ins a minute for an account, and after six
+  that **failed** within 15 minutes it tries no more for that account until
+  they are over: a conversation is not a way to guess passwords from this
+  installation's address. What was kept, replaced, switched off or removed
+  is in the audit log, and so is every sign-in to a server that failed:
+  who, where, and never the password.
+
+**Chat keeps its conversations.** They are listed beside the transcript,
+renamed and deleted there, and the address (`?c=…`) opens one again. The
+assistant has these tools: `run_on_server` and `use_browser` (when there is
+something to work on), `fetch_url`, `http_request`, `web_search` (when a
+search is set up), `remember`, `recall` and `keep_access`. Each call is shown
+with the answer, with what it was called with and the start of what came
+back. One answer takes up to 16 steps and half an hour.
+
+- **An answer is not the page's.** A command on a server can take minutes,
+  and a phone sleeps. When the page goes away the answer goes on, is written
+  to the conversation, and is there when the page is opened again; a
+  conversation that is still being answered says so and takes no second
+  message. **Stop** ends it: a command that is running is killed, the
+  connection and the browser are closed, and what was done until then stays.
+- **A page that needs a person** (a CAPTCHA, a code that was sent to you)
+  waits for the account whose conversation it is, whatever its role: the
+  conversation shows the link, and a notification is sent.
+- **Which model.** An owner or an administrator picks one, or leaves it to
+  the app. For a user the app chooses: the models that take tools first, the
+  ones that work before the ones that rest. A step a model does not answer
+  is asked of the next one, which goes on from what was done so far. Where
+  no model takes tools, the assistant answers without them and is told so,
+  so that it does not write as if it had done anything.
+- The former form of `POST /api/chat`, the whole conversation in `messages`,
+  is answered as before: one answer, no tools, nothing kept.
+
+**Memory.** Two things are put in front of the assistant at the start of
+every answer, without anyone asking: the **notes** that were kept about you
+(by the assistant with `remember`, or by you on the Memory page; up to ten
+that fit the message), and **what your other conversations said** about the
+same thing (up to four passages, found by their words). A new conversation
+therefore starts with what the earlier ones established. The planner and the
+agents of your projects are told the notes as well. The **Memory** page
+(for every account) lists the notes and everything you handed over, without
+what signs in: a note is written or forgotten there, a server, site account
+or key is switched off or removed, a key is tied to its site. A note holds
+no password: what looks like one is taken out. Deleting a conversation
+removes its messages from what is remembered; a note it left stays, and so
+does what another conversation quoted from it.
+
+**Projects.** How to sign in can be written into a project's goal, into the
+instruction of one run, or into the instruction of a schedule, on the pages
+and through the API: it goes the same way, the text is stored without it,
+and the page says what was kept. A run is handed what its goal is about (a
+server that is named, by its name or address, or the only one there is when
+the goal says "my VPS"); each task is handed what its own text names, and
+every task all of it when no task names any. The agent then has
+`run_on_server`, `use_browser` or `http_request` for it, whatever tools are
+ticked on it, and the project page says under the goal what that is.
+
+What this is not, and what was tested:
+
+- **The assistant acts with the rights you hand it.** With `root` it can do
+  on that machine whatever root can. It is told to look before it changes
+  anything and not to destroy data unless asked for exactly that; a model can
+  still be wrong, and a page or a file it reads can try to talk it into
+  something. Hand over an account with the rights the work needs, and keep
+  backups.
+- **A key written into a command goes where the command sends it.** The app
+  limits where a key goes in a web request; on a server the command decides.
+- **Finding by shape misses things and takes some wrongly.** A password in a
+  sentence the app does not understand reaches the model in plain text. A
+  password for something that is not SSH, written like a server's
+  (`203.0.113.7 user app pass …`), is tried over SSH once, fails, and is
+  taken out; say what it is for (`mysql password: …`) and send it again.
+- A password you wrote into a chat was typed, sent and shown once. It is
+  kept encrypted (AES-256-GCM, `ENCRYPTION_KEY`) and is in no log, no
+  message and no request to a model, **but change it when the work is done**
+  if it is one that matters, and hand over the new one when you need the
+  assistant again.
+- Tested: the whole way against the checks' own provider, SSH server and
+  web site (`npm run test:e2e`, part `handover`, and the page checks), and
+  the finder on some sixty messages in English and Indonesian
+  (`tests/access-find.test.ts`). **Not tested: how well a particular real
+  model uses these tools.** That depends on the model: one that does not
+  take tools can only answer.
 
 ## Provider adapters
 
@@ -1244,7 +1418,7 @@ curl https://nexus.example.com/api/v1/chat/completions \
 | `GET /videos/{id}/content` | Media | The finished file. Byte ranges are supported. |
 | `GET /media/{id}`, `GET /media/{id}/content` | Media | An image, a voice-over or a video of the key's user, and its file. |
 | `GET /projects` | Projects | The user's projects (all projects, for an administrator's key). |
-| `POST /projects/{id}/runs` | Projects | Start a run. The body is optional: `{"input": "an instruction for this run"}`, and `{"continue": true}` to take up the last run again, doing only its tasks that did not succeed (v1.9.0). Answers `202` with the run `queued`, `409` when the project is already running (`run_active`) or has nothing to continue (`nothing_to_continue`), and `200` with the reason when the run cannot start. A run says `"continued": true` when it continued the one before it. |
+| `POST /projects/{id}/runs` | Projects | Start a run. The body is optional: `{"input": "an instruction for this run"}`, and `{"continue": true}` to take up the last run again, doing only its tasks that did not succeed (v1.9.0). Answers `202` with the run `queued`, `409` when the project is already running (`run_active`) or has nothing to continue (`nothing_to_continue`), and `200` with the reason when the run cannot start. A run says `"continued": true` when it continued the one before it. How to sign in to a server, a site or an API, written into `input`, is taken out before the run is stored (v1.11.0): the answer then has `access_kept`, a list of `{kind, name, where, kept, replaced, note}`. |
 | `GET /projects/{id}/runs` | Projects | The project's runs, newest first. |
 | `GET /runs/{id}` | Projects | A run's `status` (`queued`, `running`, `succeeded`, `review`, `needs_approval`, `failed`, `cancelled`) and, once it has finished, its `deliverable` and tasks. |
 
@@ -1269,6 +1443,7 @@ links in the answers to be right.
 | 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | ✅ implemented (five candidates ran on one real server, where the browser service was set up; what the parts do was tested against mock providers, an SSH server and a web site of the tests, and not seen on that server) |
 | 1.9.0 | Runs that meet a limit (Continue: a run is taken up again with what it finished; a task waits for a limit of its models that ends; a quota answer in few words, and what each model of a task said) | ✅ implemented (tested against providers of the tests; not waited through against a live provider's quota) |
 | 1.10.0 | A run goes on with a model that works (stand-ins for the models a task and a run are set to; what real work says about a model: resting, put away, back by itself; a switch for each project; the host signs in as owner without a password; a report of the app's models) | ✅ implemented (tested against providers of the tests; the report of the models was read from one real server, whose failed run it explains) |
+| 1.11.0 | Access handed over in a conversation (a server, a site account or a key written into a message is taken out before a model sees it, tried, kept encrypted, and worked with by the assistant and by the agents of the account's runs); Chat keeps its conversations and has tools; memory of an account across conversations and projects; an answer that goes on without its page | ✅ implemented (tested against the checks' own provider, SSH server and site) |
 
 ---
 
@@ -1352,6 +1527,7 @@ account you register through the UI becomes the owner.
 | `SEARCH_URL` | no | The search address: required for `searxng` (its `/search`), optional otherwise. |
 | `AGENT_HTTP_ALLOWED_HOSTS` | no | comma list of hosts, subdomains included, that agents may reach with *Read web pages* and *Call HTTP APIs*. Unset = any public host. |
 | `AGENT_HTTP_PRIVATE_HOSTS` | no | comma list of hosts on a private network that agents may reach all the same. |
+| `OWN_ACCESS` | no | Who may hand over a server, a site account or a key in a conversation or in a project's goal ([v1.11.0](#access-you-hand-over-in-a-conversation-and-memory-v1110)): `everyone` (default), `admins`, `owners`, or `off`. Narrowing it keeps what was handed over, unused, until it is widened again. |
 | `ALLOW_PRIVATE_WEBHOOK_HOSTS` | no | comma list of hosts on a private network that notification webhooks may be sent to. |
 
 In development a missing key falls back to an insecure placeholder, with a
@@ -1400,6 +1576,14 @@ repository ([how](scripts/host#from-somewhere-else-over-sshsh)).
 ## Security model
 
 - Passwords: scrypt (salted, memory-hard), constant-time comparison.
+- What an account hands over in a conversation (v1.11.0): the password, the
+  private key or the key is taken out of the text before a model is asked
+  and before anything is stored, and kept with the other secrets
+  (AES-256-GCM). No model, no message, no log and no page holds it; a key's
+  value is put in by the app where the AI writes its name, and is struck
+  from what comes back. It is used by its own account's conversations and
+  runs only. Anyone but an owner reaches public addresses only, and sign-ins
+  that fail are counted and limited.
 - Secrets at rest: AES-256-GCM with a key kept **outside** the database.
 - API keys are never serialized to the client — only `configured` + last 4.
 - Sessions: `HttpOnly`, `SameSite=Lax`, and `Secure` (HTTPS-only) in

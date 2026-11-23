@@ -1231,12 +1231,25 @@ try {
     const said = await transcript();
     check("  the message is shown without its password, with what became of it", !said.includes(now.password) && said.includes('Pass: [password kept by the app as "vps-127-0-0-1"]'), said.slice(0, 300));
     const keptLine = await page.$eval('[data-testid="kept"]', (el) => el.innerText).catch(() => "");
-    check("  under it: that the server was tried and kept, and under which name", keptLine.includes(`root@127.0.0.1:${SSH_PORT}`) && keptLine.includes('kept as "vps-127-0-0-1"') && keptLine.includes(now.fingerprint), keptLine);
+    check("  under it: that the server was tried and kept, and under which name", keptLine.includes(`root@127.0.0.1:${SSH_PORT}`) && keptLine.includes("Server kept: vps-127-0-0-1") && keptLine.includes(now.fingerprint), keptLine);
     await clickText(/with tools/);
     check("  what the assistant did with its tools can be read", (await waitText("echo from-the-chat-page; id -un")) && (await has("from-the-chat-page")), (await transcript()).slice(0, 400));
     check("  no password is anywhere on the page", !(await text()).includes(now.password), null);
     await snap("chat-handover");
     const chatUrl = page.url();
+
+    // What an owner is shown of it: what was run, apart from the machines of the Servers page.
+    await open("/dashboard/servers");
+    check("the log of the Servers page is the one of its own machines", (await logRows()).length > 0 && !(await logRows()).some((row) => row.includes("vps-127-0-0-1")), (await logRows()).slice(0, 3));
+    await page.select('select[aria-label="Show the log of"]', "handed");
+    await page.waitForFunction(() => document.querySelector('[data-testid="server-log"]')?.innerText.includes("from-the-chat-page"), { timeout: 15_000 }).catch(() => undefined);
+    const handedRows = await logRows();
+    check(
+      "  asked for, it lists what was run on the servers handed over in conversations, and for whom",
+      handedRows.some((row) => row.includes("vps-127-0-0-1") && row.includes("echo from-the-chat-page; id -un") && row.includes("for admin")) && !(await text()).includes(now.password),
+      handedRows.slice(0, 3),
+    );
+    await page.goto(chatUrl, { waitUntil: "networkidle2" });
     check("  the address names the conversation", /\/dashboard\/chat\?c=[0-9a-f-]{36}$/.test(chatUrl), chatUrl);
     await page.reload({ waitUntil: "networkidle2" });
     check("  opened again, it is as it was left", (await transcript()).includes("DONE after 1 tool results.") && (await transcript()).includes("kept by the app as") && !(await text()).includes(now.password), (await transcript()).slice(0, 300));
@@ -1277,6 +1290,8 @@ try {
       field.dispatchEvent(new Event("input", { bubbles: true }));
     }, `Cek disk di VPS 127.0.0.1 port ${SSH_PORT} user root pass ${now.password} lalu laporkan.`);
     await Promise.all([page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30_000 }).catch(() => undefined), clickText(/Create project/)]);
+    // The project's page is there before it has read what the form left for it.
+    await page.waitForSelector('[data-testid="kept-now"]', { timeout: 15_000 }).catch(() => null);
     const keptNow = await page.$eval('[data-testid="kept-now"]', (el) => el.innerText).catch(() => "");
     check("a project whose goal says how to sign in: the page says what was kept, and the goal holds no password", /\/dashboard\/projects\/[0-9a-f-]{36}$/.test(page.url()) && keptNow.includes('kept again as "vps-127-0-0-1"') && !(await text()).includes(now.password) && (await has("[password kept by the app as")), [page.url(), keptNow]);
     const handed = await page.$eval('[data-testid="handed"]', (el) => el.innerText).catch(() => "");
