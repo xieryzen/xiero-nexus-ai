@@ -89,16 +89,6 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     note: "Its newer API takes a key and is billed.",
   },
   {
-    id: "vlm-run",
-    name: "VLM Run Gateway",
-    group: "keyless",
-    adapter: "openai-compatible",
-    baseUrl: "https://gateway.vlm.run/v1/openai",
-    authType: "none",
-    free: "Two small open models without a key, in beta: 10 requests a minute, 30 an hour and 100 a day from one address.",
-    note: "Leave the auth type at None: a key that is sent is refused. Its larger model asks for a key.",
-  },
-  {
     id: "groq",
     name: "Groq",
     group: "free-key",
