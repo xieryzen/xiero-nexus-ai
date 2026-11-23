@@ -20,6 +20,12 @@ What trying 1.10.0 on the server of this repository showed.
   which answered one word in a second or two from that server, in place of
   Gemma 4 with the Gemini key, which answered in most of a minute. Gemma 4
   stays in the app and stands in.
+- **The try-run of the host program** says "with ... as the manager model"
+  where it said "planned by" and "summed up by": from 1.10.0 the app plans
+  and sums up with another model that works when the manager model does not
+  answer. On that server the manager model of the try-run was not asked at
+  all (it is rate-limited there), and both of its projects were planned,
+  done and summed up.
 
 ## [1.10.0] - 2026-11-23
 

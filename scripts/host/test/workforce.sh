@@ -873,7 +873,7 @@ errors="$(db "select count(*) from usage_records where status = 'error'")"
 run -- --user boss --file "${FILE}" --yes --try-run
 is "it ends well" "0" "${CODE}"
 check_not "nothing failed" says "FAILED"
-check "the goal is planned by the model the file names for it" line 'Planned +by chat-busy: [0-9]+ tasks?;'
+check "the goal is planned with the model the file names for it as the manager model" line 'Planned +with chat-busy as the manager model: [0-9]+ tasks?;'
 check "the tasks of the plan are done" line 'ok +1\. ".*", by .*: succeeded on '
 check "every agent of the try-run's team gets a task, and no other" says "A small task for every agent of the team \"${TRY_TEAM}\""
 check "  each of them one" line "Given +one task to each of ${TRY_AGENTS} agents"
@@ -881,7 +881,7 @@ is "and does it on its own first model" \
   "$(of_file '"; ".join("%s on %s (%s)" % (a["name"], d["models"][a["primary"]]["model"], d["models"][a["primary"]]["provider"]) for a in d["agents"] if a["name"] in [t for t in d["teams"] if t["name"] == d["tryRun"]["team"]][0]["agents"])')" \
   "$(sed -n '/^A small task for every agent/,$p' "${OUT}" | sed -n 's/^  ok  *[0-9]*\. \(.*\): succeeded on \([^(]*([^)]*)\).*/\1 on \2/p' | paste -sd ';' | sed 's/;/; /g')"
 is "what each of them said is shown" "${TRY_AGENTS}" "$(grep -c '^ *it said: ' "${OUT}")"
-is "both projects are summed up by the model that plans" "2" "$(grep -c 'summed up by chat-busy, beginning: ' "${OUT}")"
+is "both projects are summed up, with that model as the manager model" "2" "$(grep -c 'summed up (manager model: chat-busy), beginning: ' "${OUT}")"
 is "and reviewed" "2" "$(grep -cE '^  Review +VERDICT: pass' "${OUT}")"
 is "that model said \"too many requests\" every other time, and no request failed for it" "${errors}" "$(db "select count(*) from usage_records where status = 'error'")"
 is "the projects and the workflow of the check are deleted again" "${before}" "$(left)"
