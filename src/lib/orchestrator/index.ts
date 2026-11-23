@@ -1182,6 +1182,7 @@ export async function executeRun(runId: string): Promise<void> {
                         isCancelled,
                         progress: (message, link) => emit({ type: "progress", seq, message, ...(link ? { link } : {}) }),
                         attempt: () => attempt,
+                        publicOnly: !mayBrowse,
                       }
                     : undefined,
                 browserOpen: mayBrowse,

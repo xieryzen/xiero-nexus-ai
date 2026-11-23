@@ -48,8 +48,10 @@ export const POST = v1("projects", async (req, { params, caller }) => {
       continueLast = goOn;
     }
   }
-  // What signs in is taken out of the instruction before the run is stored (src/lib/access).
-  if (input) input = (await takeAccessForProject(caller.user, project, input, getClientMeta(req))).text;
+  // What signs in is taken out of the instruction before the run is stored
+  // (src/lib/access); the answer says what became of it.
+  const taken = input ? await takeAccessForProject(caller.user, project, input, getClientMeta(req)) : null;
+  if (taken) input = taken.text;
   const result = startRun(project, {
     trigger: "api",
     requestedBy: caller.user.id,
@@ -58,7 +60,14 @@ export const POST = v1("projects", async (req, { params, caller }) => {
     continueLast,
   });
   return NextResponse.json(
-    { ...runJson(result.run, caller.user.role), message: result.message ?? null },
+    {
+      ...runJson(result.run, caller.user.role),
+      message: result.message ?? null,
+      // Only when the instruction held a sign-in or a key: what was kept under which name, and what was not and why.
+      ...(taken && taken.kept.length > 0
+        ? { access_kept: taken.kept.map((k) => ({ kind: k.kind, name: k.name || null, where: k.where, kept: k.ok, replaced: k.updated, note: k.note })) }
+        : {}),
+    },
     { status: result.outcome === "queued" ? 202 : 200 },
   );
 });

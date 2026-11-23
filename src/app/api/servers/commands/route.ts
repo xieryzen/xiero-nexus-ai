@@ -12,11 +12,16 @@ export const dynamic = "force-dynamic";
  *
  *   ?server=<id>     one machine
  *   ?server=removed  the machines that are not registered any more (owners)
+ *   ?server=handed   the machines accounts handed over in a conversation (owners)
  *   ?before=<ms>     the page that starts at this moment (the time of the last row shown)
  *   ?limit=<n>       at most 200, 50 by default
  *
  * An owner reads all of it; an administrator, of the machines opened to
- * administrators.
+ * administrators. Without a machine named, the log is the one of the
+ * machines of the Servers page: what was done on a machine that an account
+ * handed over in a conversation (src/lib/access) is listed apart, for an
+ * owner, who answers for what this installation does on the network. It
+ * says which account's work it was, never what signs in.
  */
 export const GET = handle(async (req) => {
   const user = requireAdmin();
@@ -26,12 +31,14 @@ export const GET = handle(async (req) => {
   const limit = Number(url.searchParams.get("limit"));
   const owner = managesServers(user.role);
   const usable = serversFor(user).map((s) => s.id);
-  if (server === "removed" && !owner) throw Errors.forbidden();
-  if (server && server !== "removed" && !usable.includes(server)) throw Errors.notFound("Server not found");
+  const group = server === "removed" || server === "handed";
+  if (group && !owner) throw Errors.forbidden();
+  if (server && !group && !usable.includes(server)) throw Errors.notFound("Server not found");
   const commands = listCommands({
-    serverId: server || undefined,
+    serverId: server === "handed" ? undefined : server || undefined,
     // Without a machine named: everything for an owner, the machines they may use for anyone else.
     among: server || owner ? undefined : usable,
+    handed: server === "handed" ? true : server ? undefined : false,
     before: Number.isFinite(before) && before > 0 ? before : undefined,
     limit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
   });

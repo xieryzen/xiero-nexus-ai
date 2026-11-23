@@ -137,6 +137,7 @@ export function chatTools(ctx: ChatToolContext): ChatTools {
         accounts,
         isCancelled: ctx.isCancelled,
         progress: (message, link) => ctx.progress(message, link),
+        publicOnly: !mayUseBrowser(ctx.user.role),
       }),
     );
   }

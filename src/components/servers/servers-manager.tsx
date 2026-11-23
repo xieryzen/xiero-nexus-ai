@@ -552,6 +552,7 @@ export function ServersManager({
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
             {canManage && <option value="removed">Servers that were removed</option>}
+            {canManage && <option value="handed">Servers handed over in conversations</option>}
           </Select>
         </header>
         {log.length === 0 ? (

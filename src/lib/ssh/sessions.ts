@@ -475,6 +475,8 @@ interface Session {
   runId: string;
   serverId: string;
   serverName: string;
+  /** The account that handed the machine over in a conversation, when one did: said on every row of the log. */
+  ownerId: string | null;
   context: SessionContext;
   client: Client | null;
   connecting: Promise<Client> | null;
@@ -509,6 +511,7 @@ function sessionFor(runId: string, server: Server, context: SessionContext): Ses
       runId,
       serverId: server.id,
       serverName: server.name,
+      ownerId: server.ownerId,
       context,
       client: null,
       connecting: null,
@@ -527,7 +530,7 @@ function sessionFor(runId: string, server: Server, context: SessionContext): Ses
 
 function note(session: Session, command: string, status: "ok" | "lost" | "refused", output?: string): void {
   logCommand({
-    server: { id: session.serverId, name: session.serverName },
+    server: { id: session.serverId, name: session.serverName, ownerId: session.ownerId },
     kind: "session",
     projectId: session.context.projectId,
     projectTitle: session.context.projectTitle,
@@ -644,7 +647,7 @@ export async function runOnServer(opts: RunOnServer): Promise<{ server: string; 
   const server = getServer(opts.serverId);
   if (!server) throw new SshProblem("off", "The server is not registered any more.", "That server is not registered any more.");
   const entry = {
-    server: { id: server.id, name: server.name },
+    server: { id: server.id, name: server.name, ownerId: server.ownerId },
     kind: "command" as const,
     projectId: opts.context.projectId,
     projectTitle: opts.context.projectTitle,

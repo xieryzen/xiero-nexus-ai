@@ -1,5 +1,5 @@
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireUser } from "@/lib/auth";
 import { liveInput } from "@/lib/browser/sessions";
 import { AppError, Errors } from "@/lib/errors";
 import { rateLimit } from "@/lib/ratelimit";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** What a person did to the page they took over: a click, a key, a text, a turn of the wheel. */
 export const POST = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireUser();
   const rate = rateLimit(`browser-input:${user.id}`, 600, 60_000);
   if (!rate.ok) throw Errors.rateLimited("Too much at once. Try again in a moment.");
   const body = await parseBody(req, liveInputSchema);

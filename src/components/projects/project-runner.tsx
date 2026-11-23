@@ -9,6 +9,7 @@ import type { RunEvent, ToolCallNote } from "@/lib/orchestrator/events";
 import type { RunDTO } from "@/lib/runs";
 import type { ScheduleDTO } from "@/lib/schedules";
 import { apiFetch, ApiError } from "@/lib/client";
+import { KEPT_HEADER, keptFromHeader, keptLine, type Kept } from "@/lib/access/rules";
 import { formatNumber } from "@/lib/format";
 import { Alert, Badge, Button, Card, Input, PageHeader, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -140,6 +141,20 @@ export function ProjectRunner({
    */
   handed?: { kind: "server" | "site" | "key"; name: string; where: string }[];
 }) {
+  // What the goal, or the instruction of a run, handed over just now, and what became of it.
+  const [keptNow, setKeptNow] = useState<Kept[]>([]);
+  useEffect(() => {
+    try {
+      const key = `xn:kept:${project.id}`;
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return;
+      window.sessionStorage.removeItem(key);
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) setKeptNow(parsed as Kept[]);
+    } catch {
+      // Nothing to say then.
+    }
+  }, [project.id]);
   const [status, setStatus] = useState(project.status);
   const [tasks, setTasks] = useState<TaskLive[]>(
     project.tasks.map((t) => ({
@@ -376,6 +391,9 @@ export function ProjectRunner({
         const data = await res.json().catch(() => null);
         throw new Error(data?.error?.message ?? "Run failed to start");
       }
+      // What the instruction handed over, and what became of it.
+      const taken = keptFromHeader(res.headers.get(KEPT_HEADER));
+      if (taken.length > 0) setKeptNow(taken);
       setToContinue(goOn);
       setDeliverable(null);
       setReview(null);
@@ -615,6 +633,16 @@ export function ProjectRunner({
         </Alert>
       )}
       {error && <div className="my-3"><Alert tone="danger">{error}</Alert></div>}
+
+      {keptNow.length > 0 && (
+        <div className="mb-6 space-y-2" data-testid="kept-now">
+          {keptNow.map((k, i) => (
+            <Alert key={`${k.kind}-${k.where}-${i}`} tone={k.ok ? "ok" : "warn"}>
+              {keptLine(k)}
+            </Alert>
+          ))}
+        </div>
+      )}
 
       <Card title="Goal" className="mb-6">
         <p className="whitespace-pre-wrap text-sm text-ink-2">{project.goal}</p>

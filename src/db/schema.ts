@@ -1243,6 +1243,10 @@ export const serverCommands = sqliteTable(
     output: text("output"),
     outputBytes: integer("output_bytes").notNull().default(0),
     durationMs: integer("duration_ms"),
+    // The machine was one an account handed over in a conversation
+    // (servers.ownerId), not one of the Servers page. Kept on the row, which
+    // outlives the machine and the account.
+    handed: integer("handed", { mode: "boolean" }).notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => ({

@@ -7,6 +7,7 @@ import type { ProjectDTO } from "@/lib/workforce";
 import { DEFAULT_MAX_MEDIA, MAX_MEDIA_PER_RUN } from "@/lib/creative/prompt";
 import { MAX_PROJECT_TASKS } from "@/lib/limits";
 import { apiFetch, ApiError } from "@/lib/client";
+import type { Kept } from "@/lib/access/rules";
 import { RelativeTime } from "@/components/time";
 import { Alert, Button, Card, EmptyState, Field, Input, PageHeader, Select, Textarea, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
@@ -141,7 +142,7 @@ export function CommandCenter({
     setError(null);
     setLoading(true);
     try {
-      const res = await apiFetch<{ project: ProjectDTO }>("/api/projects", {
+      const res = await apiFetch<{ project: ProjectDTO; kept?: Kept[] }>("/api/projects", {
         method: "POST",
         body: JSON.stringify({
           title,
@@ -164,6 +165,14 @@ export function CommandCenter({
           ...(siteAccountIds.length > 0 ? { siteAccountIds } : {}),
         }),
       });
+      // What the goal handed over, and what became of it, is said on the project's page.
+      if (res.kept && res.kept.length > 0) {
+        try {
+          window.sessionStorage.setItem(`xn:kept:${res.project.id}`, JSON.stringify(res.kept));
+        } catch {
+          // Without it the page says only what the run works with.
+        }
+      }
       router.push(`/dashboard/projects/${res.project.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not create project");

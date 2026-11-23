@@ -243,6 +243,48 @@ export interface Kept {
   note: string;
 }
 
+/** One line for a person: what became of one thing they handed over. */
+export function keptLine(kept: Kept): string {
+  const what = kept.kind === "server" ? "Server" : kept.kind === "site" ? "Site account" : "Key";
+  if (!kept.ok) return `${what} ${kept.where}: not kept. ${kept.note}`;
+  return `${what} ${kept.where}: ${kept.updated ? "kept again" : "kept"} as "${kept.name}". ${kept.note}`;
+}
+
+/** The header a run's start answers with when its instruction handed something over. */
+export const KEPT_HEADER = "x-access-kept";
+
+/** What was kept, for a header: JSON in base64, a few entries at most. */
+export function keptToHeader(kept: readonly Kept[]): string {
+  const short = kept.slice(0, 6).map((k) => ({ ...k, where: k.where.slice(0, 120), note: k.note.slice(0, 400) }));
+  const bytes = new TextEncoder().encode(JSON.stringify(short));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** The same read back. Empty when the header is not one of ours. */
+export function keptFromHeader(value: string | null | undefined): Kept[] {
+  if (!value) return [];
+  try {
+    const binary = atob(value);
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (k): k is Kept =>
+        Boolean(k) &&
+        typeof k === "object" &&
+        ["server", "site", "key"].includes((k as Kept).kind) &&
+        typeof (k as Kept).name === "string" &&
+        typeof (k as Kept).where === "string" &&
+        typeof (k as Kept).ok === "boolean" &&
+        typeof (k as Kept).note === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
 /** What stands in a message where a secret stood. */
 export function markFor(what: string, kept: Kept): string {
   return kept.ok ? `[${what} kept by the app as "${kept.name}"]` : `[${what} taken out by the app]`;

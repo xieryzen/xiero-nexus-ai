@@ -21,7 +21,8 @@ export const POST = handle(async (req, { params }) => {
   const project = loadOperableProject(params.id!, user);
   const body = await parseBody(req, scheduleCreateSchema);
   // What signs in is taken out of the instruction before it is stored (src/lib/access).
-  if (body.input) body.input = (await takeAccessForProject(user, project, body.input, { ip, userAgent })).text;
+  const taken = body.input ? await takeAccessForProject(user, project, body.input, { ip, userAgent }) : null;
+  if (taken) body.input = taken.text;
   const schedule = createSchedule(project, user.id, body);
   audit({
     actorUserId: user.id,
@@ -32,5 +33,5 @@ export const POST = handle(async (req, { params }) => {
     ip,
     userAgent,
   });
-  return json({ schedule: serializeSchedule(schedule) }, { status: 201 });
+  return json({ schedule: serializeSchedule(schedule), kept: taken?.kept ?? [] }, { status: 201 });
 });

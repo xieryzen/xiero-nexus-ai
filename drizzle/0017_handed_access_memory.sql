@@ -46,6 +46,7 @@ CREATE INDEX `chats_user_idx` ON `chats` (`user_id`,`updated_at`);--> statement-
 ALTER TABLE `servers` ADD `owner_id` text REFERENCES users(id) ON DELETE cascade;--> statement-breakpoint
 CREATE INDEX `servers_owner_idx` ON `servers` (`owner_id`);--> statement-breakpoint
 ALTER TABLE `site_accounts` ADD `owner_id` text REFERENCES users(id) ON DELETE cascade;--> statement-breakpoint
+ALTER TABLE `server_commands` ADD `handed` integer DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE INDEX `site_accounts_owner_idx` ON `site_accounts` (`owner_id`);--> statement-breakpoint
 CREATE VIRTUAL TABLE `account_memories_fts` USING fts5(`content`, content='account_memories', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
 --> statement-breakpoint

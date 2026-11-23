@@ -249,7 +249,8 @@ export function assertMayOperate(project: Pick<Project, "id">, user: Pick<User, 
 // ─── The log ─────────────────────────────────────────────────────────────────
 
 export interface CommandLogEntry {
-  server: Pick<Server, "id" | "name">;
+  /** `ownerId`: the account that handed the machine over, when one did. */
+  server: Pick<Server, "id" | "name"> & { ownerId?: string | null };
   kind: "command" | "session" | "test";
   projectId?: string | null;
   projectTitle?: string | null;
@@ -291,6 +292,7 @@ export function logCommand(entry: CommandLogEntry): void {
         output: entry.output ?? null,
         outputBytes: entry.outputBytes ?? 0,
         durationMs: entry.durationMs ?? null,
+        handed: Boolean(entry.server.ownerId),
       })
       .run();
     // Now and then, what is beyond the number kept for this machine makes way.
@@ -336,6 +338,8 @@ export interface CommandDTO {
   output: string | null;
   outputBytes: number;
   durationMs: number | null;
+  /** The machine was one an account handed over in a conversation. */
+  handed: boolean;
   createdAt: number;
 }
 
@@ -344,6 +348,12 @@ export interface LogFilter {
   serverId?: string | "removed";
   /** Only the machines with these ids (and none that was removed). */
   among?: readonly string[];
+  /**
+   * true: only what was done on machines that accounts handed over in a
+   * conversation. false: only what was done on the machines of the Servers
+   * page. Left out: both.
+   */
+  handed?: boolean;
   /** Rows at or before this moment, for the next page. */
   before?: number;
   limit?: number;
@@ -355,6 +365,7 @@ export function listCommands(filter: LogFilter = {}): CommandDTO[] {
   const where = [];
   if (filter.serverId === "removed") where.push(isNull(serverCommands.serverId));
   else if (filter.serverId) where.push(eq(serverCommands.serverId, filter.serverId));
+  if (filter.handed !== undefined) where.push(eq(serverCommands.handed, filter.handed));
   if (filter.among) {
     if (filter.among.length === 0) return [];
     where.push(inArray(serverCommands.serverId, [...filter.among]));
@@ -388,6 +399,7 @@ export function listCommands(filter: LogFilter = {}): CommandDTO[] {
     output: row.output,
     outputBytes: row.outputBytes,
     durationMs: row.durationMs,
+    handed: row.handed,
     createdAt: row.createdAt.getTime(),
   }));
 }

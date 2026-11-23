@@ -1,5 +1,5 @@
 import { handle } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireUser } from "@/lib/auth";
 import { livePicture } from "@/lib/browser/sessions";
 import { AppError, Errors } from "@/lib/errors";
 import { rateLimit } from "@/lib/ratelimit";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /** A picture of the page as it is now. The address of the page is in the header "x-page-url". */
 export const GET = handle(async (_req, { params }) => {
-  const user = requireAdmin();
+  const user = requireUser();
   const rate = rateLimit(`browser-screen:${user.id}`, 240, 60_000);
   if (!rate.ok) throw Errors.rateLimited("Too many pictures were asked for. The page is shown again in a moment.");
   const shot = await livePicture(params.id!, user);

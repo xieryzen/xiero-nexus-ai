@@ -16,7 +16,8 @@ export const PATCH = handle(async (req, { params }) => {
   const schedule = loadSchedule(project.id, params.sid!);
   const body = await parseBody(req, scheduleUpdateSchema);
   // What signs in is taken out of the instruction before it is stored (src/lib/access).
-  if (body.input) body.input = (await takeAccessForProject(user, project, body.input, { ip, userAgent })).text;
+  const taken = body.input ? await takeAccessForProject(user, project, body.input, { ip, userAgent }) : null;
+  if (taken) body.input = taken.text;
   const updated = updateSchedule(schedule, body);
   audit({
     actorUserId: user.id,
@@ -27,7 +28,7 @@ export const PATCH = handle(async (req, { params }) => {
     ip,
     userAgent,
   });
-  return json({ schedule: serializeSchedule(updated) });
+  return json({ schedule: serializeSchedule(updated), kept: taken?.kept ?? [] });
 });
 
 export const DELETE = handle(async (req, { params }) => {
