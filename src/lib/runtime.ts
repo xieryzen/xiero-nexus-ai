@@ -44,6 +44,11 @@ export interface NexusRuntime {
   channels: Map<string, RunChannel>;
   /** Runs this process is executing, by run id. */
   activeRuns: Map<string, Promise<void>>;
+  /**
+   * Answers of conversations that are being worked on, by the key their
+   * connections to servers and their browser are kept under (chat/turn.ts).
+   */
+  chatTurns: Set<string>;
   worker: WorkerState;
   /** Stopping the server (see shutdown.ts). */
   stop: { listening: boolean; asked: boolean };
@@ -69,6 +74,7 @@ export function runtime(): NexusRuntime {
     refreshing: new Map(),
     channels: new Map(),
     activeRuns: new Map(),
+    chatTurns: new Set(),
     worker: {
       started: false,
       ticking: false,

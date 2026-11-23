@@ -367,7 +367,8 @@ const BLOCKED_HEADERS = new Set([
   "expect",
 ]);
 
-function webTools(): Record<string, LoopTool> {
+/** The tools that read a page and call an API. Also what the assistant of a chat has (chat/tools.ts). */
+export function webTools(): Record<string, LoopTool> {
   return {
     fetch_url: {
       definition: {
@@ -457,7 +458,7 @@ function webTools(): Record<string, LoopTool> {
   };
 }
 
-function searchTool(config: SearchConfig): LoopTool {
+export function searchTool(config: SearchConfig): LoopTool {
   return {
     definition: {
       name: "web_search",

@@ -41,7 +41,8 @@ import { signIn, type SignInOutcome } from "./signin";
 /** What is known of the run a page belongs to. */
 export interface RunSpec {
   runId: string;
-  projectId: string;
+  /** Null for a conversation, which has no project. */
+  projectId: string | null;
   projectTitle: string;
   /** The account of the app the project belongs to. */
   userId: string | null;

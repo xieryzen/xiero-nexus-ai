@@ -19,9 +19,11 @@ import { SshProblem, runOnServer } from "./sessions";
 /** What the tool needs to know of the run and the task it works in. */
 export interface ServerToolContext {
   runId: string;
-  projectId: string;
+  /** The project of the run. Null in a conversation, which has none. */
+  projectId: string | null;
+  /** The project's title; for a conversation, what the log calls it. */
   projectTitle: string;
-  /** The account the project belongs to. */
+  /** The account the project belongs to, or whose conversation it is. */
   userId: string | null;
   taskId: string;
   taskTitle: string;
@@ -33,6 +35,8 @@ export interface ServerToolContext {
   progress?: (message: string) => void;
   /** Which attempt at the task this is. A new attempt starts over, and is told what the earlier ones ran. */
   attempt?: () => number;
+  /** Keys the person handed over, for commands that name them (sessions.ts). */
+  keys?: { fill(text: string): string; hide(text: string): string };
 }
 
 /**
@@ -117,6 +121,7 @@ export function serverTool(ctx: ServerToolContext): LoopTool {
           },
           command,
           timeoutSeconds: seconds,
+          keys: ctx.keys,
           isCancelled: ctx.isCancelled,
           onProgress: (elapsed) => ctx.progress?.(`${server.name}: ${label} (${took(elapsed)})`),
         });

@@ -94,7 +94,8 @@ export function accountsFor(user: Pick<User, "role">): SiteAccount[] {
     .from(siteAccounts)
     .orderBy(asc(siteAccounts.name))
     .all()
-    .filter((row) => mayUseAccount(user.role, row.access));
+    // What an account handed over in a conversation (src/lib/access) is its own, and no project names it.
+    .filter((row) => row.ownerId === null && mayUseAccount(user.role, row.access));
 }
 
 /** The password of an account, for the page it is typed into. */

@@ -28,9 +28,10 @@ import { currentPage, handOver, keepSessions, runBrowser, signInOn, taskPages, v
 /** What the tool needs to know of the run and the task it works in. */
 export interface BrowserToolContext {
   runId: string;
-  projectId: string;
+  /** The project of the run. Null in a conversation, which has none. */
+  projectId: string | null;
   projectTitle: string;
-  /** The account of the app the project belongs to. */
+  /** The account of the app the project belongs to, or whose conversation it is. */
   userId: string | null;
   taskId: string;
   taskTitle: string;

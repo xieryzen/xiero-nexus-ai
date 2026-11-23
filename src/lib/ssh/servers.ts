@@ -80,14 +80,19 @@ export function getServer(id: string): Server | undefined {
   return db.select().from(servers).where(eq(servers.id, id)).get();
 }
 
-/** The machines the projects of this account may work on, by name. */
+/**
+ * The machines an owner registered that the projects of this account may
+ * work on, by name. A machine an account handed over in a conversation
+ * (`ownerId`, src/lib/access) is not among them: no project names it, and
+ * only that account's chats and runs work on it.
+ */
 export function serversFor(user: Pick<User, "role">): Server[] {
   return db
     .select()
     .from(servers)
     .orderBy(asc(servers.name))
     .all()
-    .filter((server) => mayUseServer(user.role, server.access));
+    .filter((server) => server.ownerId === null && mayUseServer(user.role, server.access));
 }
 
 /** What signs in to a machine, decrypted. Used for a connection and nothing else. */
