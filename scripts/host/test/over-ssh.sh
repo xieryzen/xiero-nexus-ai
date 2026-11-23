@@ -700,6 +700,20 @@ code=0
 SECRET_HOST_KEY="${OTHER_HOST_KEY}" workflow "{\"inputs\":{\"action\":\"plan\"},\"repository\":{\"private\":false}}" || code=$?
 expect_exit "a node that shows another host key: 91" 91 "${code}"
 check "  the error says that the node was not reached" logged "::error title=plan::was not started"
+# The node itself, typed for the run: another machine than the one the secrets name.
+code=0
+DEPLOY_HOST="node-of-the-secrets.invalid" SECRET_HOST_KEY="${OTHER_HOST_KEY}" workflow "{\"inputs\":{\"action\":\"plan\",\"host\":\"127.0.0.1:${PORT}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "a node that is typed is where the run goes, whatever the secrets name" 0 "${code}"
+check "  the host key of the secrets is the other machine's and is not asked of it: the key it shows is accepted, and said" grep -qF "accepted as it was shown" "${WORK}/runner/node-output.txt"
+check_not "  what was typed cannot be read in the log" reader_sees "127.0.0.1:${PORT}"
+code=0
+DEPLOY_HOST="" workflow "{\"inputs\":{\"action\":\"plan\",\"host\":\"127.0.0.1:${PORT}\",\"host_key\":\"${HOST_KEY}\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "  with its host key typed as well, and no VPS_HOST at all" 0 "${code}"
+check_not "  then no key is accepted unseen" grep -qF "accepted as it was shown" "${WORK}/runner/node-output.txt"
+code=0
+workflow "{\"inputs\":{\"action\":\"plan\",\"host\":\"127.0.0.1:1\"},\"repository\":{\"private\":false}}" || code=$?
+expect_exit "a typed node that does not answer: 91" 91 "${code}"
+check "  the notice says why, so that the log need not be read" logged "::error title=plan::was not started: the node could not be reached or did not let this in: the node does not answer on its SSH port"
 
 # ── With a password, as the workflow signs in ────────────────────────────────
 

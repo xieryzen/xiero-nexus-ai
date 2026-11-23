@@ -1672,7 +1672,11 @@ export async function automation(ctx) {
     const keeper = await agent("Health keeper", "Keeper", { primaryModelRowId: flip.id, fallbackModelRowId: ids.models.chat });
     eq("an agent can be set to a failing model by its ID, and keeps it", [keeper.status, keeper.data?.agent?.primaryModelRowId], [201, flip.id]);
     const auditDb = database();
-    const actions = auditDb.prepare("SELECT action, actor_user_id AS actor, metadata FROM audit_logs WHERE action LIKE 'model.health.%'").all();
+    // What the rounds wrote. Real work writes such lines too, when it puts a model away or gives it back (with "by": "use"): not counted here.
+    const actions = auditDb
+      .prepare("SELECT action, actor_user_id AS actor, metadata FROM audit_logs WHERE action LIKE 'model.health.%'")
+      .all()
+      .filter((row) => !/"by":"use"/.test(row.metadata ?? ""));
     auditDb.close();
     const count = (action) => actions.filter((row) => row.action === action).length;
     check("the audit log has the rounds, and each model that was taken away or given back", count("model.health.run") === 7 && count("model.health.hidden") === 4 && count("model.health.restored") === 2 && actions.every((row) => row.actor), [count("model.health.run"), count("model.health.hidden"), count("model.health.restored")]);
@@ -1923,6 +1927,11 @@ export async function automation(ctx) {
     eq("  the account's count is what its usage records add up to", [afterFail[0], afterFail[0] >= usedBefore + 300], [failRows.reduce((sum, row) => sum + row.tokens, 0), true]);
 
     begin("Tokens: with none left, no other model is asked");
+    // The first model did not answer a moment ago, and rests: a task would ask
+    // its second model first. A test that the model passes ends its rest.
+    await fetch(`${MOCK}/__force?model=chat-count&status=200`);
+    const rested = await admin.post(`/api/models/${state.models["chat-count"]}/test`, {});
+    eq("(the model that failed a moment ago passes a test, and rests no more)", [rested.status, ((await admin.get("/api/models")).data?.models ?? []).find((m) => m.modelId === "chat-count")?.retryAt ?? null], [200, null]);
     // Two calls' worth is left: the first model uses it, and then fails.
     await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: afterFail[0] + 60 });
     await mockReset();

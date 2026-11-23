@@ -161,13 +161,37 @@ provider_by_id = {p["id"]: p for p in providers}
 models = rows(
     "models",
     ["id", "provider_id", "model_id", "display_name", "enabled", "input_price_per_mtok", "output_price_per_mtok", "source", "last_tested_at", "last_test_status", "last_test_error", "check_failures", "for_users",
-     "standing", "standing_at", "standing_error", "retry_at"],
+     "use_failures", "retry_at"],
     "order by model_id",
 )
 model_by_id = {m["id"]: m for m in models}
 caps = {}
 for c in rows("model_capabilities", ["model_row_id", "capability"]):
     caps.setdefault(c["model_row_id"], []).append(c["capability"])
+
+
+def resting(m):
+    """Whether the app does not choose the model for now (from version 1.10)."""
+    until = m.get("retry_at")
+    if until is None:
+        return False
+    try:
+        number = float(until)
+    except (TypeError, ValueError):
+        return False
+    if number > 1e11:
+        number /= 1000.0
+    return number > NOW.timestamp()
+
+
+def until(value):
+    """A stored time that is still to come: "11-23 07:40 UTC (in 60 min)"."""
+    number = float(value)
+    if number > 1e11:
+        number /= 1000.0
+    then = datetime.datetime.fromtimestamp(number, datetime.timezone.utc)
+    minutes = max(0, int((then - NOW).total_seconds() // 60))
+    return "%s UTC (in %s)" % (then.strftime("%m-%d %H:%M"), "%d min" % minutes if minutes < 90 else "%d h" % (minutes // 60))
 
 
 def model_name(model_id):
@@ -182,8 +206,8 @@ def model_name(model_id):
         state.append("off")
     if m.get("last_test_status") == "error":
         state.append("failing")
-    if m.get("standing") and m.get("standing") not in ("ok", None):
-        state.append(str(m["standing"]))
+    if resting(m):
+        state.append("resting")
     return "%s @ %s%s" % (m["model_id"], p.get("name", "?"), " [%s]" % ", ".join(state) if state else "")
 
 
@@ -204,22 +228,23 @@ for p in providers:
             ", failures %s" % m.get("check_failures") if m.get("check_failures") else "",
         ))
         print("        %s; %s%s%s" % (kinds, price, "; for users" if m.get("for_users") else "", "; added by %s" % m["source"] if m.get("source") else ""))
-        if m.get("standing"):
-            print("        standing: %s since %s%s" % (m["standing"], when(m.get("standing_at")), (", asked again %s" % when(m.get("retry_at"))) if m.get("retry_at") else ""))
+        if m.get("use_failures") or resting(m):
+            print("        in real work: %s in a row without an answer%s" % (
+                m.get("use_failures") or 0,
+                ("; %s until %s" % ("not asked again" if m.get("last_test_status") == "error" else "rests", until(m.get("retry_at")))) if resting(m) else ""))
         if m.get("last_test_error"):
             print("        said: %s" % short(m["last_test_error"]))
-        if m.get("standing_error") and m.get("standing_error") != m.get("last_test_error"):
-            print("        said in use: %s" % short(m["standing_error"]))
 
 listed = [m for m in models if m.get("enabled") and provider_by_id.get(m["provider_id"], {}).get("status") == "enabled"]
 chat = [m for m in listed if not caps.get(m["id"]) or any(c not in ("image_generation", "video_generation", "speech_generation", "embeddings") for c in caps.get(m["id"], []))]
 section("In short")
 print("  Models      %d, of them switched on, on a provider that is switched on: %d" % (len(models), len(listed)))
-print("  Chat models %d switched on: %d passed their last check, %d failed it, %d never checked" % (
+print("  Chat models %d switched on: %d answered the last time they were asked, %d did not, %d never asked%s" % (
     len(chat),
     len([m for m in chat if m.get("last_test_status") == "ok"]),
     len([m for m in chat if m.get("last_test_status") == "error"]),
     len([m for m in chat if not m.get("last_test_status")]),
+    "; %d rest for now" % len([m for m in chat if m.get("last_test_status") != "error" and resting(m)]) if any(resting(m) for m in chat) else "",
 ))
 
 agents = rows("agents", ["id", "name", "role", "primary_model_row_id", "fallback_model_row_id", "routing_mode", "status"], "order by name")
