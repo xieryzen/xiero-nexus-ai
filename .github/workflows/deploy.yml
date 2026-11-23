@@ -11,6 +11,11 @@ name: Deploy to a Pterodactyl node
 #   install-plan  what a first installation would do; changes nothing
 #   install       the first installation, on a server that has no bundle yet
 #   disk-report   what takes the space on the node; changes nothing
+#   models-report what the app knows about its models: every provider and
+#                 model with the result of its last check, the models of the
+#                 agents and projects, and what the providers answered in the
+#                 last runs. Read from the app's database; changes nothing,
+#                 asks no provider, prints no key
 #   site-plan     what giving the app its public address would do; changes
 #                 nothing
 #   site          the public address: a site in the node's nginx for the name
@@ -51,7 +56,10 @@ name: Deploy to a Pterodactyl node
 #   APP_URL             the public address of the site
 #
 # The last three can also be typed when a run is started; what is typed is
-# hidden in the log.
+# hidden in the log. So can the node itself ("host"), for a run on another
+# machine than the one VPS_HOST names: the user and the password or key are
+# still the ones of the secrets, and VPS_PORT and VPS_HOST_KEY, which belong
+# to the other machine, are not used.
 #
 # Anyone can read the log of a public repository, so what the node says is not
 # printed here unless the repository is private or "show_output" is ticked.
@@ -67,9 +75,13 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key]
+        options: [check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key]
         default: plan
         required: true
+      host:
+        description: Host name or address of the node, [user@]host[:port] (default, the secret VPS_HOST)
+        type: string
+        required: false
       server:
         description: Server ID (default, the secret PTERODACTYL_SERVER)
         type: string

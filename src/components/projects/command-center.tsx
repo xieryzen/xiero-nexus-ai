@@ -42,6 +42,7 @@ export function CommandCenter({
   servers = [],
   siteAccounts = [],
   chooses = true,
+  standInsDefault = true,
 }: {
   initialProjects: ProjectDTO[];
   managerModels: Option[];
@@ -55,6 +56,8 @@ export function CommandCenter({
    * installation can do, and the form asks only what the project may make.
    */
   chooses?: boolean;
+  /** Whether a run goes on with another model that works, as this installation is set. */
+  standInsDefault?: boolean;
   /** Whether this server can join clips into one video (it has ffmpeg). */
   canRender: boolean;
   teams: Option[];
@@ -81,6 +84,7 @@ export function CommandCenter({
   const [videoModelRowId, setVideoModel] = useState("");
   const [speechModelRowId, setSpeechModel] = useState("");
   const [memory, setMemory] = useState(false);
+  const [standIns, setStandIns] = useState(standInsDefault);
   const [serverIds, setServerIds] = useState<string[]>([]);
   const [siteAccountIds, setSiteAccountIds] = useState<string[]>([]);
   const [maxMedia, setMaxMedia] = useState(String(DEFAULT_MAX_MEDIA));
@@ -154,6 +158,8 @@ export function CommandCenter({
           speechModelRowId: speechModelRowId || null,
           maxMedia: Number(maxMedia),
           memory,
+          // Sent only where it was chosen here, and only when it differs from what the installation does anyway.
+          ...(chooses && standIns !== standInsDefault ? { standIns } : {}),
           ...(serverIds.length > 0 ? { serverIds } : {}),
           ...(siteAccountIds.length > 0 ? { siteAccountIds } : {}),
         }),
@@ -313,6 +319,18 @@ export function CommandCenter({
                     </div>
                     <Toggle checked={memory} onChange={setMemory} label="Remember earlier runs" />
                   </div>
+                  {chooses && (
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-sm text-ink">Go on with another model</p>
+                        <p className="text-xs text-ink-3">
+                          When the models of an agent and of the project do not answer, a task is done by another model that
+                          works, never one that costs more. Switched off, the task fails instead.
+                        </p>
+                      </div>
+                      <Toggle checked={standIns} onChange={setStandIns} label="Go on with another model" />
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm text-ink">Require approval before running</p>

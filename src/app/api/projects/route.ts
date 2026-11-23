@@ -152,6 +152,7 @@ export const POST = handle(async (req) => {
       speechModelRowId: body.speechModelRowId ?? null,
       maxMedia,
       memory: body.memory ?? false,
+      standIns: body.standIns ?? null,
       createdBy: user.id,
     })
     .returning()

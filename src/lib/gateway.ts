@@ -21,6 +21,7 @@ import type {
   ToolChoice,
   ToolDefinition,
 } from "./adapters/types";
+import { noteAnswer, noteFailure } from "./model-standing";
 import { AppError, Errors } from "./errors";
 import { decryptSecret } from "./secrets";
 
@@ -163,6 +164,12 @@ export interface ChatOptions {
   tools?: ToolDefinition[];
   toolChoice?: ToolChoice;
   maxTokens?: number;
+  /**
+   * Whether the request ended well is not written down for the model
+   * (model-standing.ts): for the check of the models, which writes its own
+   * result.
+   */
+  unnoted?: boolean;
 }
 
 function chatRequest(resolved: ResolvedModel, messages: ChatMessage[], opts: ChatOptions): ChatRequest {
@@ -183,7 +190,14 @@ export async function gatewayChat(
   opts: ChatOptions = {},
 ): Promise<ChatResult> {
   const adapter = getAdapter(resolved.provider.adapter);
-  return adapter.chat(contextFor(resolved.provider), chatRequest(resolved, messages, opts));
+  try {
+    const result = await adapter.chat(contextFor(resolved.provider), chatRequest(resolved, messages, opts));
+    if (!opts.unnoted) noteAnswer(resolved.model, resolved.provider);
+    return result;
+  } catch (err) {
+    if (!opts.unnoted) noteFailure(resolved.model, resolved.provider, err);
+    throw err;
+  }
 }
 
 /** Streaming chat completion; forwards text deltas to `onDelta`. */
@@ -194,11 +208,14 @@ export async function gatewayChatStream(
   opts: ChatOptions = {},
 ): Promise<ChatResult> {
   const adapter = getAdapter(resolved.provider.adapter);
-  return adapter.chatStream(
-    contextFor(resolved.provider),
-    chatRequest(resolved, messages, opts),
-    onDelta,
-  );
+  try {
+    const result = await adapter.chatStream(contextFor(resolved.provider), chatRequest(resolved, messages, opts), onDelta);
+    if (!opts.unnoted) noteAnswer(resolved.model, resolved.provider);
+    return result;
+  } catch (err) {
+    if (!opts.unnoted) noteFailure(resolved.model, resolved.provider, err);
+    throw err;
+  }
 }
 
 /** The capabilities an administrator ticked for a model. */

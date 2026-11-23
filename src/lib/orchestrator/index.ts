@@ -41,7 +41,7 @@ import {
 import { AppError, PlainError, sanitizeUpstreamError } from "@/lib/errors";
 import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
 import { collectionIdsForAgent } from "@/lib/knowledge/service";
-import { isFailing } from "@/lib/model-health-rules";
+import { isFailing, isResting } from "@/lib/model-health-rules";
 import { skillNames, skillsBlock } from "@/lib/skills/prompt";
 import { skillsForWork } from "@/lib/skills/service";
 import { serializeAsset, type MediaAssetDTO } from "@/lib/media/dto";
@@ -57,7 +57,8 @@ import {
 import { notify } from "@/lib/notifications";
 import { publish } from "@/lib/run-bus";
 import { runtime } from "@/lib/runtime";
-import { projectOwnerChooses, withRunModels } from "@/lib/model-choice";
+import { askingOrderFor, projectOwnerChooses, withRunModels } from "@/lib/model-choice";
+import { standInsEnabled } from "@/lib/model-choice-rules";
 import { NOT_SET_UP } from "@/lib/public-text";
 import { SERVER_TOOL, serversLine, type ServerForAgent } from "@/lib/ssh/rules";
 import { serversForRun } from "@/lib/ssh/servers";
@@ -212,7 +213,8 @@ async function invoke(
 
 /**
  * Enabled models (on enabled, implemented-adapter providers) with prices + caps.
- * A model that failed its last check is not chosen automatically.
+ * A model that failed its last check is not chosen automatically, nor one
+ * that did not answer a moment ago and rests.
  */
 function loadRoutableModels(): RoutableModel[] {
   const rows = db
@@ -221,13 +223,14 @@ function loadRoutableModels(): RoutableModel[] {
       inputPricePerMTok: models.inputPricePerMTok,
       outputPricePerMTok: models.outputPricePerMTok,
       lastTestStatus: models.lastTestStatus,
+      retryAt: models.retryAt,
       adapter: providers.adapter,
     })
     .from(models)
     .innerJoin(providers, eq(models.providerId, providers.id))
     .where(eq(models.enabled, true))
     .all()
-    .filter((m) => adapterIsImplemented(m.adapter) && !isFailing(m));
+    .filter((m) => adapterIsImplemented(m.adapter) && !isFailing(m) && !isResting(m, Date.now()));
   if (rows.length === 0) return [];
   const caps = new Map<string, string[]>();
   for (const c of db.select().from(modelCapabilities).all()) {
@@ -285,7 +288,19 @@ export function prepareRun(asSet: Project): RunSetup {
     if (!project.managerModelRowId) throw new AppError(400, "no_model", "No manager model set");
     manager = resolveChatModel(project.managerModelRowId);
   } catch (e) {
-    throw new AppError(400, "run_not_possible", e instanceof AppError ? e.message : "Manager model unavailable");
+    // A manager model that is switched off or gone: the run works with another
+    // model that can be asked in its place (model-choice.ts), when there is one.
+    const other = (asSet.standIns ?? standInsEnabled(process.env.MODEL_STAND_INS)) ? askingOrderFor([], { standIns: true }).ids[0] : undefined;
+    let standIn: ResolvedModel | null = null;
+    if (other) {
+      try {
+        standIn = resolveChatModel(other);
+      } catch {
+        standIn = null;
+      }
+    }
+    if (!standIn) throw new AppError(400, "run_not_possible", e instanceof AppError ? e.message : "Manager model unavailable");
+    manager = standIn;
   }
   const routable = loadRoutableModels();
   const workforce = agentsForProject(project).filter(
@@ -452,6 +467,41 @@ export async function executeRun(runId: string): Promise<void> {
   // (another server process on the same database) within a couple of seconds.
   let flagChecked = 0;
   let flagged = false;
+  /** Whether this project's runs go on with stand-ins: as it is set now, or as the installation is. */
+  const standInsOf = (): boolean | null =>
+    db.select({ standIns: projects.standIns }).from(projects).where(eq(projects.id, projectId)).get()?.standIns ?? null;
+
+  /**
+   * One answer that is the run's own (its plan, its result): asked of the
+   * models it is set to that can be used now, then of others that work, then
+   * of the ones it is set to that are failing or resting (model-choice.ts).
+   * Throws what the last of them said when none answers.
+   */
+  const askInTurn = async (
+    own: string[],
+    messages: ChatMessage[],
+    temperature: number,
+  ): Promise<{ content: string; prompt: number; completion: number; model: ResolvedModel; started: number }> => {
+    let last: unknown = new AppError(400, "no_model", "No model available");
+    for (const id of askingOrderFor(own, { standIns: standInsOf() }).ids) {
+      if (isCancelled()) break;
+      let model: ResolvedModel;
+      try {
+        model = resolveChatModel(id);
+      } catch (e) {
+        last = e;
+        continue;
+      }
+      const started = Date.now();
+      try {
+        return { ...(await invoke(model, messages, temperature)), model, started };
+      } catch (e) {
+        last = e;
+      }
+    }
+    throw last;
+  };
+
   const isCancelled = (): boolean => {
     if (flagged || runtime().cancelled.has(projectId)) return true;
     const now = Date.now();
@@ -676,30 +726,29 @@ export async function executeRun(runId: string): Promise<void> {
           { role: "user", content: `Goal:\n${goal}${memoryNote}` },
         ];
 
-        const recordPlanning = (r: { prompt: number; completion: number }, started: number) =>
+        const recordPlanning = (r: { prompt: number; completion: number; model: ResolvedModel; started: number }) =>
           recordUsage({
             userId: project.createdBy,
-            providerId: manager.provider.id,
-            modelRowId: manager.model.id,
+            providerId: r.model.provider.id,
+            modelRowId: r.model.model.id,
             kind: "other",
             promptTokens: r.prompt,
             completionTokens: r.completion,
-            estimatedCost: computeCost(manager.model, r.prompt, r.completion),
+            estimatedCost: computeCost(r.model.model, r.prompt, r.completion),
             status: "ok",
-            latencyMs: Date.now() - started,
+            latencyMs: Date.now() - r.started,
           });
-        let started = Date.now();
-        const first = await invoke(manager, planMessages, 0.2);
-        recordPlanning(first, started);
+        const first = await askInTurn([manager.model.id], planMessages, 0.2);
+        recordPlanning(first);
         plan = parsePlan(first.content ?? "", taskCap);
         if (!plan.ok) {
-          started = Date.now();
-          const retry = await invoke(
-            manager,
+          // The model that answered is asked to put it right, before any other.
+          const retry = await askInTurn(
+            [first.model.model.id],
             [...planMessages, { role: "user", content: "Your previous answer was not valid JSON. Respond with ONLY the JSON object." }],
             0,
           );
-          recordPlanning(retry, started);
+          recordPlanning(retry);
           plan = parsePlan(retry.content, taskCap);
         }
         if (!plan.ok || plan.tasks.length === 0) {
@@ -1235,7 +1284,14 @@ export async function executeRun(runId: string): Promise<void> {
         for (;;) {
           failed.clear();
           limited.clear();
-          for (const mid of candidates) {
+          // The models the task is set to that can be used now, then others
+          // that work, then the ones it is set to that are failing or resting
+          // (model-choice.ts). What is known about the models changes while a
+          // run works, so the order is made anew for each pass.
+          const order = askingOrderFor(candidates, { wantsTools: tools.length > 0, standIns: standInsOf() });
+          // The model that did not answer just before, by its name.
+          let before: string | null = null;
+          for (const mid of order.ids) {
             // Another model is not asked once the account's tokens are used up.
             if (accountSpent()) {
               outOfTokens = true;
@@ -1249,8 +1305,21 @@ export async function executeRun(runId: string): Promise<void> {
               lastError = e instanceof AppError ? e.message : "Model unavailable";
               db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: mid, status: "error", attempt, error: lastError }).run();
               failed.set(mid, { model: modelName(mid), error: lastError });
+              before = modelName(mid);
               continue;
             }
+            const named = `${resolved.model.displayName || resolved.model.modelId} (${resolved.provider.name})`;
+            if (before !== null) {
+              emit({
+                type: "progress",
+                seq,
+                message: "Trying again",
+                full: `${before} did not answer. Going on with ${named}${order.standIns.has(mid) ? ", which stands in for the models this task is set to" : ""}`,
+              });
+            } else if (order.standIns.has(mid)) {
+              emit({ type: "progress", seq, message: "Working", full: `The models this task is set to are failing or resting. Working with ${named}, which stands in for them` });
+            }
+            before = named;
             const temperature = agent?.temperature ?? 0.7;
             const canCallTools =
               tools.length > 0 && getAdapter(resolved.provider.adapter).supports.includes("tool_calling");
@@ -1405,13 +1474,13 @@ export async function executeRun(runId: string): Promise<void> {
             ? null
             : nextLimitWait({ round: waits, waitedMs, totalMs: limitWaits.totalMs, limited: [...limited.values()] });
           if (wait === null) break;
-          const went = await waitForLimits(seq, wait, { limited: limited.size, of: candidates.length });
+          const went = await waitForLimits(seq, wait, { limited: limited.size, of: order.ids.length });
           waitedMs += went.waitedMs;
           waits++;
           if (went.stopped === "cancelled") stoppedByCancel = true;
           if (went.stopped) break;
           // The wait is over: the card says that the task is at work again.
-          emit({ type: "progress", seq, message: "Trying again", full: candidates.length === 1 ? "Asking its model again" : "Asking its models again" });
+          emit({ type: "progress", seq, message: "Trying again", full: order.ids.length === 1 ? "Asking its model again" : "Asking its models again" });
         }
         // The whole time, and no model answered: the other tasks of this run
         // would wait for the same limits, and do not.
@@ -1685,9 +1754,8 @@ export async function executeRun(runId: string): Promise<void> {
         },
       ];
       try {
-        const started = Date.now();
-        const r = await invoke(manager, synthMessages, 0.3);
-        recordManager(r, manager, started);
+        const r = await askInTurn([manager.model.id], synthMessages, 0.3);
+        recordManager(r, r.model, r.started);
         deliverable = r.content;
       } catch (e) {
         deliverable = `(Synthesis step failed: ${e instanceof AppError ? e.message : "error"})`;
@@ -1754,7 +1822,8 @@ export async function executeRun(runId: string): Promise<void> {
               ) + (execSummary ? `\n\n### Sandbox execution results\n${execSummary}` : ""),
           },
         ];
-        for (const reviewModelId of reviewModelIds) {
+        // The reviewer's models that can be used now, then others that work, then its failing ones.
+        for (const reviewModelId of askingOrderFor(reviewModelIds, { standIns: standInsOf() }).ids) {
           if (isCancelled()) break;
           try {
             const reviewModel = resolveChatModel(reviewModelId);

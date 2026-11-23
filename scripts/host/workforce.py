@@ -13,6 +13,14 @@
 #   --url <address>      Where the app answers (default http://127.0.0.1:3000).
 #   --user <name>        The administrator to sign in as (default: the one in
 #                        the --env-file, else "admin").
+#   --as-owner <file>    Sign in without a password, as the app's owner: this
+#                        program writes itself a session into the app's
+#                        database (<file>, data/nexus.db of the app), which
+#                        ends in an hour and is removed when the program is
+#                        done. For whoever may write that file, which is root
+#                        on the machine the app runs on: the app's audit log
+#                        says "host.session" each time. With --user, as that
+#                        administrator instead of the first owner.
 #   --env-file <file>    The app's .env, for the administrator of the first
 #                        start: the name (BOOTSTRAP_ADMIN_USERNAME), and the
 #                        password (BOOTSTRAP_ADMIN_PASSWORD) when NEXUS_PASSWORD
@@ -99,18 +107,22 @@
 import argparse
 import base64
 import difflib
+import hashlib
 import html
 import http.cookiejar
 import io
 import json
 import os
 import re
+import secrets
 import socket
+import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 
 AGENT = "xiero-nexus-workforce/1"
@@ -745,6 +757,77 @@ def sign_in(app, user, password, source):
     if me.get("role") not in ("admin", "owner"):
         sign_out(app)
         raise Stop(3, '"%s" is not an administrator, and only an administrator can change the workforce.' % user)
+    return me
+
+
+# How long a session lasts that this program wrote for itself.
+HOST_SESSION_MS = 60 * 60 * 1000
+
+
+def host_session(app, path, user):
+    """Sign in without a password: a session of the app's owner, written into the app's database.
+
+    Whoever may write that file can do anything to the app already, so this
+    opens no door that was shut. The session ends in an hour, is removed when
+    the program is done (sign_out), and the app's audit log says that it was
+    made."""
+    if not os.path.isfile(path):
+        raise Wrong("--as-owner: %s is not there (the app's database, data/nexus.db in its folder)." % path)
+    owner = os.stat(path)
+    as_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    token = secrets.token_urlsafe(32)
+    try:
+        try:
+            db = sqlite3.connect(path, timeout=20)
+            try:
+                have = {line[1] for line in db.execute("pragma table_info(sessions)")}
+                if not {"token_hash", "user_id", "two_factor_pending", "created_at", "last_used_at", "expires_at"} <= have:
+                    raise Stop(3, "--as-owner: this version of the app keeps its sessions in another way than this program knows.")
+                if user:
+                    found = db.execute("select id, username, role, status from users where username = ? or email = ?", (user, user)).fetchone()
+                    if not found:
+                        raise Stop(3, '--as-owner: the app has no account "%s".' % user)
+                else:
+                    found = db.execute(
+                        "select id, username, role, status from users where status = 'active' and role in ('owner', 'admin') "
+                        "order by case role when 'owner' then 0 else 1 end, created_at limit 1").fetchone()
+                    if not found:
+                        raise Stop(3, "--as-owner: the app has no owner and no administrator to sign in as.")
+                if found[3] != "active" or found[2] not in ("owner", "admin"):
+                    raise Stop(3, '--as-owner: "%s" is not an active administrator.' % found[1])
+                now = int(time.time() * 1000)
+                db.execute(
+                    "insert into sessions (token_hash, user_id, two_factor_pending, user_agent, ip, created_at, last_used_at, expires_at) values (?, ?, 0, ?, 'host', ?, ?, ?)",
+                    (hashlib.sha256(token.encode("utf-8")).hexdigest(), found[0], AGENT, now, now, now + HOST_SESSION_MS))
+                if {line[1] for line in db.execute("pragma table_info(audit_logs)")} >= {"id", "actor_user_id", "action", "metadata", "created_at"}:
+                    db.execute(
+                        "insert into audit_logs (id, actor_user_id, action, target_type, target_id, metadata, ip, user_agent, created_at) values (?, ?, 'host.session', 'user', ?, ?, 'host', ?, ?)",
+                        (str(uuid.uuid4()), found[0], found[0], json.dumps({"by": "workforce.py --as-owner", "ends": "in an hour, or when the program is done"}), AGENT, now))
+                db.commit()
+            finally:
+                db.close()
+        except sqlite3.Error as err:
+            raise Stop(3, "--as-owner: the app's database could not be written (%s)." % err)
+    finally:
+        if as_root:
+            # A file that this made next to the database is the app's, not root's:
+            # the app, which runs as another user, has to be able to write it.
+            for suffix in ("-wal", "-shm", "-journal"):
+                try:
+                    side = os.stat(path + suffix)
+                    if (side.st_uid, side.st_gid) != (owner.st_uid, owner.st_gid):
+                        os.chown(path + suffix, owner.st_uid, owner.st_gid)
+                except OSError:
+                    pass
+    app.cookie = "nexus_session=" + token
+    status, data = app.call("GET", "/api/account/me", timeout=20)
+    me = data.get("user") if isinstance(data, dict) else None
+    if status != 200 or not isinstance(me, dict):
+        app.cookie = ""
+        raise Stop(3, "--as-owner: the app did not take the session that was written for it (%s%s). Is --url the app of this database?" % (status, reason_of(data)))
+    if me.get("role") not in ("admin", "owner"):
+        sign_out(app)
+        raise Stop(3, '"%s" is not an administrator, and only an administrator can change the workforce.' % me.get("username"))
     return me
 
 
@@ -2319,6 +2402,7 @@ def options_from(argv):
     parser = Parser(add_help=False, allow_abbrev=False)
     parser.add_argument("--url", default="http://127.0.0.1:3000")
     parser.add_argument("--user", default="")
+    parser.add_argument("--as-owner", default="")
     parser.add_argument("--env-file", default="")
     parser.add_argument("--file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "workforce.json"))
     parser.add_argument("--dry-run", action="store_true")
@@ -2390,12 +2474,15 @@ def run(argv):
     # whichever of the two the password comes from.
     values = read_env_file(options.env_file) if options.env_file else {}
     user = options.user or values.get("BOOTSTRAP_ADMIN_USERNAME", "") or "admin"
-    if options.env_file and not password:
+    if options.as_owner:
+        # No password is needed, and none is read.
+        password = ""
+    elif options.env_file and not password:
         password = values.get("BOOTSTRAP_ADMIN_PASSWORD", "")
         source = "the app's .env (BOOTSTRAP_ADMIN_PASSWORD)"
         if not password:
             raise Wrong("%s sets no BOOTSTRAP_ADMIN_PASSWORD, and NEXUS_PASSWORD is not set: there is nothing to sign in with." % options.env_file)
-    if not password:
+    if not password and not options.as_owner:
         raise Wrong("NEXUS_PASSWORD is not set: the password of the administrator to sign in as.")
 
     app = App(options.url)
@@ -2403,7 +2490,7 @@ def run(argv):
     if status != 200 or not isinstance(health, dict) or health.get("status") != "ok":
         raise Stop(4, "%s/api/health does not say that the app is well (it answered %s)." % (app.url, status))
 
-    me = sign_in(app, user, password, source)
+    me = host_session(app, options.as_owner, options.user) if options.as_owner else sign_in(app, user, password, source)
     password = ""
     failed = 0
     try:

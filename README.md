@@ -523,8 +523,8 @@ that do.
   seconds; only when that fails too is it left out. A refusal (no credit, no
   access, no such model) is not asked twice.
 - **What an agent is set to stays.** An agent whose model is left out keeps
-  it, asks it first and then its fallback; its form shows the model with the
-  reason.
+  it; its form shows the model with the reason. Until v1.10.0 a task still
+  asked that model first; now it asks it last (see the next section).
 
 `MODEL_HEALTH_INTERVAL_MINUTES` sets how often a working model is checked
 (default 360, between 5 minutes and a week); `0` switches the automatic check
@@ -535,7 +535,70 @@ and start checks over the API: `GET /api/models/health`, and
 optional).
 
 Not checked: image, video, speech and embedding models, since a check would
-generate (and bill) one each time. They are offered as before.
+generate (and bill) one each time. They are offered as before. Nor a model
+that only writes down what is said (marked for audio and not for text): it
+cannot answer a chat request, and from v1.10.0 it is not asked one.
+
+## A run goes on with a model that works (v1.10.0)
+
+Until v1.10.0 a task asked the two models of its agent and the manager model
+of its project, in that order, whatever was known about them. On one server
+a task failed that way while twelve other models answered: its first model
+did not answer within five minutes, its second had been failing its checks
+for days, and so had the manager model.
+
+- **Stand-ins.** A task asks the models it is set to that can be used now;
+  then **stand-ins**, other chat models of the installation that work; and
+  only then the ones it is set to that are failing or resting. The run's own
+  requests (its plan, its result, its review) do the same in place of the
+  manager model, and a project whose manager model is switched off or gone
+  runs with a model that works. The task's card says which model did not
+  answer and which one went on, and
+  `GET /api/projects/{id}/attempts` lists each attempt as before.
+- **Which models stand in.** As for the app's own choice (see "What a user
+  is shown"): where models are marked **for users**, only they; otherwise
+  every chat model that is switched on. Never one that is failing or
+  resting. **Never one that costs more** than the dearest model the task
+  was set to: a task set to models priced at nothing is done by one priced
+  at nothing, and a model without a price is taken to cost more (where a
+  task's own model has no price, there is nothing to compare with, and any
+  may stand in: mark the ones you want, or set prices). For a task with
+  tools, a model marked as taking tools before one that is not; then the
+  cheapest. One of each provider before a second of any, four at most.
+- **A project says whether it wants them**: **Go on with another model**,
+  in the project form and on the project page (`standIns` in
+  `POST /api/projects` and `PATCH /api/projects/{id}`). A project that says
+  nothing does what the installation is set to: stand-ins are on unless
+  `MODEL_STAND_INS=0`. Switched off, a task fails when its own models do not
+  answer (or waits, where they are limited: v1.9.0).
+- **Real work counts as a check.** What a chat request ends with is written
+  down for its model, whoever made it: a chat, a task, the API. A model that
+  answers is known to work, and the check need not ask it. A model that does
+  not answer for something its provider did (no answer in time, no
+  connection, 429, an error of the provider) **rests**: the app does not
+  choose it by itself for as long as the provider says, or for a minute,
+  doubled each time up to a quarter of an hour. It stays in the lists, and
+  the check asks it when its rest is over. **Three such requests in a row
+  put it away** as a failed check does, and so does one answer that asking
+  again does not change: no such model, a key that is not accepted, no
+  credit, a quota that is used up for the day. A request that is refused for
+  what it asked (too long, a parameter the model does not take) says nothing
+  about the model.
+- **Back by itself.** A model that was put away is asked by the check after
+  15 minutes, then after twice as long, and not before the time its provider
+  named ("retry in 17 hours"); when it answers, a check or a request that
+  names it, it is back. One that real work had put away comes back on
+  probation: it passed a check of one word, and the next request of real
+  work that fails puts it away again.
+- **The Models page** says how many of the models that are switched on work,
+  rest and are left out, shows "rests until 14:05" on a model that rests,
+  and when a failing one is asked again.
+
+What stand-ins cannot do: answer where no model of the installation works,
+or judge whether another model is as good as the one that was chosen. A
+small model that stands in for a large one delivers what a small model
+delivers. Where that matters, switch them off for the project, or mark the
+models the app may choose.
 
 ## Tokens of an account (v1.8.0)
 
@@ -1205,6 +1268,7 @@ links in the answers to be right.
 | 1.7.0 | Skills and owners (SKILL.md, .skill and .zip uploads; skills of agents and of teams; the read_skill tool; an owner who manages the accounts; a reviewer that is shown the files) | ✅ implemented (seen at work on one real server; how well a model follows a skill was not measured) |
 | 1.8.0 | Models that answer (an automatic check of every chat model; a failing model is left out of the lists until it answers again); tokens of an account (a limit for every account, set by an owner); what a user is shown (no provider and no model: the app chooses); servers over SSH (one connection that stays open until a run has ended; only machines an owner registered; every command logged); the browser (agents open sites and sign in with saved accounts; a CAPTCHA or a code is left to a person, who does it in the same browser; the session is kept) | ✅ implemented (five candidates ran on one real server, where the browser service was set up; what the parts do was tested against mock providers, an SSH server and a web site of the tests, and not seen on that server) |
 | 1.9.0 | Runs that meet a limit (Continue: a run is taken up again with what it finished; a task waits for a limit of its models that ends; a quota answer in few words, and what each model of a task said) | ✅ implemented (tested against providers of the tests; not waited through against a live provider's quota) |
+| 1.10.0 | A run goes on with a model that works (stand-ins for the models a task and a run are set to; what real work says about a model: resting, put away, back by itself; a switch for each project; the host signs in as owner without a password; a report of the app's models) | ✅ implemented (tested against providers of the tests; the report of the models was read from one real server, whose failed run it explains) |
 
 ---
 
@@ -1277,6 +1341,7 @@ account you register through the UI becomes the owner.
 | `BROWSER_MAX_PAGES` | no | How many pages all agents together may have open in the browser: default 8, between 1 and 50. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
 | `RUN_LIMIT_WAIT_MINUTES` | no | How long a task of a project waits for its models when all of them say "not now" (429, 503, 529), asking them again meanwhile: 0 to 1440 minutes, default 60; `0` = it does not wait and fails at once. It never waits for a limit that does not end in that time (a quota per day, an account without credit). |
+| `MODEL_STAND_INS` | no | Whether a run goes on with another model that works when the models a task, or the run itself, is set to do not answer: on unless `0` (also `off`, `false`, `no`). A project can say for itself (**Go on with another model**). A stand-in never costs more than the dearest model the task was set to. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
 | `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
@@ -1577,7 +1642,12 @@ that stops at the limits of its models and is continued, with what it had
 done kept and not asked for again; a task that waits for a limit and goes
 on, one that waits in vain, one that is stopped while it waits; and quota
 answers in the shape Google sends them, for a quota per minute (waited for)
-and per day (not waited for). At the end the server
+and per day (not waited for). From v1.10.0: a task whose models do not
+answer done by a stand-in, and the run's result with it; a model that rests
+after one request without an answer, is put away after three or after one
+answer that asking again does not change, and is back when it answers; a
+model that is put away asked last; a project that wants no stand-in; and
+never a stand-in that costs more. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with

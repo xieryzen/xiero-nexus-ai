@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SerializedModel } from "@/lib/models";
 import type { HealthStatus } from "@/lib/model-health";
 import type { UsersModel } from "@/lib/model-choice";
@@ -9,7 +9,7 @@ import { CHOICE_LABEL } from "@/lib/model-choice-rules";
 import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatNumber } from "@/lib/format";
-import { RelativeTime } from "@/components/time";
+import { RelativeTime, TimeText } from "@/components/time";
 import { Badge, Button, Card, EmptyState, PageHeader, StatusDot, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ModelForm } from "./model-form";
@@ -30,6 +30,17 @@ function every(minutes: number): string {
   if (minutes % 1440 === 0) return minutes === 1440 ? "every day" : `every ${minutes / 1440} days`;
   if (minutes % 60 === 0) return minutes === 60 ? "every hour" : `every ${minutes / 60} hours`;
   return `every ${minutes} minutes`;
+}
+
+/** A time of day, with the day when it is not today: "14:05", "09:30 on 24 Nov". */
+function clock(date: Date): string {
+  const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const today = new Date();
+  const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+  return sameDay ? time : `${time} on ${date.toLocaleDateString([], { day: "numeric", month: "short" })}`;
+}
+function ClockTime({ at }: { at: Date }) {
+  return <TimeText at={at} text={clock} />;
 }
 
 export function ModelsManager({
@@ -132,6 +143,7 @@ export function ModelsManager({
         lastTestStatus: res.ok ? "ok" : "error",
         lastTestError: res.ok ? null : res.error ?? "Test failed",
         checkFailures: res.ok ? 0 : m.checkFailures + 1,
+        retryAt: null,
         hidden: m.enabled && !res.ok,
       });
       setTestNote((n) => ({
@@ -184,8 +196,27 @@ export function ModelsManager({
     }
   }
 
+  // What depends on the time of day is shown once the page is live, so that
+  // the server and the browser write the same page first.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
   const canAdd = isAdmin && providers.length > 0;
   const hiddenCount = models.filter((m) => m.hidden).length;
+  // A model that did not answer a request a moment ago: the app does not choose it until its rest is over.
+  const restsUntil = (m: SerializedModel): Date | null => {
+    if (!m.retryAt || now === null) return null;
+    const until = new Date(m.retryAt);
+    return until.getTime() > now ? until : null;
+  };
+  const switchedOn = models.filter((m) => m.enabled);
+  const restingCount = switchedOn.filter((m) => !m.hidden && restsUntil(m)).length;
+  const workingCount = switchedOn.filter((m) => m.lastTestStatus === "ok" && !restsUntil(m)).length;
+  const uncheckedCount = switchedOn.filter((m) => !m.lastTestStatus).length;
 
   return (
     <div>
@@ -216,7 +247,16 @@ export function ModelsManager({
               : "The automatic check is switched off (MODEL_HEALTH_INTERVAL_MINUTES=0): models are checked with Test and with Check all now."}{" "}
             A model that fails is left out of the model lists and of the automatic choice until a check passes again; a failing model is asked again sooner.
           </p>
+          <p className="mt-1" data-testid="model-standing">
+            Real work counts as well: a model that answers a request is known to work. One that does not answer rests (the app does not choose it for a while), and after three
+            requests in a row, or one answer that asking again does not change, it is left out like one that failed a check. A run then goes on with another model that works.
+          </p>
           <p className="mt-1 text-xs text-ink-3">
+            <span data-testid="model-counts">
+              Of the {switchedOn.length} that {switchedOn.length === 1 ? "is" : "are"} switched on: {workingCount} {workingCount === 1 ? "works" : "work"}
+              {restingCount > 0 ? `, ${restingCount} ${restingCount === 1 ? "rests" : "rest"}` : ""}
+              {uncheckedCount > 0 ? `, ${uncheckedCount} ${uncheckedCount === 1 ? "was" : "were"} never asked` : ""}.
+            </span>{" "}
             {hiddenCount === 0 ? "No model is left out now." : `${hiddenCount} ${hiddenCount === 1 ? "model is" : "models are"} left out now.`}
             {checking || health.running ? " A check is running." : ""}
             {!checking && health.last && health.last.endedAt ? (
@@ -318,8 +358,20 @@ export function ModelsManager({
                               </Badge>
                             )}
                             {m.hidden && (
-                              <span title="It failed its last check. It is left out of the model lists until a check passes again.">
+                              <span title="It failed its last check, or did not answer in real work. It is left out of the model lists until a check passes again.">
                                 <Badge tone="warn">left out of the lists</Badge>
+                              </span>
+                            )}
+                            {m.enabled && !m.hidden && restsUntil(m) && (
+                              <span title="It did not answer a request a moment ago. The app does not choose it by itself until then; it stays in the lists, and is asked again when its rest is over.">
+                                <Badge tone="warn">
+                                  rests until <ClockTime at={restsUntil(m)!} />
+                                </Badge>
+                              </span>
+                            )}
+                            {m.hidden && restsUntil(m) && (
+                              <span className="text-xs text-ink-3" title="Its provider said when to ask again: the check does not ask before that.">
+                                asked again after <ClockTime at={restsUntil(m)!} />
                               </span>
                             )}
                             {m.forUsers && (
@@ -349,7 +401,11 @@ export function ModelsManager({
                             {m.pricePerImage != null && <span>${m.pricePerImage}/image</span>}
                             {m.pricePerSecond != null && <span>${m.pricePerSecond}/second</span>}
                             {m.pricePerMChars != null && <span>${m.pricePerMChars}/1M characters</span>}
-                            {m.lastTestedAt && <span>tested <RelativeTime at={m.lastTestedAt} /></span>}
+                            {m.lastTestedAt && (
+                              <span title="When it last answered, or failed: a check, or a request of real work.">
+                                {m.lastTestStatus === "error" ? "failed" : "answered"} <RelativeTime at={m.lastTestedAt} />
+                              </span>
+                            )}
                           </div>
                           {testNote[m.id] && (
                             <p

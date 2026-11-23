@@ -5,6 +5,92 @@ All notable changes to Xiero Nexus AI are documented here. The format follows
 [Semantic Versioning](https://semver.org/). Release channels (stable, rc, beta,
 alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
+## [1.10.0] - 2026-11-23
+
+A task asked the two models of its agent and the manager model of its
+project, in that order, whatever was known about them. On the server this
+is deployed to, a run failed at its first task that way: the first model
+did not answer within five minutes, the second and the manager model had
+been failing their checks for days, and twelve other models that answered
+were not asked. Now a run goes on with a model that works, and what real
+work meets is written down for the models at once.
+
+### Added
+
+- **Stand-ins.** A task asks the models it is set to that can be used now,
+  then other chat models of the installation that work, and only then the
+  ones it is set to that are failing or resting. The run's own requests (its
+  plan, its result, its review) do the same in place of the manager model,
+  and a project whose manager model is switched off or gone runs with a
+  model that works. A stand-in is never one that is failing or resting, and
+  **never costs more** than the dearest model the task was set to. Where
+  models are marked **for users**, only they stand in. The task's card says
+  which model did not answer and which one went on.
+- **A switch for each project**: **Go on with another model**, in the
+  project form and on the project page; `standIns` in `POST /api/projects`,
+  `PATCH /api/projects/{id}` and in a project as the API returns it. A
+  project that says nothing does what the installation is set to:
+  `MODEL_STAND_INS`, on unless `0`.
+- **Real work counts as a check.** What a chat request ends with is written
+  down for its model. A model that answers is known to work. One that does
+  not answer for something its provider did **rests** (the app does not
+  choose it for as long as the provider says, or a minute, doubled up to a
+  quarter of an hour), and **three in a row put it away** as a failed check
+  does. So does one answer that asking again does not change: no such
+  model, a key that is not accepted, no credit, a quota used up for the
+  day. A model that real work put away and a check brought back is on
+  probation: the next request that fails puts it away again.
+- **The Models page** says how many models work, rest and are left out,
+  until when a model rests, and when a failing one is asked again.
+- **For the host** (scripts/host):
+  - `workforce.sh --as-owner` signs in without a password, by a session the
+    program writes into the app's database and removes when it is done; the
+    app's audit log says so (`host.session`). For root on the machine the
+    app runs on, and the way when the password in `.env` was changed in the
+    app.
+  - `models-report.sh` (Deploy workflow: `models-report`) prints what the
+    app knows about its models, read from its database: every provider and
+    model with its last check, the models of the agents and projects, the
+    last attempts with what the providers said. It changes nothing and asks
+    no provider.
+  - The Deploy workflow takes the node to work on (`host`), for a machine
+    other than the one the secret names, and a run that was not started
+    says why in its notice.
+- **Providers to start from**: BlockRun and VLM Run Gateway (no key),
+  Hetzner Inference (a free key).
+
+### Changed
+
+- **The check** does not ask a model before the time its provider named
+  ("retry in 3600 seconds"), asks a model that rests when its rest is over,
+  and does not ask a model that only writes down what is said (marked for
+  audio and not for text) for a chat answer it cannot give.
+- A model that an agent or a project is set to and that is left out is
+  asked last, not first.
+- The cheapest model that "auto-routing" picks for an agent is not one that
+  rests.
+- The workforce file of the server (scripts/host/workforce.json): the
+  agents that write code have Kilo's own choice among its free models as
+  their first model, in place of a free model the gateway took away; the
+  second models are Gemma 4 with the Gemini key and a model of BlockRun, in
+  place of OVHcloud, which answers "API rate limit exceeded" from the
+  server's new address.
+
+### Upgrading
+
+- The database gets three columns: back up `data/` first. See
+  [RELEASING.md](RELEASING.md), "From 1.9 to 1.10".
+- Stand-ins are on after the upgrade. `MODEL_STAND_INS=0` keeps what 1.9
+  did.
+
+### Not verified
+
+- How well a stand-in does the work of the model it stands in for: the app
+  compares prices and what is marked, not what a model can do.
+- BlockRun, VLM Run Gateway and Hetzner Inference were not called from the
+  machine this was written on: their addresses and models are the ones a
+  list that probes them twice a week published on 2026-11-19.
+
 ## [1.9.0] - 2026-11-20
 
 A run that met the quota of its provider lost what it had done: the task

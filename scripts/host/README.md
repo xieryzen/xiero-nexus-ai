@@ -12,6 +12,7 @@ not part of a release bundle and the app never runs them.
 | [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: providers that take no key, models, agents, teams and workflows. |
 | [`browser-service.sh`](browser-service.sh), [`browser/`](browser) | The browser agents work in: a Chromium in a container of its own next to the server, behind a token, and `BROWSER_URL` in the server's `.env`. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
+| [`models-report.sh`](models-report.sh) | A read-only report of what the app knows about its models: every provider and model with its last check, the models of the agents and projects, and what the providers answered in the last runs. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
 | [`over-ssh.sh`](over-ssh.sh) | Run one of them on the node from another machine, over SSH. The [Deploy workflow](#from-github-actions) uses it. |
 
@@ -31,7 +32,7 @@ the server's files, and `--restore` puts it back.
 Get them on the node:
 
 ```bash
-for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh node-check.sh workforce.sh workforce.py workforce.json; do
+for name in pterodactyl-install.sh pterodactyl-upgrade.sh nginx-site.sh disk-report.sh models-report.sh node-check.sh workforce.sh workforce.py workforce.json; do
   curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/${name}"
 done
 # The browser service: its script, and what its image is built from.
@@ -352,6 +353,24 @@ The password in `.env` is the one of the first start: once it is changed in
 the app, give the current one as `NEXUS_PASSWORD`. An account with two-step
 sign-in cannot be used.
 
+**Without a password: `--as-owner`.** Run as root on the machine the app runs
+on, the program can sign in by itself: it writes a session of the app's
+first owner into the app's database (`data/nexus.db`), works with it, and
+removes it when it is done; left behind by a crash, it ends after an hour.
+With `--user`, it is that administrator's session instead. This is the way
+when the password in `.env` was changed in the app and you do not want to
+type the new one anywhere. It opens no door that was shut: whoever may write
+that file can change everything the app knows already. The app's audit log
+says each time that the host signed in (`host.session`), under the name of
+the account whose session it was, and everything the program then changes is
+there as that account's. An account with two-step sign-in can be used this
+way; the second step is the app's guard against a stolen password, and no
+password is used here.
+
+```bash
+sudo bash workforce.sh --server <server id> --as-owner --dry-run
+```
+
 From version 1.8 an account has a number of tokens it may use. The projects
 `--try-run` runs, and what `--test-media` generates, spend the tokens of the
 account the program signs in as, and the app refuses them (402, "Your token
@@ -598,11 +617,13 @@ the order of the table: the owner's standard first.
 
 ### Providers that cost nothing
 
-The committed file adds four providers that take no key, and uses no model
+The committed file adds six providers that take no key, and uses no model
 that is billed:
 
 | Provider | What it has | What it allows from one address |
 | --- | --- | --- |
+| [BlockRun](https://blockrun.ai/free) | A few free chat models with tools; it may answer with another free model than the one asked for | 30 requests a minute and 300 an hour, all models together |
+| [VLM Run Gateway](https://vlm.run) | Two small open models, in beta; its larger one has asked for a key since November 2026 | 10 requests a minute, 30 an hour, 100 a day |
 | [Kilo Gateway](https://kilo.ai) | A handful of chat models marked `:free`, which change often | 200 requests an hour by its documentation, all models together; about a hundred when it was counted on one server |
 | [OVHcloud AI Endpoints](https://endpoints.ai.cloud.ovh.net) | Open chat models, Stable Diffusion XL for pictures (1024 by 1024 only), hosted in the EU | 2 requests a minute for each model |
 | [LLM7](https://llm7.io) | A few chat models; the others it lists need its paid plan | 1 request a second, and an allowance for a day that a few tasks use up |
@@ -615,11 +636,18 @@ not answer goes on with its second, so a project gets done, slowly. From
 v1.9.0 a task whose models are all limited waits for them (an hour unless
 `RUN_LIMIT_WAIT_MINUTES` says otherwise), and a run that stopped at a quota
 for the day is taken up again with **Continue**, which keeps what it
-finished. The
-agents have their first model with Kilo Gateway and their second with
-OVHcloud or Gemini. None depends on LLM7, whose allowance was used up after
-a few tasks, or on the one model of Pollinations: those are in the app to be
-picked by hand. When Kilo
+finished. From v1.10.0 a task whose models do not answer is done by another
+model of the app that works (a stand-in), and a model that does not answer
+is left out until it does: the more providers the app has, the more often
+one of them answers. The
+agents have their first model with Kilo Gateway and their second with the
+Gemini key (Gemma 4, which the free tier gives much of) or with BlockRun.
+None depends on OVHcloud any more: from the address the server of this
+repository moved to in November 2026, every one of its models answered "API
+rate limit exceeded" for days, where from the address before they answered.
+None depends on LLM7, whose allowance was used up after
+a few tasks, on VLM Run Gateway, or on the one model of Pollinations: those
+are in the app to be picked by hand, and to stand in. When Kilo
 Gateway's allowance is used up it answers "sign up for free or come back
 later", and every agent works on its second model: on one server each of
 the eleven agents then did its small task there, in ten minutes instead of a
@@ -629,14 +657,17 @@ providers list far more models than they give away: one word from each
 (`--test`) is how the ones in the file were found. Kilo Gateway and LLM7 may
 log what is sent to their free models and use it to improve models: nothing
 confidential belongs there. A free key of a provider (Google AI Studio, Groq,
-Mistral, OpenRouter, NVIDIA NIM, GitHub Models, Cloudflare Workers AI, and
+Mistral, OpenRouter, NVIDIA NIM, Hetzner Inference, Z.ai, Cohere, GitHub
+Models, Cloudflare Workers AI, and
 Kilo Gateway and LLM7 themselves) allows more than no key; such a provider
 is added on the Providers page, and its models can then be named in the
 file. Which providers give what for nothing changes by the month: the lists
 this was taken from are
 [awesome-free-llm-apis](https://github.com/mnfst/awesome-free-llm-apis) and
 [awesome-free-ai-coding](https://github.com/mvalentsev/awesome-free-ai-coding),
-read on 2026-11-15.
+read on 2026-11-23. BlockRun and VLM Run Gateway are in the file by what the
+second list published on 2026-11-19; `--test` says whether they answer from
+your server.
 
 ## The browser: `browser-service.sh`
 
@@ -717,6 +748,39 @@ are tested now: Docker's default network did not reach the package servers
 (so the script asks, and builds on the machine's own network), and a real
 Chromium says more about itself than the check of the token read. Another
 node can differ in other ways: do the dry run first.
+
+## What the app knows about its models: `models-report.sh`
+
+```bash
+sudo bash models-report.sh                    # the only server with the app
+sudo bash models-report.sh --server 0a98f8fe  # that server
+sudo bash models-report.sh --attempts 80      # more of the last attempts
+```
+
+A run failed and its task says "Provider responded 429": which of the models
+did not answer, and which would have? This prints what the app itself knows,
+read from its database:
+
+- every **provider** with its adapter, the host of its address and how it
+  signs in, and under it every **model**: switched on or off, the result of
+  its last check and when that was, how often it failed in a row, what it
+  costs, and what its provider said the last time it failed;
+- in short, how many chat models are switched on and how many of them
+  passed their last check;
+- every **agent** with its first and its second model, each marked when it
+  is switched off or failing;
+- the newest **projects** with their manager model;
+- the **last attempts** of tasks: which model was asked, how long it took,
+  and what the provider answered;
+- what the models were asked for lately, model by model: how often each
+  answered and failed;
+- the models the check took away or gave back.
+
+It only reads: the database is opened for reading, no provider is asked, and
+no key is printed (the keys of the providers are stored encrypted and are
+not read). From v1.10.0 the app does by itself what this report makes
+plain: it leaves out a model that does not answer, and a task goes on with
+one that does.
 
 ## Tidying up: `disk-report.sh`
 
@@ -854,7 +918,7 @@ The workflow [`Deploy to a Pterodactyl node`](../../.github/workflows/deploy.yml
 does the same from a runner. It only starts by hand: **Actions**, the
 workflow's name, **Run workflow**, then pick `check`, `plan`, `upgrade`,
 `install-plan`, `install`, `site-plan`, `site`, `workforce-plan`, `workforce`,
-`browser-plan`, `browser`, `disk-report`, `last-log` or `input-key`. For `workforce-plan` and
+`browser-plan`, `browser`, `disk-report`, `models-report`, `last-log` or `input-key`. For `workforce-plan` and
 `workforce`, the workflow runs the `workforce.json` of the branch it is
 started on; more options, such as `--update` or `--test`, go in **options**.
 
@@ -870,11 +934,19 @@ It reads these secrets (**Settings**, **Secrets and variables**, **Actions**):
 | `PTERODACTYL_SERVER` | The server's UUID or its first 8 characters. Can also be typed when a run is started. |
 | `APP_URL` | The public address of the site. Can also be typed. After `upgrade`, `install` and `site` the runner asks `/api/health` there, as a visitor would: by the name, and with the certificate checked. |
 
+A run can also be given the node itself (**host**: a name or an address,
+with a port behind it and a user in front of it where they differ), for a
+machine other than the one `VPS_HOST` names: after a move to a new machine,
+or for a second one. The user and the password or key are still the ones of
+the secrets; `VPS_PORT` and `VPS_HOST_KEY`, which belong to the other
+machine, are not used for it. A run that was not started says why in its
+notice on the run's page.
+
 **The log of a workflow in a public repository can be read by anyone**, and
 what a node says about itself is nobody else's business. So:
 
-- What is typed when a run is started (server, address, host key) is hidden
-  in the log, as secrets are.
+- What is typed when a run is started (node, server, address, host key) is
+  hidden in the log, as secrets are.
 - What the node says is **not printed**, unless the repository is private or
   `show_output` is ticked. The run's page says how the script ended; the
   output stays on the node, in `~/xiero-nexus-remote/logs`.

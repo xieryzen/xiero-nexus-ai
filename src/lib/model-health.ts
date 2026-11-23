@@ -7,9 +7,10 @@ import { audit } from "./audit";
 import { isMediaOnly } from "./capabilities";
 import { AppError, sanitizeUpstreamError } from "./errors";
 import { gatewayChat } from "./gateway";
-import { HEALTH_CHECK_TIMEOUT_MS, failureKind, healthIntervalMs, isDue, isFailing } from "./model-health-rules";
+import { HEALTH_CHECK_TIMEOUT_MS, RETRY_AT_MAX_MS, USE_FAILURES_TO_HIDE, failureKind, healthIntervalMs, isDue, isFailing } from "./model-health-rules";
 import { runtime } from "./runtime";
 import { stopping } from "./shutdown";
+import { limitOf } from "./upstream";
 import { computeCost, estimateTokens, recordUsage } from "./usage";
 
 /**
@@ -44,7 +45,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 
 export type CheckOutcome =
   | { ok: true; sample: string; promptTokens: number; completionTokens: number; latencyMs: number }
-  | { ok: false; error: string; code: string; kind: "refused" | "temporary"; latencyMs: number };
+  | { ok: false; error: string; code: string; kind: "refused" | "temporary"; latencyMs: number; /** The wait the provider named with a "not now". */ waitMs?: number | null };
 
 /** Ask the model for one word. Nothing is written down. */
 export async function askModel(model: Model, provider: Provider): Promise<CheckOutcome> {
@@ -53,7 +54,8 @@ export async function askModel(model: Model, provider: Provider): Promise<CheckO
     const result = await gatewayChat(
       { model, provider: { ...provider, timeoutMs: Math.min(provider.timeoutMs, HEALTH_CHECK_TIMEOUT_MS) } },
       [{ role: "user", content: PROMPT }],
-      { temperature: 0 },
+      // The check writes its own result (recordOutcome).
+      { temperature: 0, unnoted: true },
     );
     return {
       ok: true,
@@ -65,7 +67,7 @@ export async function askModel(model: Model, provider: Provider): Promise<CheckO
   } catch (err) {
     const error = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
     const code = err instanceof AppError ? err.code : "error";
-    return { ok: false, error, code, kind: failureKind({ code, message: error }), latencyMs: Date.now() - started };
+    return { ok: false, error, code, kind: failureKind({ code, message: error }), latencyMs: Date.now() - started, waitMs: limitOf(err)?.waitMs ?? null };
   }
 }
 
@@ -76,7 +78,17 @@ export function recordOutcome(model: Model, provider: Provider, outcome: CheckOu
   const apiKeyId = userId ? undefined : null;
   if (outcome.ok) {
     db.update(models)
-      .set({ lastTestedAt: new Date(), lastTestStatus: "ok", lastTestError: null, checkFailures: 0 })
+      .set({
+        lastTestedAt: new Date(),
+        lastTestStatus: "ok",
+        lastTestError: null,
+        // A model that real work had put away is back on probation (model-health-rules.ts:
+        // failuresAfterCheck): the next request that fails puts it away again, and the count of
+        // its failures stays, so that each time it is put away it waits longer for its next check.
+        checkFailures: sql`CASE WHEN ${models.useFailures} >= ${USE_FAILURES_TO_HIDE} THEN ${models.checkFailures} ELSE 0 END`,
+        useFailures: sql`CASE WHEN ${models.useFailures} >= ${USE_FAILURES_TO_HIDE} THEN ${USE_FAILURES_TO_HIDE - 1} ELSE 0 END`,
+        retryAt: null,
+      })
       .where(eq(models.id, model.id))
       .run();
     // An answer in text verifies the 'text' capability.
@@ -103,6 +115,8 @@ export function recordOutcome(model: Model, provider: Provider, outcome: CheckOu
       lastTestStatus: "error",
       lastTestError: outcome.error,
       checkFailures: sql`${models.checkFailures} + 1`,
+      // Where the provider said when to ask again, the next check is not before that.
+      retryAt: typeof outcome.waitMs === "number" && outcome.waitMs > 0 ? new Date(Date.now() + Math.min(outcome.waitMs, RETRY_AT_MAX_MS)) : null,
     })
     .where(eq(models.id, model.id))
     .run();

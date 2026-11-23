@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,visibility,servers,browser
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
 //                                                 to over SSH (4012, 4013)
@@ -302,6 +302,10 @@ const appEnv = {
   // here, not an hour, so that the checks see it wait, go on, and give up.
   RUN_LIMIT_WAIT_MINUTES: "",
   RUN_LIMIT_WAIT_SECONDS: "6",
+  // A run does not go on with another model that works unless its project
+  // says so: the checks that fail a task by failing its models mean what they
+  // say, and the ones about stand-ins switch them on for their projects.
+  MODEL_STAND_INS: "0",
   NEXUS_WORKER: "",
   // The app would check its models by itself, at moments of its own choosing:
   // the checks ask for a round when they want one. That the server does it by
@@ -496,7 +500,8 @@ async function stopAndStartAgain() {
   await fetch(`${mockUrl}/__force?model=health-switch&status=403`).catch(() => undefined);
   await fetch(`${mockUrl}/__reset`).catch(() => undefined);
   const hand = new Database(appEnv.DATABASE_PATH, { timeout: 5000 });
-  hand.prepare("UPDATE models SET last_tested_at = ?, last_test_status = 'ok', last_test_error = NULL, check_failures = 0").run(Date.now());
+  // (A check that a model passes also clears what real work held against it: its failures in a row, and its rest.)
+  hand.prepare("UPDATE models SET last_tested_at = ?, last_test_status = 'ok', last_test_error = NULL, check_failures = 0, use_failures = 0, retry_at = NULL").run(Date.now());
   const due = hand.prepare("UPDATE models SET last_tested_at = NULL, last_test_status = NULL WHERE model_id IN ('health-steady', 'health-switch')").run().changes;
   hand.close();
   running.splice(running.indexOf(before2), 1);
@@ -530,7 +535,8 @@ async function stopAndStartAgain() {
   const healthNow = await (await fetch(`${appUrl}/api/models/health`, { headers: { cookie } })).json().catch(() => null);
   check("  the Models page can say that the check is on, how often, and what the last round found", healthNow?.health?.automatic === true && healthNow.health.intervalMinutes === 360 && healthNow.health.last?.checked === 2 && healthNow.health.last?.failed === 1, healthNow?.health);
   const auditDb = new Database(appEnv.DATABASE_PATH, { readonly: true, timeout: 5000 });
-  const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL").get().n;
+  // By the check that runs by itself: what real work put away is there too, marked as such, and is not counted here.
+  const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL AND coalesce(metadata, '') NOT LIKE '%\"by\":\"use\"%'").get().n;
   auditDb.close();
   check("  the audit log says that the system took the model away", hiddenBySystem === 1, hiddenBySystem);
 

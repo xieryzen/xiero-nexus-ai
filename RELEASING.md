@@ -408,6 +408,30 @@ server.
   each of them answered. A program that reads the text of a task's error
   finds more lines there than before.
 
+### From 1.9 to 1.10
+
+- Nothing has to be configured. At its first start 1.10 adds three columns
+  to the database (`models.use_failures`, `models.retry_at`,
+  `projects.stand_ins`). **Back up `data/` before the upgrade**; going back
+  to 1.9 is done with that backup in its place (`pterodactyl-upgrade.sh`
+  makes the backup and prints the command). 1.9 on the database of 1.10 was
+  not tried.
+- **A run now goes on with another model when its own do not answer.** A
+  task that 1.9 failed with "None of the 3 models of this task gave an
+  answer" is done by another chat model of the installation that works, and
+  never by one that costs more than the dearest model the task was set to.
+  To keep what 1.9 did: `MODEL_STAND_INS=0` in `.env`, or **Go on with
+  another model** switched off for a project.
+- **Models are left out sooner.** 1.9 left a model out when a check failed
+  (every six hours unless set otherwise). 1.10 also counts real work: three
+  requests in a row that the provider did not answer, or one answer that
+  asking again does not change, leave the model out until it answers again.
+  Look at the Models page after the first runs.
+- Where the installation has models that are billed and models that are
+  free, and none is marked **for users**: a task set to a billed model can
+  be done by any model that costs no more. Mark the models the app may
+  choose by itself, if that is to be fewer.
+
 ### Roll back
 
 Stop the app, put the data backup you made before the upgrade back in place of

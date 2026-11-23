@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "visibility", "servers", "browser"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "standins", "visibility", "servers", "browser"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -1672,7 +1672,11 @@ export async function automation(ctx) {
     const keeper = await agent("Health keeper", "Keeper", { primaryModelRowId: flip.id, fallbackModelRowId: ids.models.chat });
     eq("an agent can be set to a failing model by its ID, and keeps it", [keeper.status, keeper.data?.agent?.primaryModelRowId], [201, flip.id]);
     const auditDb = database();
-    const actions = auditDb.prepare("SELECT action, actor_user_id AS actor, metadata FROM audit_logs WHERE action LIKE 'model.health.%'").all();
+    // What the rounds wrote. Real work writes such lines too, when it puts a model away or gives it back (with "by": "use"): not counted here.
+    const actions = auditDb
+      .prepare("SELECT action, actor_user_id AS actor, metadata FROM audit_logs WHERE action LIKE 'model.health.%'")
+      .all()
+      .filter((row) => !/"by":"use"/.test(row.metadata ?? ""));
     auditDb.close();
     const count = (action) => actions.filter((row) => row.action === action).length;
     check("the audit log has the rounds, and each model that was taken away or given back", count("model.health.run") === 7 && count("model.health.hidden") === 4 && count("model.health.restored") === 2 && actions.every((row) => row.actor), [count("model.health.run"), count("model.health.hidden"), count("model.health.restored")]);
@@ -1923,6 +1927,11 @@ export async function automation(ctx) {
     eq("  the account's count is what its usage records add up to", [afterFail[0], afterFail[0] >= usedBefore + 300], [failRows.reduce((sum, row) => sum + row.tokens, 0), true]);
 
     begin("Tokens: with none left, no other model is asked");
+    // The first model did not answer a moment ago, and rests: a task would ask
+    // its second model first. A test that the model passes ends its rest.
+    await fetch(`${MOCK}/__force?model=chat-count&status=200`);
+    const rested = await admin.post(`/api/models/${state.models["chat-count"]}/test`, {});
+    eq("(the model that failed a moment ago passes a test, and rests no more)", [rested.status, ((await admin.get("/api/models")).data?.models ?? []).find((m) => m.modelId === "chat-count")?.retryAt ?? null], [200, null]);
     // Two calls' worth is left: the first model uses it, and then fails.
     await admin.patch(`/api/admin/users/${zivId}`, { tokenLimit: afterFail[0] + 60 });
     await mockReset();
@@ -3824,7 +3833,194 @@ export async function automation(ctx) {
     await free("lim-a", "lim-b", "lim-c", "lim-d", "lim-e", "lim-f");
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, visibility, servers, browser };
+
+  // ─── A run goes on with a model that works ─────────────────────────────────
+
+  /**
+   * Stand-ins, and what real work says about a model.
+   *
+   * The app is started for these checks with MODEL_STAND_INS=0, so that the
+   * checks before, which make a task fail by failing its models, mean what
+   * they say. The projects here say for themselves that others may stand in.
+   */
+  async function standins() {
+    const force = (modelId, query) => fetch(`${MOCK}/__force?model=${encodeURIComponent(modelId)}&${query}`);
+    const free = (...modelIds) => Promise.all(modelIds.map((id) => force(id, "status=200")));
+    const lastStatus = (events) => events.filter((e) => e.type === "status").at(-1)?.status;
+    const tasksOf = async (id) => (await admin.get(`/api/projects/${id}`)).data?.project?.tasks ?? [];
+    const attemptsOf = async (id) => ((await admin.get(`/api/projects/${id}`).then(() => admin.get(`/api/projects/${id}/attempts`))).data?.attempts ?? []).map((a) => [a.seq, a.attempt, a.status, a.modelId]);
+    /** A model as the Models page has it, by its id at the provider. */
+    const known = async (modelId) => ((await admin.get("/api/models")).data?.models ?? []).find((m) => m.modelId === modelId);
+    const standing = async (modelId) => {
+      const m = await known(modelId);
+      return [m?.lastTestStatus ?? null, m?.hidden, m?.useFailures, m?.retryAt ? "rests" : "free"];
+    };
+    /** One chat request of the administrator to that model, answered or not. */
+    const ask = (key) => sse(admin, "/api/chat", { method: "POST", body: { modelRowId: state.models[key], messages: [{ role: "user", content: "hi" }] } });
+    /** The models the provider was asked for a chat, in order. */
+    const asked = async () => (await mockLog()).filter((l) => l.method === "POST" && l.path.endsWith("/chat/completions")).map((l) => l.body?.model);
+    const audited = (action, modelId) => {
+      const db = database();
+      const rows = db.prepare("SELECT metadata FROM audit_logs WHERE action = ? ORDER BY created_at").all(action);
+      db.close();
+      return rows.map((r) => JSON.parse(r.metadata ?? "{}")).filter((m) => m.model === modelId);
+    };
+    const freeOfCharge = { inputPricePerMTok: 0, outputPricePerMTok: 0 };
+
+    begin("Stand-ins: a task whose models do not answer is done by another that works");
+    for (const id of ["si-first", "si-second", "si-boss", "si-spare-a", "si-spare-b", "si-gone"]) await model(id, openai, id, ["text"], freeOfCharge);
+    await model("si-dear", openai, "si-dear", ["text"], { inputPricePerMTok: 5, outputPricePerMTok: 5 });
+    // Only the models that are marked for it are chosen by the app: the two spares, for now.
+    const marked = ((await admin.get("/api/models")).data?.models ?? []).filter((m) => m.forUsers).map((m) => m.id);
+    for (const id of marked) await admin.patch(`/api/models/${id}`, { forUsers: false });
+    for (const key of ["si-spare-a", "si-spare-b"]) await admin.patch(`/api/models/${state.models[key]}`, { forUsers: true });
+    await agent("Stander", "Standworker", { primaryModelRowId: state.models["si-first"], fallbackModelRowId: state.models["si-second"] });
+    const wf = await workflow("Stand in", [
+      { title: "One", objective: "One.", role: "Standworker" },
+      { title: "Two", objective: "Two.", role: "Standworker", dependsOn: [1] },
+    ]);
+    const made = await admin.post("/api/projects", { title: "Stands in", goal: "Check the app.", managerModelRowId: state.models["si-boss"], workflowId: wf, standIns: true });
+    const p1 = made.data?.project?.id;
+    eq("a project says that its runs may go on with another model", [made.status, made.data?.project?.standIns], [201, true]);
+    const asInstalled = await project(admin, { title: "As installed", workflowId: wf, managerModelRowId: state.models["si-boss"] });
+    eq("  one that says nothing does what the installation is set to", (await admin.get(`/api/projects/${asInstalled}`)).data?.project?.standIns, false);
+
+    // None of the three models the task is set to answers.
+    await force("si-first", "status=500");
+    await force("si-second", "status=500");
+    await force("si-boss", "status=500");
+    await mockReset();
+    const first = await runProject(admin, p1);
+    eq("the run ends with every task done", [lastStatus(first.events), (await tasksOf(p1)).map((t) => t.status)], ["succeeded", ["succeeded", "succeeded"]]);
+    eq("the first task asked its agent's two models and its project's manager model, then a stand-in, which did it", (await attemptsOf(p1)).filter((a) => a[0] === 1), [
+      [1, 1, "error", "si-first"],
+      [1, 2, "error", "si-second"],
+      [1, 3, "error", "si-boss"],
+      [1, 4, "ok", "si-spare-a"],
+    ]);
+    eq("  the second task did not ask them again: they rest, and the stand-in is asked first", (await attemptsOf(p1)).filter((a) => a[0] === 2), [[2, 1, "ok", "si-spare-a"]]);
+    const said = first.events.filter((e) => e.type === "progress").map((e) => e.message);
+    check(
+      "  the task's card says which model did not answer and which one went on, to someone who is shown the setup",
+      said.some((m) => /^si-boss \([^)]+\) did not answer\. Going on with si-spare-a \([^)]+\), which stands in for the models this task is set to$/.test(m)) &&
+        said.some((m) => /^The models this task is set to are failing or resting\. Working with si-spare-a \([^)]+\), which stands in for them$/.test(m)),
+      said,
+    );
+    check("  the run's result is put together by a stand-in too, in place of the manager model that does not answer", /FINAL DELIVERABLE/.test(first.events.find((e) => e.type === "final")?.deliverable ?? ""), first.events.find((e) => e.type === "final"));
+    eq("  a model that costs more than the ones the task was set to was not asked", (await asked()).includes("si-dear"), false);
+    eq("what the run met is written down: a model that did not answer once rests, and stays in the lists", [await standing("si-first"), await standing("si-second")], [[null, false, 1, "rests"], [null, false, 1, "rests"]]);
+    eq("  the one that answered is known to work, without a check", (await standing("si-spare-a")).slice(0, 2), ["ok", false]);
+
+    begin("Stand-ins: what real work says about a model");
+    await ask("si-first");
+    eq("a second request without an answer: still in the lists", await standing("si-first"), [null, false, 2, "rests"]);
+    await ask("si-first");
+    const away = await known("si-first");
+    eq("the third in a row puts the model away, as a failed check does", [away?.lastTestStatus, away?.hidden, away?.useFailures, /^Provider responded 500/.test(away?.lastTestError ?? "")], ["error", true, 3, true]);
+    check("  the audit log says so, and that it was real work", audited("model.health.hidden", "si-first").some((m) => m.by === "use" && /Provider responded 500/.test(m.error ?? "")), audited("model.health.hidden", "si-first"));
+    check("  it is gone from the list a chat offers", !(await admin.raw("/dashboard/chat").then((r) => r.text())).includes("si-first"), null);
+    // A model that answers one word and no real request.
+    await model("si-flap", openai, "si-flap", ["text"], freeOfCharge);
+    await force("si-flap", "status=500");
+    for (let i = 0; i < 3; i++) await ask("si-flap");
+    await free("si-flap");
+    const checked = await admin.post("/api/models/health", { modelIds: [state.models["si-flap"]], wait: true });
+    const probation = await known("si-flap");
+    eq("a model that real work put away and a check brings back is on probation", [checked.data?.round?.restored?.length, probation?.lastTestStatus, probation?.hidden, probation?.useFailures, probation?.checkFailures], [1, "ok", false, 2, 1]);
+    await force("si-flap", "status=500");
+    await ask("si-flap");
+    const flapped = await known("si-flap");
+    eq("  the next request without an answer puts it away again, and it waits longer for its next check", [flapped?.lastTestStatus, flapped?.hidden, flapped?.useFailures, flapped?.checkFailures], ["error", true, 3, 2]);
+    await free("si-flap");
+    await ask("si-flap");
+    eq("  a request that names it and is answered gives it back, with nothing held against it", [await standing("si-flap"), (await known("si-flap"))?.checkFailures], [["ok", false, 0, "free"], 0]);
+    await admin.patch(`/api/models/${state.models["si-flap"]}`, { enabled: false });
+    await force("si-gone", "status=404");
+    await ask("si-gone");
+    eq("a model its provider does not have is put away at the first request", await standing("si-gone"), ["error", true, 1, "free"]);
+    await force("si-spare-b", "status=400&times=1");
+    await ask("si-spare-b");
+    eq("a request that was refused for what it asked says nothing about the model", (await standing("si-spare-b")).slice(1), [false, 0, "free"]);
+    await force("si-second", "status=429&times=1&say=" + encodeURIComponent("Rate limit reached. Please retry in 3600 seconds."));
+    await ask("si-second");
+    const limited = await known("si-second");
+    const restsFor = limited?.retryAt ? new Date(limited.retryAt).getTime() - Date.now() : 0;
+    check("a model that says when to ask again rests until then", limited?.hidden === false && limited?.useFailures === 2 && restsFor > 3_500_000 && restsFor <= 3_600_000, [limited?.hidden, limited?.useFailures, restsFor]);
+    await free("si-second");
+    await ask("si-second");
+    eq("  an answer clears it: it works, and rests no more", await standing("si-second"), ["ok", false, 0, "free"]);
+    await force("si-boss", "status=429&times=1&code=insufficient_quota&say=" + encodeURIComponent("You exceeded your current quota, please check your plan and billing details."));
+    await ask("si-boss");
+    eq("a limit that does not end soon (an account without credit) puts the model away at once", (await standing("si-boss")).slice(0, 3), ["error", true, 2]);
+
+    begin("Stand-ins: the order when some of a task's models are put away, and a project that wants none");
+    // si-first and si-boss are put away, si-second works. All three answer again from now on.
+    await free("si-first", "si-second", "si-boss");
+    const p2 = await project(admin, { title: "Its own models only", workflowId: wf, managerModelRowId: state.models["si-boss"], standIns: false });
+    await mockReset();
+    const own = await runProject(admin, p2);
+    eq("a task asks the one of its models that works first, and does not ask the ones that are put away", [lastStatus(own.events), await attemptsOf(p2)], ["succeeded", [[1, 1, "ok", "si-second"], [2, 1, "ok", "si-second"]]]);
+    eq("  with nothing to stand in, the result is asked of the manager model although it is put away; it answers, and is back", [(await asked()).includes("si-boss"), await standing("si-boss")], [true, ["ok", false, 0, "free"]]);
+    check("  the audit log says that real work gave it back", audited("model.health.restored", "si-boss").some((m) => m.by === "use"), audited("model.health.restored", "si-boss"));
+    await force("si-second", "status=500");
+    await force("si-boss", "status=500");
+    await mockReset();
+    const lastResort = await runProject(admin, p2);
+    eq("when the models that work do not answer, the one that is put away is asked last: it answers, and is back as well", [(await tasksOf(p2)).map((t) => t.status), (await attemptsOf(p2)).filter((a) => a[0] === 1), (await standing("si-first")).slice(0, 2)], [
+      ["succeeded", "succeeded"],
+      [[1, 1, "error", "si-second"], [1, 2, "error", "si-boss"], [1, 3, "ok", "si-first"]],
+      ["ok", false],
+    ]);
+    eq("  no stand-in was asked: the project wants none", [(await asked()).some((m) => m === "si-spare-a" || m === "si-spare-b"), lastStatus(lastResort.events)], [false, "succeeded"]);
+    await force("si-first", "status=500");
+    await mockReset();
+    await runProject(admin, p2);
+    const failedTasks = await tasksOf(p2);
+    check("with none of its models answering and no stand-in, the task fails and says what each said", failedTasks[0]?.status === "failed" && failedTasks[1]?.status === "blocked" && /^None of the 3 models of this task gave an answer\./.test(failedTasks[0]?.error ?? "") && !(await asked()).some((m) => /^si-spare/.test(m)), [failedTasks.map((t) => t.status), failedTasks[0]?.error]);
+    const switched = await admin.patch(`/api/projects/${p2}`, { standIns: true });
+    eq("the project is switched to go on with another model", [switched.status, switched.data?.project?.standIns ?? (await admin.get(`/api/projects/${p2}`)).data?.project?.standIns], [200, true]);
+    eq("  another user cannot switch it", (await bob.patch(`/api/projects/${p2}`, { standIns: false })).status, 403);
+    const again = await runProject(admin, p2, { goOn: true });
+    eq("  continued, the tasks that were left are done by a stand-in", [lastStatus(again.events), (await tasksOf(p2)).map((t) => t.status), (await attemptsOf(p2)).filter((a) => a[2] === "ok").map((a) => a[3])], ["succeeded", ["succeeded", "succeeded"], ["si-spare-a", "si-spare-a"]]);
+    check("the project's page has the switch", (await admin.raw(`/dashboard/projects/${p2}`).then((r) => r.text())).includes("Go on with another model"), null);
+    const back = await admin.patch(`/api/projects/${p2}`, { standIns: null });
+    eq("  set to nothing, it does what the installation is set to again", [back.status, (await admin.get(`/api/projects/${p2}`)).data?.project?.standIns], [200, false]);
+
+    begin("Stand-ins: never a model that costs more, and a manager model that is switched off");
+    // The only model the app may choose now is one that is billed; the task's own models cost nothing.
+    for (const key of ["si-spare-a", "si-spare-b"]) await admin.patch(`/api/models/${state.models[key]}`, { forUsers: false });
+    await admin.patch(`/api/models/${state.models["si-dear"]}`, { forUsers: true });
+    await mockReset();
+    const cheap = await runProject(admin, p1);
+    eq("a task that was set to models that cost nothing is not done by one that is billed: it fails", [(await tasksOf(p1)).map((t) => t.status), (await asked()).includes("si-dear"), lastStatus(cheap.events)], [["failed", "blocked"], false, "failed"]);
+    await model("si-dear-boss", openai, "si-dear-boss", ["text"], { inputPricePerMTok: 6, outputPricePerMTok: 6 });
+    await force("si-dear-boss", "status=500");
+    const p3 = await project(admin, { title: "Set to a billed model", workflowId: wf, managerModelRowId: state.models["si-dear-boss"], standIns: true });
+    const dear = await runProject(admin, p3);
+    eq("a task whose project is set to a dearer model is: the stand-in costs no more than that", [lastStatus(dear.events), (await attemptsOf(p3)).filter((a) => a[2] === "ok").map((a) => a[3])], ["succeeded", ["si-dear", "si-dear"]]);
+    // A manager model that is switched off.
+    await model("si-off", openai, "si-off", ["text"], freeOfCharge);
+    const p4 = await project(admin, { title: "Manager switched off", workflowId: wf, managerModelRowId: state.models["si-off"], standIns: true });
+    const p5 = await project(admin, { title: "Manager switched off, own models only", workflowId: wf, managerModelRowId: state.models["si-off"], standIns: false });
+    await admin.patch(`/api/models/${state.models["si-off"]}`, { enabled: false });
+    await admin.patch(`/api/models/${state.models["si-dear"]}`, { forUsers: false });
+    for (const key of ["si-spare-a", "si-spare-b"]) await admin.patch(`/api/models/${state.models[key]}`, { forUsers: true });
+    await free("si-first", "si-second", "si-boss");
+    await mockReset();
+    const noManager = await runProject(admin, p5);
+    const stopped = (await admin.get(`/api/projects/${p5}`)).data?.project;
+    eq("a project whose manager model is switched off does not run, and says why", [lastStatus(noManager.events), stopped?.status, stopped?.error, (await asked()).length], ["failed", "failed", "Model is disabled", 0]);
+    const withStandIn = await runProject(admin, p4);
+    eq("  one that goes on with another model does: a model that works manages it", [lastStatus(withStandIn.events), (await tasksOf(p4)).map((t) => t.status)], ["succeeded", ["succeeded", "succeeded"]]);
+
+    // As it was: the marks, and models that answer.
+    await free("si-first", "si-second", "si-boss", "si-gone", "si-spare-b", "si-dear-boss");
+    for (const key of ["si-spare-a", "si-spare-b"]) await admin.patch(`/api/models/${state.models[key]}`, { forUsers: false });
+    for (const id of marked) await admin.patch(`/api/models/${id}`, { forUsers: true });
+    eq("(the marks of the models are as they were)", ((await admin.get("/api/models")).data?.models ?? []).filter((m) => m.forUsers).map((m) => m.id).sort(), [...marked].sort());
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, standins, visibility, servers, browser };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

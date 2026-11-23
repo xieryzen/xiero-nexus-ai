@@ -268,6 +268,18 @@ check_not "the password is not in what it says" says "not-the-password"
 CODE=0
 NEXUS_PASSWORD="${PASS}" python3 "${host}/workforce.py" --url "http://127.0.0.1:$((APP_PORT + 7))" --inventory-only > "${OUT}" 2>&1 || CODE=$?
 is "an app that does not answer ends with 4" "4" "${CODE}"
+# Without a password: a session that the program writes into the app's database itself.
+sessions="$(db "select count(*) from sessions")"
+run NEXUS_PASSWORD= -- --as-owner "${WORK}/nexus.db" --inventory-only
+is "--as-owner signs in without a password" "0" "${CODE}"
+check "  as the app's owner" says '"boss", an owner'
+is "  its session is gone when it is done" "${sessions}" "$(db "select count(*) from sessions")"
+is "  the app's audit log says that the host signed in" "1" "$(db "select count(*) from audit_logs where action = 'host.session' and ip = 'host'")"
+run NEXUS_PASSWORD= -- --as-owner "${WORK}/not-there.db" --inventory-only
+is "  a database that is not there is refused" "2" "${CODE}"
+run NEXUS_PASSWORD= -- --as-owner "${WORK}/nexus.db" --user nobody-here --inventory-only
+is "  an account the app does not have ends with 3" "3" "${CODE}"
+is "  and leaves no session behind" "${sessions}" "$(db "select count(*) from sessions")"
 
 # ── Looking ──────────────────────────────────────────────────────────────────
 
@@ -931,6 +943,13 @@ is "a password in .env that is no longer right ends with 3" "3" "${CODE}"
 check "and says why that happens" says "stops being right when it is changed in the app"
 node_run NEXUS_PASSWORD="${PASS}" -- --file "${FILE}" --dry-run
 is "NEXUS_PASSWORD goes before the one in .env" "0" "${CODE}"
+node_run -- --file "${FILE}" --dry-run --as-owner
+is "--as-owner without the app's database in the server's files is refused" "2" "${CODE}"
+mkdir -p "${VOLUMES}/${UUID}/xiero-nexus-ai/data"
+ln -s "${WORK}/nexus.db" "${VOLUMES}/${UUID}/xiero-nexus-ai/data/nexus.db"
+node_run -- --file "${FILE}" --dry-run --as-owner
+is "with --as-owner it signs in although the password in .env is no longer right" "0" "${CODE}"
+check "  as the owner of the app" says '"boss", an owner'
 
 section "Sealed for the node: an account's password and a skill of your own"
 NODE_KEY="${WORK}/node-key"

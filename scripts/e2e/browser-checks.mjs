@@ -420,6 +420,31 @@ try {
     check("the project that stopped half way exists (run the full checks first)", false);
   }
 
+  // ─── Stand-ins ─────────────────────────────────────────────────────────────
+  begin("Browser: a project that goes on with another model");
+  // Left by the checks before, set to do what the installation does: none stands in.
+  const ownOnly = projects.find((p) => p.title === "Its own models only");
+  if (ownOnly) {
+    const asSet = async () => (await api(`/api/projects/${ownOnly.id}`)).data?.project?.standIns;
+    const settled = async (want) => {
+      for (let i = 0; i < 40 && (await asSet()) !== want; i++) await sleep(250);
+      return asSet();
+    };
+    await open(`/dashboard/projects/${ownOnly.id}`);
+    const toggle = '[data-testid="stand-ins"] [role="switch"]';
+    const shown = () => page.$eval(toggle, (el) => el.getAttribute("aria-checked")).catch(() => null);
+    eq("the project page has the switch, as the project is set", [await shown(), await asSet(), await has("Go on with another model")], ["false", false, true]);
+    await page.click(toggle);
+    eq("switched on, the project is saved so", [await settled(true), await shown()], [true, "true"]);
+    await open(`/dashboard/projects/${ownOnly.id}`);
+    eq("  and a page opened later shows it on", await shown(), "true");
+    await page.click(toggle);
+    eq("  switched off again, it is as it was", [await settled(false), await shown()], [false, "false"]);
+    await snap("project-stand-ins");
+  } else {
+    check("the project of the stand-in checks exists (run the full checks first)", false);
+  }
+
   // ─── Creative Studio ───────────────────────────────────────────────────────
   begin("Browser: Creative Studio");
   await open("/dashboard/studio");
@@ -1197,6 +1222,9 @@ try {
   const marked = await page.$$eval("main .badge", (badges) => badges.filter((b) => b.innerText.trim() === "left out of the lists").length);
   check("  every model that failed is marked in the list, without a reload", found !== null && Number(found[3]) > 1 && leftOut === marked && marked >= Number(found[3]), { found: found?.slice(1), leftOut, marked });
   await snap("models-checked");
+  const counts = await page.$eval('[data-testid="model-counts"]', (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+  check("  the page says how many of the models that are switched on work", /^Of the \d+ that are switched on: [1-9]\d* works?(, \d+ rests?)?(, \d+ (was|were) never asked)?\.$/.test(counts ?? ""), counts);
+  check("  and that real work counts as a check", (await has("Real work counts as well")) && (await has("A run then goes on with another model that works")), null);
 
   begin("Browser: errors");
   check("no page logged an error", pageErrors.length === 0, pageErrors.slice(0, 8));

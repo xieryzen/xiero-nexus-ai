@@ -290,6 +290,9 @@ export const projectCreateSchema = z.object({
   maxMedia: z.number().int().min(0).max(MAX_MEDIA_PER_RUN).optional(),
   // Give each run what the earlier runs delivered (v1.5).
   memory: z.boolean().optional(),
+  // Go on with another model that works when the ones the project is set to
+  // do not answer (v1.10). Null or absent: as the installation is set.
+  standIns: z.boolean().nullable().optional(),
   // The machines the project's agents may work on over SSH (v1.8).
   serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
   // The site accounts its agents may sign in with, in the browser (v1.8).
@@ -345,6 +348,7 @@ export const projectUpdateSchema = z
     title: z.string().trim().min(1).max(120).optional(),
     goal: z.string().trim().min(1).max(8000).optional(),
     memory: z.boolean().optional(),
+    standIns: z.boolean().nullable().optional(),
     serverIds: z.array(z.string().min(1)).max(SERVERS_PER_PROJECT).optional(),
     siteAccountIds: z.array(z.string().min(1)).max(ACCOUNTS_PER_PROJECT).optional(),
   })

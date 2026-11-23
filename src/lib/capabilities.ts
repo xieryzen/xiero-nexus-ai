@@ -57,7 +57,8 @@ const NON_CHAT_CAPABILITIES: readonly Capability[] = [
  * models.)
  */
 export function isMediaOnly(capabilities: readonly string[]): boolean {
-  return (
-    NON_CHAT_CAPABILITIES.some((c) => capabilities.includes(c)) && !capabilities.includes("text")
-  );
+  if (capabilities.includes("text")) return false;
+  // A model marked for audio and for nothing it could answer in text with is
+  // one that writes down what is said (a transcription model), not a chat model.
+  return NON_CHAT_CAPABILITIES.some((c) => capabilities.includes(c)) || capabilities.includes("audio");
 }

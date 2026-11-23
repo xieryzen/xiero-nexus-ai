@@ -62,18 +62,25 @@ export function ProjectAutomation({
   initialSchedules,
   initialRuns,
   initialMemory,
+  initialStandIns,
+  showStandIns = false,
   refreshKey,
 }: {
   projectId: string;
   initialSchedules: ScheduleDTO[];
   initialRuns: RunDTO[];
   initialMemory: boolean;
+  /** Whether a run of this project goes on with another model that works when its own do not answer. */
+  initialStandIns: boolean;
+  /** For someone who is shown the setup: the switch for it. */
+  showStandIns?: boolean;
   /** Changes when a run ends, so that the history is read again. */
   refreshKey: number;
 }) {
   const [schedules, setSchedules] = useState(initialSchedules);
   const [runs, setRuns] = useState(initialRuns);
   const [memory, setMemory] = useState(initialMemory);
+  const [standIns, setStandIns] = useState(initialStandIns);
   const [adding, setAdding] = useState(false);
   const [cron, setCron] = useState(PRESETS[0]!.cron);
   const [preset, setPreset] = useState(PRESETS[0]!.cron);
@@ -174,6 +181,16 @@ export function ProjectAutomation({
       await apiFetch(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify({ memory: value }) });
     } catch (err) {
       setMemory(!value);
+      setError(err instanceof ApiError ? err.message : "Could not change the setting");
+    }
+  }
+
+  async function setGoOn(value: boolean) {
+    setStandIns(value);
+    try {
+      await apiFetch(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify({ standIns: value }) });
+    } catch (err) {
+      setStandIns(!value);
       setError(err instanceof ApiError ? err.message : "Could not change the setting");
     }
   }
@@ -312,6 +329,19 @@ export function ProjectAutomation({
           </div>
           <Toggle checked={memory} onChange={setRemember} label="Remember earlier runs" />
         </div>
+        {showStandIns && (
+          <div className="mt-4 flex items-start justify-between gap-4 border-t border-line pt-4" data-testid="stand-ins">
+            <div>
+              <p className="text-sm text-ink">Go on with another model</p>
+              <p className="text-xs text-ink-3">
+                When the models of an agent and of this project do not answer, a task is done by another model that works:
+                one that answered lately and costs no more than the dearest model the task was set to. Switched off, the
+                task fails instead (or waits, where its models are limited).
+              </p>
+            </div>
+            <Toggle checked={standIns} onChange={setGoOn} label="Go on with another model" />
+          </div>
+        )}
       </Card>
 
       <Card title="Runs" description="Every run of this project, newest first. A run keeps what it delivered; its tasks are replaced by the next run's, but for a run that continued: it kept the tasks that had succeeded.">
