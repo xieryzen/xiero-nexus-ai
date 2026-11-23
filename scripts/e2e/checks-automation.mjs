@@ -69,7 +69,7 @@ export async function automation(ctx) {
     const res = await user.raw(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
     const events = [];
     if (!res.ok || !(res.headers.get("content-type") ?? "").includes("event-stream")) {
-      return { status: res.status, events, text: await res.text() };
+      return { status: res.status, events, text: await res.text(), headers: res.headers };
     }
     const text = await res.text();
     for (const line of text.split("\n")) {
@@ -81,7 +81,7 @@ export async function automation(ctx) {
         events.push(payload);
       }
     }
-    return { status: res.status, events, text };
+    return { status: res.status, events, text, headers: res.headers };
   }
 
   /** Upload a file as the body of a request. */
@@ -4179,7 +4179,7 @@ export async function automation(ctx) {
         asked.map((m) => [m.role, String(m.content).slice(0, 80)]),
       );
     }
-    const fresh = await say(hana, "Di mana saja servernya? " + doing(["run_on_server", { command: "echo new-conversation" }]));
+    const fresh = await say(hana, "Di mana saja servernya?\n" + doing(["run_on_server", { command: "echo new-conversation" }]));
     eq("a new conversation of the same account has the server", [fresh.chat?.id !== first.chat?.id, fresh.tools.map((t) => [t.name, t.isError]), /new-conversation/.test(fresh.tools[0]?.result ?? "")], [true, [["run_on_server", false]], true]);
     const plain = await say(hana, "Server mana saja yang kamu punya?");
     eq("  the assistant is told which servers there are, and has the tool for them", [saw(plain.answer, "servers"), (saw(plain.answer, "tools") ?? "").split("|").includes("run_on_server")], ["vps-127-0-0-1", true]);
@@ -4198,14 +4198,30 @@ export async function automation(ctx) {
     check("a password the machine does not take: not kept, said, and taken out all the same", wrongKept?.ok === false && /could not sign in/.test(wrongKept?.note ?? "") && !wrong.user?.content.includes("Salah#Sandi-99") && wrong.user?.content.includes("[password taken out by the app]"), [wrongKept, wrong.user?.content]);
     check("  the model is told that it was not kept", wrong.answer.includes("NOT kept"), wrong.answer.slice(0, 300));
     eq("  the server that was kept before still works", (await say(hana, doing(["run_on_server", { command: "echo still-works" }]))).tools.map((t) => t.isError), [false]);
+    const tried = async () => {
+      const m = await machine();
+      return [m.connections, m.signIns, m.refused];
+    };
+    const triedBefore = await tried();
     const privateOne = await say(hana, "ssh root@10.11.12.13 password Jaringan#Dalam-1 tolong cek");
     const privateKept = privateOne.user?.details?.kept?.[0];
     check("a machine on a private network is not reached for a user", privateKept?.ok === false && /private network/.test(privateKept?.note ?? "") && !privateOne.user?.content.includes("Jaringan#Dalam-1"), privateKept);
-    const byName = await say(hana, `ssh root@localhost -p ${SSH_PORT} password ${ROOT} tolong cek`);
-    check("  nor one that is named instead of numbered", byName.user?.details?.kept?.[0]?.ok === false && /private network/.test(byName.user?.details?.kept?.[0]?.note ?? ""), byName.user?.details?.kept?.[0]);
-    eq("  nothing was tried on the machine for those two", (await machine()).signIns - signInsBefore <= 2, true);
-    const ownerHands = await say(admin, `ssh root@localhost -p ${SSH_PORT} password ${ROOT}\n` + doing(["run_on_server", { server: "localhost", command: "echo from-the-owner" }]), { modelRowId: state.models["ho-chat"] });
-    eq("an owner hands over any machine, as on the Servers page", [ownerHands.user?.details?.kept?.map((k) => [k.ok, k.name]), ownerHands.tools.map((t) => t.isError)], [[[true, "localhost"]], [false]]);
+    const byName = await say(hana, `ssh root@panel.localhost -p ${SSH_PORT} password ${ROOT} tolong cek`);
+    check("  nor one that is named instead of numbered", byName.user?.details?.kept?.[0]?.ok === false && /private network/.test(byName.user?.details?.kept?.[0]?.note ?? "") && !byName.user?.content.includes(ROOT), byName.user?.details?.kept?.[0]);
+    // The machine of these checks under its second address, which the installation did not say agents may reach.
+    const OTHER = "127.0.0.2";
+    const otherOne = await say(hana, `ssh root@${OTHER} -p ${SSH_PORT} password ${ROOT} tolong cek`);
+    check("  nor this machine under an address the installation did not allow", otherOne.user?.details?.kept?.[0]?.ok === false && /private network/.test(otherOne.user?.details?.kept?.[0]?.note ?? "") && !otherOne.user?.content.includes(ROOT), otherOne.user?.details?.kept?.[0]);
+    eq("  nothing was tried on the machine for those three", await tried(), triedBefore);
+    eq("  the same for an administrator", (await say(hadi, `ssh root@${OTHER} -p ${SSH_PORT} password ${ROOT} tolong cek`, { modelRowId: state.models["ho-chat"] })).user?.details?.kept?.map((k) => [k.ok, /private network/.test(k.note)]), [[false, true]]);
+    const ownerHands = await say(admin, `ssh root@${OTHER} -p ${SSH_PORT} password ${ROOT}\n` + doing(["run_on_server", { server: "vps-127-0-0-2", command: "echo from-the-owner" }]), { modelRowId: state.models["ho-chat"] });
+    if ((await machine()).alias === OTHER) {
+      eq("an owner hands over any machine, as on the Servers page", [ownerHands.user?.details?.kept?.map((k) => [k.ok, k.name]), ownerHands.tools.map((t) => [t.isError, /from-the-owner/.test(t.result)])], [[[true, "vps-127-0-0-2"]], [[false, true]]]);
+    } else {
+      // A system without that address: the app went there for an owner, and found nobody.
+      check("an owner hands over any machine, as on the Servers page", ownerHands.user?.details?.kept?.[0]?.ok === false && !/private network/.test(ownerHands.user?.details?.kept?.[0]?.note ?? ""), ownerHands.user?.details?.kept?.[0]);
+    }
+    check("  the owner's password went the same way as anyone's: out of the message, and to no model", !ownerHands.user?.content.includes(ROOT) && !(await sentToProvider()).includes(ROOT), ownerHands.user?.content);
     const nothing = await say(hana, "Aku lupa password wifi rumah, gimana cara reset password di ubuntu? user baru bisa login?");
     eq("a message that only speaks of passwords hands nothing over, and stays as it was written", [nothing.user?.details, nothing.user?.content], [null, "Aku lupa password wifi rumah, gimana cara reset password di ubuntu? user baru bisa login?"]);
     await control("/__rekey");
@@ -4250,8 +4266,15 @@ export async function automation(ctx) {
     const keyId = (await memoryOf(hana))?.access?.find((a) => a.kind === "key")?.id;
     const shaped = await say(hana, "pakai ini buat push: ghp_abcdefghijklmnopqrstuvwxyz0123456789");
     eq("a key that says what it is by its shape is kept under that, for its service", [shaped.user?.details?.kept?.map((k) => [k.kind, k.ok, k.name, k.where]), sql("SELECT site FROM access_keys WHERE name = 'github-token'")[0]?.site], [[["key", true, "github-token", "GitHub token"]], "github.com"]);
-    const untied = await say(hana, "API_KEY=zx81-untied-0123456789abcdef\n" + doing(["http_request", { method: "GET", url: `${CDN}/site/api/echo?token={{key:api-key}}` }]));
-    check("a key that is tied to no site is sent in no web request", untied.user?.details?.kept?.[0]?.ok === true && untied.tools[0]?.isError === true && /tied to no site/.test(untied.tools[0]?.result ?? ""), [untied.user?.details?.kept, untied.tools[0]?.result]);
+    const untied = await say(hana, "API_KEY=zx81-untied-0123456789abcdef");
+    const untiedUse = await say(hana, doing(["http_request", { method: "GET", url: `${CDN}/site/api/echo?token={{key:api-key}}` }]));
+    check(
+      "a key that is tied to no site is sent in no web request",
+      untied.user?.details?.kept?.[0]?.ok === true && /is tied to no site/.test(untied.user?.details?.kept?.[0]?.note ?? "") && untiedUse.tools[0]?.isError === true && /tied to no site/.test(untiedUse.tools[0]?.result ?? ""),
+      [untied.user?.details?.kept, untiedUse.tools[0]?.result],
+    );
+    const tiedByMessage = await say(hana, `SECRET_KEY=qq77-named-0123456789abcdef buat ${CDN}/site/api/echo`);
+    check("  a key written with one web address is tied to that site", /sends it only to 127\.0\.0\.1/.test(tiedByMessage.user?.details?.kept?.[0]?.note ?? ""), tiedByMessage.user?.details?.kept?.[0]);
     const untiedId = (await memoryOf(hana))?.access?.find((a) => a.name === "api-key")?.id;
     eq("  until the account says which site it is for", [(await hana.patch(`/api/access/key/${untiedId}`, { site: `${CDN}/anything` })).status, (await memoryOf(hana))?.access?.find((a) => a.name === "api-key")?.detail?.includes("sent only to 127.0.0.1")], [200, true]);
     eq("  then it is", (await say(hana, doing(["http_request", { method: "GET", url: `${CDN}/site/api/echo?token={{key:api-key}}` }]))).tools.map((t) => [t.isError, t.result.includes("zx81-untied"), t.result.includes("{{key:api-key}}")]), [[false, false, true]]);
@@ -4279,7 +4302,9 @@ export async function automation(ctx) {
       check("  the password is taken out of the conversation as it is stored", !JSON.stringify(stored).includes(HIDDEN) && stored[0]?.content.includes("rahasianya adalah [kept by the app]"), stored[0]?.content);
     }
     eq("  it is that account's, under the name the assistant gave it", [(await memoryOf(hadi))?.access?.map((a) => [a.kind, a.name]), (await memoryOf(hadi))?.access?.[0]?.detail?.includes("Hadi's test machine")], [[["server", "mesin-hadi"]], true]);
-    const wrongTool = await say(hadi, `DO: ${JSON.stringify({ tool: "keep_access", args: { kind: "key", label: "Kunci panel", value: "pnl-0123456789-abcdefgh", site: "evil.example.com" } })}`, { modelRowId: state.models["ho-chat"] });
+    // The arguments are not in the message: the person did not name that site, the model thought of it.
+    const wrongArgs = Buffer.from(JSON.stringify({ kind: "key", label: "Kunci panel", value: "pnl-0123456789-abcdefgh", site: "evil.example.com" })).toString("base64");
+    const wrongTool = await say(hadi, `Simpan kunci panel saya ya.\nDO: ${JSON.stringify({ tool: "keep_access", args_b64: wrongArgs })}`, { modelRowId: state.models["ho-chat"] });
     check("a key is not tied to a site the person did not name", wrongTool.tools[0]?.isError === false && /was not tied to it/.test(wrongTool.tools[0]?.result ?? "") && sql("SELECT site FROM access_keys WHERE name = 'kunci-panel'")[0]?.site === null, wrongTool.tools[0]?.result);
     await control(`/__password?value=${encodeURIComponent(ROOT)}`);
 
@@ -4304,14 +4329,20 @@ export async function automation(ctx) {
     const byHand = await hana.post("/api/memory", { content: "Deploy selalu lewat GitHub Actions.\nvps 203.0.113.9 user root pw Catatan#Rahasia1" });
     check("a note written by hand is kept, without what signs in", byHand.status === 201 && byHand.data?.note?.source === "manual" && !byHand.data?.note?.content.includes("Catatan#Rahasia1") && byHand.data?.note?.content.includes("[not kept in a note]"), byHand.data?.note);
     eq("  the same note is not kept twice", [(await hana.post("/api/memory", { content: byHand.data?.note?.content })).status, (await memoryOf(hana))?.notes?.length], [200, 2]);
-    const secretNote = await say(hana, doing(["remember", { note: "The token is ghp_abcdefghijklmnopqrstuvwxyz0123456789 for GitHub." }]));
-    check("  a note the assistant writes holds no key either", secretNote.tools[0]?.isError === false && !JSON.stringify((await memoryOf(hana))?.notes).includes("ghp_abcdefghijklmnopqrstuvwxyz0123456789"), (await memoryOf(hana))?.notes?.[0]?.content);
+    // What the model writes into a note, not what the person wrote: the message does not say it.
+    const noteArgs = Buffer.from(JSON.stringify({ note: "The token is ghp_abcdefghijklmnopqrstuvwxyz0123456789 for GitHub." })).toString("base64");
+    const secretNote = await say(hana, `Catat soal token GitHub.\nDO: ${JSON.stringify({ tool: "remember", args_b64: noteArgs })}`);
+    check(
+      "  a note the assistant writes holds no key either",
+      secretNote.tools[0]?.isError === false && !JSON.stringify((await memoryOf(hana))?.notes).includes("ghp_abcdefghijklmnopqrstuvwxyz0123456789") && (await memoryOf(hana))?.notes?.[0]?.content === "The token is [not kept in a note] for GitHub.",
+      (await memoryOf(hana))?.notes?.[0]?.content,
+    );
     const noteId = (await memoryOf(hana))?.notes?.find((n) => n.source === "manual")?.id;
-    eq("a note is forgotten by its account only", [(await hadi.del(`/api/memory/${noteId}`)).status, (await hana.del(`/api/memory/${noteId}`)).status, (await memoryOf(hana))?.notes?.length], [404, 200, 2]);
+    eq("a note is forgotten by its account only", [(await hadi.del(`/api/memory/${noteId}`)).status, (await hana.del(`/api/memory/${noteId}`)).status, (await memoryOf(hana))?.notes?.map((n) => n.source)], [404, 200, ["chat", "chat"]]);
 
     begin("Memory: the conversations themselves");
     const list = (await hana.get("/api/chats")).data?.chats ?? [];
-    check("the conversations of an account are listed, the one written in last first", list.length >= 8 && list[0]?.id === looked.chat?.id && list.every((c) => typeof c.title === "string" && c.messages >= 1), list.slice(0, 3));
+    check("the conversations of an account are listed, the one written in last first", list.length >= 8 && list[0]?.id === secretNote.chat?.id && list[1]?.id === looked.chat?.id && list.every((c) => typeof c.title === "string" && c.messages >= 1), list.slice(0, 3));
     eq("  nobody else is shown one", [(await hadi.get(`/api/chats/${first.chat?.id}`)).status, (await admin.get(`/api/chats/${first.chat?.id}`)).status, (await hadi.patch(`/api/chats/${first.chat?.id}`, { title: "mine" })).status, (await hadi.del(`/api/chats/${first.chat?.id}`)).status, (await say(hadi, "hi", { chatId: first.chat?.id })).status], [404, 404, 404, 404, 404]);
     const opened = (await hana.get(`/api/chats/${first.chat?.id}`)).data;
     eq("  a conversation is read back as it was: who said what, what was kept, what the tools did", [opened?.messages?.map((m) => m.role), opened?.messages?.[0]?.details?.kept?.[0]?.name, opened?.messages?.[1]?.details?.tools?.map((t) => t.name), opened?.answering], [["user", "assistant", "user", "assistant"], "vps-127-0-0-1", ["run_on_server"], false]);
@@ -4332,10 +4363,23 @@ export async function automation(ctx) {
     eq("an answer that is stopped ends what it was doing, and says so in the conversation", [afterStop?.answering, afterStop?.messages?.at(-1)?.role, afterStop?.messages?.at(-1)?.details?.stopped, (await machine()).open, (await machine()).running], [false, "assistant", "cancelled", 0, 0]);
     eq("  the conversation goes on after it", (await say(hana, doing(["run_on_server", { command: "echo after-the-stop" }]), { chatId: first.chat?.id })).tools.map((t) => t.isError), [false]);
     // Deleting.
-    const gone = await hana.del(`/api/chats/${noted.chat?.id}`);
+    const aside = await say(hana, "Catatan lepas: kucingku bernama Zanzibar Kelabu, umurnya tiga tahun.");
     await mockReset();
-    const afterDelete = await say(hana, "Di mana tokoku Warung Kopi Senja jalan?");
-    check("a conversation that is deleted is not told of any more; the note it left stays", gone.status === 200 && !(await sentToProvider()).includes("Tokoku namanya Warung Kopi Senja, jalan di VPS Jakarta.") && Number(saw(afterDelete.answer, "notes")) >= 1, afterDelete.answer.slice(0, 200));
+    await say(hana, "Berapa umur kucingku Zanzibar Kelabu?");
+    const toldBefore = (await sentToProvider()).includes("umurnya tiga tahun");
+    const gone = await hana.del(`/api/chats/${aside.chat?.id}`);
+    await mockReset();
+    await say(hana, "Berapa umur kucingku si Zanzibar Kelabu itu?");
+    eq(
+      "a conversation that is deleted is not told of any more",
+      [toldBefore, gone.status, (await sentToProvider()).includes("umurnya tiga tahun"), (await hana.get(`/api/chats/${aside.chat?.id}`)).status, sql("SELECT count(*) AS n FROM chat_messages WHERE chat_id = ?", aside.chat?.id)[0]?.n],
+      [true, 200, false, 404, 0],
+    );
+    eq(
+      "  a note that a deleted conversation left stays, without the conversation",
+      [(await hana.del(`/api/chats/${noted.chat?.id}`)).status, (await memoryOf(hana))?.notes?.filter((n) => n.content.startsWith("Hana runs the shop")).map((n) => n.chatId)],
+      [200, [null]],
+    );
 
     begin("Handover: the whole conversation sent at once is answered as before, and keeps nothing");
     const chatsBefore = ((await hana.get("/api/chats")).data?.chats ?? []).length;
@@ -4388,6 +4432,21 @@ export async function automation(ctx) {
     eq("  and its run works on the server", [(await runProject(hana, inGoal.data?.project?.id)).events.filter((e) => e.type === "status").at(-1)?.status, (await toolCalls(hana, inGoal.data?.project?.id)).map((c) => [c.name, c.isError])], ["succeeded", [["run_on_server", false]]]);
     const withInput = await sse(hana, `/api/projects/${onVps.data?.project?.id}/run`, { method: "POST", body: { input: `kali ini pakai VPS 127.0.0.1 port ${SSH_PORT} user root pass ${ROOT}` } });
     check("  the same for the instruction of one run", withInput.status === 200 && !JSON.stringify(sql("SELECT input FROM project_runs WHERE project_id = ?", onVps.data?.project?.id)).includes(ROOT) && JSON.stringify(sql("SELECT input FROM project_runs WHERE project_id = ?", onVps.data?.project?.id)).includes("kept by the app as"), null);
+    {
+      const header = withInput.headers?.get("x-access-kept");
+      const said = header ? JSON.parse(Buffer.from(header, "base64").toString("utf8")) : null;
+      eq("  the start of the run says what was kept, for the page to show", [said?.map((k) => [k.kind, k.ok, k.updated, k.name]), JSON.stringify(said ?? "").includes(ROOT), (await sse(hana, `/api/projects/${onVps.data?.project?.id}/run`, { method: "POST", body: { input: "sekali lagi" } })).headers?.get("x-access-kept")], [[["server", true, true, "vps-127-0-0-1"]], false, null]);
+      const edited = await hana.patch(`/api/projects/${inGoal.data?.project?.id}`, { goal: `${inGoal.data?.project?.goal} Lalu kirim laporan.` });
+      const triesBefore = await tried();
+      eq(
+        "  a goal that is saved again with the app's mark in it is nobody's password: nothing is tried, nothing changes",
+        [edited.status, edited.data?.kept, edited.data?.project?.goal.includes('[password kept by the app as "vps-127-0-0-1"] lalu cek. Lalu kirim laporan.'), await tried()],
+        [200, [], true, triesBefore],
+      );
+      const viaApi = await hana.post("/api/projects/" + onVps.data?.project?.id + "/schedules", { cron: "0 7 * * *", timezone: "Asia/Jakarta", input: `pakai VPS 127.0.0.1 port ${SSH_PORT} user root pass ${ROOT}` });
+      check("  a schedule's instruction goes the same way, and its answer says what was kept", viaApi.status === 201 && viaApi.data?.kept?.[0]?.name === "vps-127-0-0-1" && !JSON.stringify(viaApi.data).includes(ROOT) && !JSON.stringify(sql("SELECT input FROM schedules WHERE project_id = ?", onVps.data?.project?.id)).includes(ROOT), viaApi.data);
+      if (viaApi.data?.schedule?.id) await hana.del(`/api/projects/${onVps.data?.project?.id}/schedules/${viaApi.data.schedule.id}`);
+    }
     const about = await hana.post("/api/projects", { title: "Tulisan", goal: "Tulis dua kalimat tentang kopi.", workflowId: flow });
     await mockReset();
     await runProject(hana, about.data?.project?.id);
@@ -4425,6 +4484,74 @@ export async function automation(ctx) {
       eq("  a user's assistant signs in with it in the browser, and the site takes it", [web.tools.map((t) => [t.name, t.isError]), siteState.signIns?.length >= 1], [[["use_browser", false], ["use_browser", false]], true]);
       check("  the page behind the sign-in is read, and no answer of the tool holds the password", /budi/.test(web.tools[1]?.result ?? "") && !JSON.stringify(web.tools).includes(BUDI) && !(await sentToProvider()).includes(BUDI), web.tools[1]?.result?.slice(0, 200));
       eq("  the browser of the answer is closed when the answer is there", (await admin.get("/api/browser")).data?.use?.pages, 0);
+
+      // A site that asks for a CAPTCHA: the page waits for the person whose conversation it is.
+      await fetch(`${SITE}/__reset`);
+      await hana.post("/api/notifications/read", {}).catch(() => undefined);
+      const siteNow = async () => (await fetch(`${SITE}/__state`)).json();
+      const waitingFor = async (who) => (await who.get("/api/browser/live")).data?.waiting ?? [];
+      const page = (who, id) => ({
+        state: () => who.get(`/api/browser/live/${id}`),
+        click: (x, y) => who.post(`/api/browser/live/${id}/input`, { type: "click", x, y }),
+        screen: () => who.raw(`/api/browser/live/${id}/screen`),
+        done: (outcome) => who.post(`/api/browser/live/${id}`, { outcome }),
+      });
+      // Where the box of the mock's CAPTCHA is in the window, and the button that sends its form.
+      const BOX = [66, 326];
+      const SEND = [100, 420];
+      const pending = say(hana, `masuk ke ${SITE}/captcha-login\nusername: budi\npassword: ${BUDI}\n` + doing(["use_browser", { action: "sign_in", account: "127.0.0.1" }]));
+      const mine = await until(() => waitingFor(hana), (list) => list.length === 1, { tries: 80, gapMs: 250 });
+      const liveId = mine[0]?.id;
+      const live = (await page(hana, liveId).state()).data?.live;
+      const others = [
+        (await waitingFor(hugo)).length,
+        (await page(hugo, liveId).state()).status,
+        (await page(hugo, liveId).screen()).status,
+        (await page(hugo, liveId).click(...BOX)).status,
+        (await page(hugo, liveId).done("continue")).status,
+        (await waitingFor(hadi)).length,
+        (await page(hadi, liveId).state()).status,
+        (await page(hadi, liveId).click(...BOX)).status,
+      ];
+      const ownerSees = [(await waitingFor(admin)).some((l) => l.id === liveId), (await page(admin, liveId).state()).status];
+      const picture = await page(hana, liveId).screen();
+      const pictureBytes = Buffer.from(await picture.arrayBuffer());
+      const shownPage = await hana.raw(`/dashboard/browser/live/${liveId}`);
+      const shownHtml = await shownPage.text();
+      const notShown = await (await hugo.raw(`/dashboard/browser/live/${liveId}`)).text();
+      const untouched = await siteNow();
+      const clicked = (await page(hana, liveId).click(...BOX)).status;
+      const passed = await until(siteNow, (st) => st.passed.includes("captcha"), { tries: 20, gapMs: 250 });
+      await page(hana, liveId).click(...SEND);
+      const signedIn = await until(siteNow, (st) => st.signIns.length === 1, { tries: 20, gapMs: 250 });
+      const handedBack = (await page(hana, liveId).done("continue")).status;
+      const guarded = await pending;
+      check(
+        "a page that waits for a person waits for the user whose conversation it is",
+        mine.length === 1 && live?.kind === "run" && live?.chatId === guarded.chat?.id && live?.projectId === null && live?.agentName === "Assistant" && live?.account === "127.0.0.1" && /shows a CAPTCHA/.test(live?.reason ?? ""),
+        live,
+      );
+      check("  the conversation says where, while it waits", guarded.events.some((e) => e.link === `/dashboard/browser/live/${liveId}` && /^Waiting for a person on 127\.0\.0\.1/.test(e.progress ?? "")), guarded.events.filter((e) => e.link));
+      check(
+        "  that user is shown the page, as a picture and on a page of its own; someone else's page says that nothing waits",
+        picture.status === 200 &&
+          picture.headers.get("content-type") === "image/jpeg" &&
+          pictureBytes.length > 5000 &&
+          shownPage.status === 200 &&
+          shownHtml.includes('data-testid="live-view"') &&
+          shownHtml.includes("A page waits for you") &&
+          !notShown.includes('data-testid="live-view"') &&
+          notShown.includes("This page does not wait any more"),
+        [picture.status, pictureBytes.length, shownPage.status],
+      );
+      eq("  no other user and no administrator is shown it or acts on it; an owner is", [others, ownerSees], [[0, 404, 404, 404, 404, 0, 404, 404], [true, 200]]);
+      eq("  the form was filled in by the app and not sent; the person's click passes the check, and the person sends it", [untouched.passed, untouched.signIns, clicked, passed?.passed, signedIn?.signIns], [[], [], 200, ["captcha"], [{ user: "budi", from: "/captcha-login" }]]);
+      check("  handed back, the assistant goes on from what the page shows", handedBack === 200 && guarded.tools[0]?.isError === false && guarded.tools[0]?.result.includes("A person took the page over") && guarded.tools[0]?.result.includes("Signed in as budi.") && !JSON.stringify(guarded.events).includes(BUDI), guarded.tools[0]?.result?.slice(0, 300));
+      {
+        const told = ((await hana.get("/api/notifications")).data?.notifications ?? []).find((n) => /waits for you in the browser/.test(n.title));
+        check("  the user was told, with where the page is", told?.title === "Assistant waits for you in the browser" && told?.link === `/dashboard/browser/live/${liveId}`, told);
+      }
+      eq("  afterwards nothing waits, and the browser of the answer is closed", [(await waitingFor(hana)).length, (await page(hana, liveId).state()).status, (await admin.get("/api/browser")).data?.use?.pages], [0, 404, 0]);
     } else {
       eq("  without a browser service the assistant has no tool for it, and is told so", [(saw(web.answer, "tools") ?? "").split("|").includes("use_browser"), (await sentToProvider()).includes("no browser is set up on this installation")], [false, true]);
     }

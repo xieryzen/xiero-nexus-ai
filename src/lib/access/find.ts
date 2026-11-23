@@ -64,6 +64,27 @@ export function isHost(text: string): boolean {
   return IPV4.test(text) || (DOMAIN.test(text) && !FILE_ENDINGS.test(text));
 }
 
+/**
+ * What the app itself writes where a secret stood ("[password kept by the app
+ * as …]", "[password taken out by the app]", "[kept by the app]", "[not kept
+ * in a note]"), and how a key is named in a call ("{{key:name}}"). A text
+ * that went through here once comes back: a goal that is edited, a message
+ * that is quoted, a note that is saved again. Nothing inside a mark is a
+ * field. Read as one, "pass [password kept by the app as …]" would be a
+ * sign-in with the password "[password", tried on the person's machine every
+ * time the text is saved.
+ */
+const APP_MARKS =
+  /\[(?:(?:password|private key|passphrase|key) )?(?:kept by the app[^\]\n]{0,100}|taken out by the app)\]|\[not kept in a note\]|\{\{key:[^{}\s]{0,80}\}\}/g;
+
+/** Where the app's own marks stand in a text. */
+export function appMarks(text: string): Span[] {
+  const spans: Span[] = [];
+  APP_MARKS.lastIndex = 0;
+  for (let m = APP_MARKS.exec(text); m; m = APP_MARKS.exec(text)) spans.push({ start: m.index, end: m.index + m[0].length });
+  return spans;
+}
+
 /** Keys that say by their shape what they are. `site` is the host they are for, when the shape says it. */
 const KNOWN_KEYS: { re: RegExp; label: string; site: string | null }[] = [
   { re: /\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, label: "GitHub token", site: "github.com" },
@@ -378,7 +399,8 @@ function labelOfKey(field: Field, around: string): { label: string; site: string
 export function findAccess(text: string): Found[] {
   if (!text || text.length > 64_000) return [];
   const found: Found[] = [];
-  const taken: Span[] = [];
+  // What the app wrote itself is nobody's password.
+  const taken: Span[] = appMarks(text);
 
   // Private keys first: nothing inside one is a field.
   const keyBlocks: (Span & { value: string })[] = [];

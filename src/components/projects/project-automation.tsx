@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { describeCron, nextRuns, scheduleProblem } from "@/lib/cron";
+import { keptLine, type Kept } from "@/lib/access/rules";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { DateTime, RelativeTime, TimeText } from "@/components/time";
@@ -87,6 +88,8 @@ export function ProjectAutomation({
   const [timezone, setTimezone] = useState("UTC");
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** What the instruction of a schedule that was just saved handed over: kept by the app, and not in the instruction as it is stored. */
+  const [kept, setKept] = useState<Kept[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [shown, setShown] = useState<{ id: string; text: string | null; review: string | null } | null>(null);
 
@@ -132,10 +135,11 @@ export function ProjectAutomation({
     setError(null);
     setBusy("add");
     try {
-      const res = await apiFetch<{ schedule: ScheduleDTO }>(`/api/projects/${projectId}/schedules`, {
+      const res = await apiFetch<{ schedule: ScheduleDTO; kept?: Kept[] }>(`/api/projects/${projectId}/schedules`, {
         method: "POST",
         body: JSON.stringify({ cron: cron.trim(), timezone, input: input.trim() || null }),
       });
+      setKept(res.kept ?? []);
       setSchedules((list) => [...list, res.schedule]);
       setAdding(false);
       setInput("");
@@ -210,6 +214,15 @@ export function ProjectAutomation({
   return (
     <div className="mt-6 space-y-6">
       {error && <Alert tone="danger">{error}</Alert>}
+      {kept.length > 0 && (
+        <div className="space-y-2" data-testid="kept-schedule">
+          {kept.map((k, i) => (
+            <Alert key={`${k.kind}-${k.where}-${i}`} tone={k.ok ? "ok" : "warn"}>
+              {keptLine(k)}
+            </Alert>
+          ))}
+        </div>
+      )}
 
       <Card
         title="Schedules"
