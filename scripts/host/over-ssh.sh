@@ -14,6 +14,8 @@
 #   install       the first installation on a server that has no bundle yet
 #                 (pterodactyl-install.sh --yes).
 #   disk-report   what takes the space (disk-report.sh). Changes nothing.
+#   models-report what the app knows about its models, read from its database
+#                 (models-report.sh). Changes nothing, asks no provider.
 #   site-plan     what giving the app its public address would do
 #                 (nginx-site.sh --dry-run). Changes nothing.
 #   site          the public address: a site in the node's nginx with a
@@ -87,6 +89,7 @@ SCRIPTS="${DEPLOY_SCRIPTS:-${here}}"
 # to it.
 SENT=(pterodactyl-upgrade.sh pterodactyl-install.sh disk-report.sh node-check.sh nginx-site.sh
   workforce.sh workforce.py workforce.json)
+if [ -f "${SCRIPTS}/models-report.sh" ]; then SENT+=(models-report.sh); fi
 if [ -d "${SCRIPTS}/skills" ]; then SENT+=(skills); fi
 # The browser service: the script that sets it up, and what its image is built from.
 if [ -f "${SCRIPTS}/browser-service.sh" ] && [ -d "${SCRIPTS}/browser" ]; then SENT+=(browser-service.sh browser); fi
@@ -128,6 +131,7 @@ case "${ACTION}" in
   plan | upgrade) REMOTE_SCRIPT="pterodactyl-upgrade.sh" ;;
   install-plan | install) REMOTE_SCRIPT="pterodactyl-install.sh" ;;
   disk-report) REMOTE_SCRIPT="disk-report.sh" ;;
+  models-report) REMOTE_SCRIPT="models-report.sh" ;;
   site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
   workforce-plan | workforce) REMOTE_SCRIPT="workforce.sh" ;;
   browser-plan | browser) REMOTE_SCRIPT="browser-service.sh" ;;
@@ -136,7 +140,7 @@ case "${ACTION}" in
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -161,6 +165,9 @@ case "${ACTION}" in
     [ -z "${APP_URL}" ] || ARGS+=(--app-url "${APP_URL}")
     if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
     if [ "${ACTION}" = "install-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  models-report)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
     ;;
   site-plan | site)
     [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
