@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { takeAccessForProject } from "@/lib/access/store";
+import { getClientMeta } from "@/lib/request";
 import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
 import { RequestError } from "@/lib/public-api/openai-format";
 import { runJson } from "@/lib/public-api/runs";
@@ -46,6 +48,8 @@ export const POST = v1("projects", async (req, { params, caller }) => {
       continueLast = goOn;
     }
   }
+  // What signs in is taken out of the instruction before the run is stored (src/lib/access).
+  if (input) input = (await takeAccessForProject(caller.user, project, input, getClientMeta(req))).text;
   const result = startRun(project, {
     trigger: "api",
     requestedBy: caller.user.id,

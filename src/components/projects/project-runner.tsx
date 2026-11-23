@@ -101,6 +101,7 @@ export function ProjectRunner({
   mayOperate = true,
   tokensLeft: initialTokensLeft,
   own,
+  handed = [],
 }: {
   project: ProjectDTO;
   agentNames: Record<string, string>;
@@ -132,6 +133,12 @@ export function ProjectRunner({
   tokensLeft: number | null;
   /** Whether the project belongs to the account that looks at it. */
   own: boolean;
+  /**
+   * What the account handed to the AI itself and the goal is about: a run
+   * works with it, without it being set up here. Only for the account it
+   * belongs to.
+   */
+  handed?: { kind: "server" | "site" | "key"; name: string; where: string }[];
 }) {
   const [status, setStatus] = useState(project.status);
   const [tasks, setTasks] = useState<TaskLive[]>(
@@ -611,6 +618,22 @@ export function ProjectRunner({
 
       <Card title="Goal" className="mb-6">
         <p className="whitespace-pre-wrap text-sm text-ink-2">{project.goal}</p>
+        {handed.length > 0 && (
+          <p className="mt-3 border-t border-line pt-3 text-xs text-ink-3" data-testid="handed">
+            A run works with what you handed over yourself and this goal is about, whatever tools its agents have:{" "}
+            {handed.map((h, i) => (
+              <span key={`${h.kind}-${h.name}`}>
+                {i > 0 && "; "}
+                <span className="mono text-ink-2">{h.name}</span> ({h.kind === "server" ? "server" : h.kind === "site" ? "site account" : "key"}, {h.where})
+              </span>
+            ))}
+            . It is listed on the{" "}
+            <Link href="/dashboard/memory" className="text-signal hover:underline">
+              Memory
+            </Link>{" "}
+            page.
+          </p>
+        )}
       </Card>
 
       <ProjectServers projectId={project.id} options={serverOptions} initial={project.servers} operators={serverOperators} mayChange={mayOperate} busy={isRunning} />

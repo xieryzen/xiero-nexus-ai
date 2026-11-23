@@ -1,14 +1,15 @@
 import "server-only";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { workspaceFiles, type Agent } from "@/db/schema";
+import { workspaceFiles, type Agent, type Server, type SiteAccount } from "@/db/schema";
+import { withKeys, type KeySet } from "../access/tools";
 import type { ToolDefinition } from "../adapters/types";
 import { AppError, sanitizeUpstreamError } from "../errors";
 import { safeFetch } from "../http-client";
 import { formatHits, searchKnowledge } from "../knowledge/service";
 import { readBodyCapped } from "../media/http";
 import { SKILLS_PROMPT_TOTAL_CHARS, SKILL_PROMPT_CHARS } from "../skills/prompt";
-import { BROWSER_TOOL } from "../browser/rules";
+import { BROWSER_TOOL, pairOfOneSite } from "../browser/rules";
 import { browserConfigured } from "../browser/service";
 import { browserTool, type BrowserToolContext } from "../browser/tool";
 import { SERVER_TOOL } from "../ssh/rules";
@@ -63,10 +64,21 @@ export interface ToolContext {
   servers?: Omit<ServerToolContext, "projectId" | "userId" | "taskId" | "agentName">;
   /**
    * The run the task belongs to and the site accounts it may sign in with,
-   * for the tool use_browser. Without this the agent is not handed the tool:
-   * it is there for the projects of accounts that may work in the browser.
+   * for the tool use_browser. Without this the agent is not handed the tool.
    */
   browser?: Omit<BrowserToolContext, "projectId" | "userId" | "taskId" | "agentName">;
+  /**
+   * Whether an agent that has the tool use_browser ticked works in the
+   * browser in this project: for the projects of accounts that may
+   * (browser/rules.ts). Left out, it does, as long as `browser` is there.
+   */
+  browserOpen?: boolean;
+  /**
+   * What the project's account handed over itself and this task is about
+   * (src/lib/access): the agent is handed the tools to work with it whether
+   * or not they are ticked on it.
+   */
+  own?: { servers: Server[]; accounts: SiteAccount[]; keys: KeySet | null };
 }
 
 // ─── Server configuration ────────────────────────────────────────────────────
@@ -630,39 +642,68 @@ export function buildTools(ctx: ToolContext): LoopTool[] {
   const workspace = workspaceTools(ctx);
   const web = webTools();
   const search = searchConfig();
+  const own = ctx.own;
+  const keys = own?.keys ?? null;
 
   for (const name of chosen) {
     if (!toolAvailable(name, status)) continue;
     if (name in workspace) tools.push(workspace[name]!);
     else if (name === "run_command") tools.push(commandTool(ctx));
     else if (name === "web_search" && search) tools.push(searchTool(search));
-    else if (name === SERVER_TOOL) {
-      // Only where the project names machines its account may work on.
-      if (ctx.servers && ctx.servers.servers.length > 0) {
-        tools.push(
-          serverTool({
-            ...ctx.servers,
-            projectId: ctx.projectId,
-            userId: ctx.userId,
-            taskId: ctx.taskId,
-            agentName: ctx.agent.name,
-          }),
-        );
+    // The server and the browser are handed out below: also for what the account handed over itself.
+    else if (name === SERVER_TOOL || name === BROWSER_TOOL) continue;
+    else if (name in web) tools.push(name === "http_request" && keys ? withKeys(web[name]!, keys) : web[name]!);
+  }
+  // A key that is for a site is of no use without a way to call the site.
+  if (keys && !chosen.has("http_request")) tools.push(withKeys(web.http_request!, keys));
+
+  // Machines: the ones the project names, for an agent that has the tool;
+  // the ones the account handed over itself and this task is about, for any.
+  const machines: ServerToolContext["servers"] = [...(own?.servers ?? [])];
+  if (chosen.has(SERVER_TOOL)) {
+    for (const server of ctx.servers?.servers ?? []) {
+      if (!machines.some((m) => m.id === server.id)) machines.push(server);
+    }
+  }
+  if (ctx.servers && machines.length > 0) {
+    tools.push(
+      serverTool({
+        ...ctx.servers,
+        servers: machines,
+        keys: keys ?? undefined,
+        projectId: ctx.projectId,
+        userId: ctx.userId,
+        taskId: ctx.taskId,
+        agentName: ctx.agent.name,
+      }),
+    );
+  }
+
+  // The browser: for an agent that has the tool, in the projects of accounts
+  // that may work in it; and for any agent, to sign in with what the account
+  // handed over itself. One browser is signed in to a site as one account at
+  // a time: what was handed over comes first.
+  if (ctx.browser && status.browser) {
+    const ticked = chosen.has(BROWSER_TOOL) && ctx.browserOpen !== false;
+    const accounts = [...(own?.accounts ?? [])];
+    if (ticked) {
+      for (const account of ctx.browser.accounts) {
+        if (accounts.some((a) => a.id === account.id) || pairOfOneSite([...accounts, account])) continue;
+        accounts.push(account);
       }
-    } else if (name === BROWSER_TOOL) {
-      // Only in the projects of accounts that may work in the browser.
-      if (ctx.browser) {
-        tools.push(
-          browserTool({
-            ...ctx.browser,
-            projectId: ctx.projectId,
-            userId: ctx.userId,
-            taskId: ctx.taskId,
-            agentName: ctx.agent.name,
-          }),
-        );
-      }
-    } else if (name in web) tools.push(web[name]!);
+    }
+    if (ticked || accounts.length > 0) {
+      tools.push(
+        browserTool({
+          ...ctx.browser,
+          accounts,
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          taskId: ctx.taskId,
+          agentName: ctx.agent.name,
+        }),
+      );
+    }
   }
   if (ctx.collectionIds.length > 0) tools.push(knowledgeTool(ctx));
   if (ctx.agent.memoryEnabled) tools.push(...Object.values(memoryTools(ctx)));

@@ -209,8 +209,12 @@ export interface Remembered {
  * of work that is about `text`. Notes first; then, for a conversation, what
  * the account's other conversations said about it.
  */
-export function rememberedFor(userId: string | null | undefined, text: string, opts: { exceptChatId?: string | null; passages?: boolean } = {}): Remembered {
-  const notes = notesFor(userId, text);
+export function rememberedFor(
+  userId: string | null | undefined,
+  text: string,
+  opts: { exceptChatId?: string | null; passages?: boolean; limit?: number } = {},
+): Remembered {
+  const notes = notesFor(userId, text, opts.limit ?? NOTES_SHOWN);
   const passages = opts.passages === false ? [] : earlierPassages(userId, text, opts.exceptChatId ?? null);
   const parts: string[] = [];
   if (notes.length > 0) {

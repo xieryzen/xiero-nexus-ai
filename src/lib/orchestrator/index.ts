@@ -22,6 +22,9 @@ import {
 } from "@/db/schema";
 import type { ChatMessage } from "@/lib/adapters/types";
 import { adapterIsImplemented, getAdapter } from "@/lib/adapters";
+import { rememberedFor } from "@/lib/account-memory";
+import { NO_ACCESS, hasAccess, ownForAgent, ownForPlan, ownForRun, ownForTask } from "@/lib/access/for-run";
+import { keySetOf } from "@/lib/access/tools";
 import { notesForTask } from "@/lib/agent/memory";
 import { DEFAULT_MAX_STEPS, MAX_MAX_STEPS, parseToolNames } from "@/lib/agent/catalog";
 import { runToolLoop, type LoopTool, type ToolCallEvent } from "@/lib/agent/loop";
@@ -707,6 +710,12 @@ export async function executeRun(runId: string): Promise<void> {
         // The same for the browser: whether the project's account has one to work in, and the accounts it signs in with.
         const planBrowser = browserConfigured() && mayUseBrowser(roleOfUser(project.createdBy));
         const planAccounts = accountsForRun(project).accounts;
+        // What the project's account handed over itself, in a conversation or
+        // in this goal, and the goal is about (src/lib/access): no project
+        // names it, and every agent can work with it.
+        const planOwn = ownForRun(project.createdBy, `${project.title}\n${goal}`);
+        // What is remembered about the account, from its conversations.
+        const planMemory = rememberedFor(project.createdBy, goal, { passages: false, limit: 8 }).text;
         const planMessages: ChatMessage[] = [
           {
             role: "system",
@@ -721,9 +730,10 @@ export async function executeRun(runId: string): Promise<void> {
               creative +
               serversForPlan(planServers, workforce) +
               browserForPlan(planBrowser, planAccounts, workforce) +
+              ownForPlan(planOwn, browserConfigured()) +
               `\n\nAvailable agents:\n${describeAgents(workforce, project.teamId, planServers.length > 0, planBrowser)}`,
           },
-          { role: "user", content: `Goal:\n${goal}${memoryNote}` },
+          { role: "user", content: `Goal:\n${goal}${memoryNote}${planMemory ? `\n\n${planMemory}` : ""}` },
         ];
 
         const recordPlanning = (r: { prompt: number; completion: number; model: ResolvedModel; started: number }) =>
@@ -1123,6 +1133,19 @@ export async function executeRun(runId: string): Promise<void> {
 
         // What the agent works by: its own skills, and those of the project's team.
         const workSkills = agent ? skillsForWork(agent.id, project.teamId) : [];
+        // What the project's account handed over itself and this task is about
+        // (src/lib/access), as it is now: the agent is handed the tools for it
+        // whether or not they are ticked on it.
+        const textOfTask = (t: { title: string; objective: string; acceptanceCriteria: string | null }) => `${t.title}\n${t.objective}\n${t.acceptanceCriteria ?? ""}`;
+        const own =
+          kind === "text" && agent
+            ? ownForTask(
+                ownForRun(project.createdBy, `${project.title}\n${goal}`),
+                textOfTask(row),
+                [...bySeq.values()].map((t) => textOfTask(t.row)),
+              )
+            : NO_ACCESS;
+        const mayBrowse = mayUseBrowser(roleOfUser(project.createdBy));
         const tools: LoopTool[] =
           kind === "text" && agent
             ? buildTools({
@@ -1147,18 +1170,22 @@ export async function executeRun(runId: string): Promise<void> {
                 },
                 // The browser of the run: one for all its tasks, each in a tab
                 // of its own, closed when the run has ended (browser/sessions.ts).
-                // It is there for the projects of owners and administrators.
-                browser: mayUseBrowser(roleOfUser(project.createdBy))
-                  ? {
-                      runId,
-                      projectTitle: project.title,
-                      taskTitle: row.title,
-                      accounts: accountsForRun(project).accounts,
-                      isCancelled,
-                      progress: (message, link) => emit({ type: "progress", seq, message, ...(link ? { link } : {}) }),
-                      attempt: () => attempt,
-                    }
-                  : undefined,
+                // It is there for the projects of owners and administrators, and
+                // for anyone's to sign in with what the account handed over itself.
+                browser:
+                  mayBrowse || own.accounts.length > 0
+                    ? {
+                        runId,
+                        projectTitle: project.title,
+                        taskTitle: row.title,
+                        accounts: mayBrowse ? accountsForRun(project).accounts : [],
+                        isCancelled,
+                        progress: (message, link) => emit({ type: "progress", seq, message, ...(link ? { link } : {}) }),
+                        attempt: () => attempt,
+                      }
+                    : undefined,
+                browserOpen: mayBrowse,
+                own: hasAccess(own) ? { servers: own.servers, accounts: own.accounts, keys: keySetOf(own.keys) } : undefined,
               })
             : [];
         const toolNames = tools.map((t) => t.definition.name);
@@ -1217,6 +1244,13 @@ export async function executeRun(runId: string): Promise<void> {
           }
         }
 
+        // What is remembered about the account the work is for, from its conversations.
+        const about = kind === "text" ? rememberedFor(project.createdBy, `${row.title}\n${row.objective}`, { passages: false, limit: 6 }).text : "";
+        // What it handed over, for an agent that has the tools to work with it
+        // in this request: a model that turned the tools down is not told of it.
+        const ownNote = (names: string[]) =>
+          names.includes(SERVER_TOOL) || names.includes(BROWSER_TOOL) || names.includes("http_request") ? ownForAgent(own, browserConfigured()) : "";
+
         const messagesFor = (names: string[]): ChatMessage[] => [
           {
             role: "system",
@@ -1228,7 +1262,9 @@ export async function executeRun(runId: string): Promise<void> {
               `Overall project goal: ${goal}\n` +
               deliverableInstructionFor(names) +
               (row.acceptanceCriteria ? `\nAcceptance criteria: ${row.acceptanceCriteria}` : "") +
-              notes,
+              notes +
+              ownNote(names) +
+              (about ? `\n\n${about}` : ""),
           },
           {
             role: "user",

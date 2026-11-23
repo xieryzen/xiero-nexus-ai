@@ -1,7 +1,9 @@
+import { takeAccessForProject } from "@/lib/access/store";
 import { handle } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
 import { loadOperableProject } from "@/lib/project-access";
+import { getClientMeta } from "@/lib/request";
 import { SSE_HEADERS, runEventStream } from "@/lib/run-bus";
 import { startRun } from "@/lib/runs";
 import { runStartSchema } from "@/lib/validation";
@@ -40,6 +42,9 @@ export const POST = handle(async (req, { params }) => {
     input = parsed.data.input;
     continueLast = parsed.data.continue === true;
   }
+
+  // What signs in is taken out of the instruction before the run is stored (src/lib/access).
+  if (input) input = (await takeAccessForProject(user, project, input, getClientMeta(req))).text;
 
   startRun(project, { trigger: "manual", requestedBy: user.id, input, continueLast });
   return new Response(runEventStream(project.id, req.signal, user.role), { headers: SSE_HEADERS });

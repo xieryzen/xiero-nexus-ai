@@ -408,6 +408,28 @@ export async function takeAccessFrom(user: Who, text: string, opts: KeepOptions 
   return { text: replaceSpans(text, parts), kept, secrets };
 }
 
+/**
+ * The same for what is written for a project: its goal, the instruction of
+ * a run or of a schedule. What signs in is kept for the account that wrote
+ * it. A run works with the access of the account the project belongs to: so
+ * where somebody else wrote it, the note says that the run does not have it.
+ */
+export async function takeAccessForProject(
+  user: Who,
+  project: { createdBy: string | null } | null,
+  text: string | null | undefined,
+  opts: KeepOptions = {},
+): Promise<Taken> {
+  if (!text) return { text: text ?? "", kept: [], secrets: [] };
+  const taken = await takeAccessFrom(user, text, opts);
+  if (project && project.createdBy !== user.id) {
+    for (const kept of taken.kept) {
+      if (kept.ok) kept.note += " It is kept for your account: this project belongs to another account, whose runs work with that account's own access and not with yours.";
+    }
+  }
+  return taken;
+}
+
 /** A text without secrets the app has taken out elsewhere: for what the assistant writes down itself. */
 export function withoutSecrets(text: string, secrets: readonly string[]): string {
   let out = text;

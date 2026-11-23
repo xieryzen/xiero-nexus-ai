@@ -1,6 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models, projects, teams, workflows } from "@/db/schema";
+import { takeAccessForProject } from "@/lib/access/store";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
@@ -135,11 +136,15 @@ export const POST = handle(async (req) => {
   const serverIds = checkedServerIds(user, body.serverIds);
   const siteAccountIds = checkedAccountIds(user, body.siteAccountIds);
 
+  // What signs in is taken out of the goal and kept for this account, before
+  // the goal is stored: the run works with it by name (src/lib/access).
+  const handed = await takeAccessForProject(user, null, body.goal, { ip, userAgent });
+
   const project = db
     .insert(projects)
     .values({
       title: body.title,
-      goal: body.goal,
+      goal: handed.text,
       managerModelRowId: body.managerModelRowId ?? null,
       teamId: body.teamId ?? null,
       maxTasks,
@@ -174,5 +179,5 @@ export const POST = handle(async (req) => {
     ip,
     userAgent,
   });
-  return json({ project: projectFor(user.role, serializeProject(project, { withTasks: true })) }, { status: 201 });
+  return json({ project: projectFor(user.role, serializeProject(project, { withTasks: true })), kept: handed.kept }, { status: 201 });
 });

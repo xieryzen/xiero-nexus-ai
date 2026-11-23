@@ -131,7 +131,7 @@ interface Field {
 }
 
 const WORDS: Record<Exclude<FieldKind, "port" | "passphrase">, ReadonlySet<string>> = {
-  pass: new Set(["password", "passwd", "passwort", "pass", "pwd", "pw", "sandi", "katasandi", "kata sandi", "pswd"]),
+  pass: new Set(["password", "passwd", "passwort", "pass", "pwd", "pw", "sandi", "katasandi", "kata sandi", "kata kunci", "katakunci", "pswd"]),
   user: new Set(["username", "user", "usr", "login", "pengguna", "nama pengguna", "email", "e-mail", "mail", "akun", "account", "user name"]),
   host: new Set(["ip", "host", "hostname", "server", "vps", "address", "alamat", "ip address", "alamat ip", "ip vps", "ip server", "domain"]),
   url: new Set(["url", "link", "site", "situs", "website", "web", "panel", "login url", "alamat web"]),
@@ -146,7 +146,9 @@ function kindOfLabel(raw: string): FieldKind | null {
     .replace(/[^a-z0-9 -]+/g, " ")
     .trim()
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(Boolean)
+    // Indonesian puts "-nya" on the word: "passwordnya", "usernya", "kata sandinya".
+    .map((word) => (word.length > 4 && word.endsWith("nya") ? word.slice(0, -3) : word));
   if (words.length === 0 || words.length > 5) return null;
   if (words.includes("passphrase")) return "passphrase";
   if (words.includes("port")) return "port";
@@ -170,7 +172,7 @@ function kindOfLabel(raw: string): FieldKind | null {
 function trimValue(text: string, start: number, explicit: boolean): { value: string; start: number } {
   let value = text;
   let at = start;
-  const quoted = /^(["'`])([^\n]*)\1[,;.]?$/.exec(value);
+  const quoted = /^(["'`])([^\n]*)\1[,;.)\]}]*$/.exec(value);
   if (quoted && quoted[2]) return { value: quoted[2], start: at + 1 };
   // What a sentence puts after a value. A password may end in a dot or a
   // comma; one that was said with ":" keeps a dot, a sentence's comma goes.
@@ -224,24 +226,25 @@ function fieldsOf(text: string, taken: Span[]): Field[] {
     fields.push({ kind, value, start, end: start + value.length, label, explicit });
   };
 
-  // "Label: value", "label = value", a pair on a line or several on one.
-  const pair = /(^|[\s,;|(])([A-Za-z][A-Za-z0-9 _.-]{0,40}?)[ \t]*(?::|=>|->|=)[ \t]*("[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s]+)/g;
+  // "Label: value", "label = value", a pair on a line or several on one; also
+  // as JSON writes it: "password": "value".
+  const pair = /(^|[\s,;|({])(["']?)([A-Za-z][A-Za-z0-9 _.-]{0,40}?)\2[ \t]*(?::|=>|->|=)[ \t]*("[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s]+)/g;
   for (let m = pair.exec(text); m; m = pair.exec(text)) {
-    const label = m[2]!.trim();
+    const label = m[3]!.trim();
     // "https://…" is an address, not a label "https" with a value.
     if (/^https?$/i.test(label)) continue;
     const kind = kindOfLabel(label);
     if (!kind) {
       // The pair is not one of ours: what follows its label may be.
-      pair.lastIndex = m.index + m[1]!.length + m[2]!.length;
+      pair.lastIndex = m.index + m[1]!.length + m[2]!.length + m[3]!.length;
       continue;
     }
-    const raw = m[3]!;
+    const raw = m[4]!;
     add(kind, raw, m.index + m[0].length - raw.length, label, true);
   }
 
   // "user root pw abc123": a word and its value, without a sign between.
-  const word = /(^|[\s,;|(])(username|user|usr|password|passwd|pass|pwd|pw|sandi|katasandi|ip|vps|server|host|hostname|port|token|bearer)[ \t]+("[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s]+)/gi;
+  const word = /(^|[\s,;|(])((?:username|user|usr|password|passwd|pass|pwd|pw|sandi|katasandi|ip|vps|server|host|hostname|port|token|bearer)(?:nya)?)[ \t]+("[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s]+)/gi;
   for (let m = word.exec(text); m; m = word.exec(text)) {
     const kind = kindOfLabel(m[2]!);
     const raw = m[3]!;
@@ -262,6 +265,12 @@ function fieldsOf(text: string, taken: Span[]): Field[] {
     fields.push({ kind: "user", value: m[3]!, start: userStart, end: userStart + m[3]!.length, label: "ssh", explicit: true });
     fields.push({ kind: "host", value: host, start: hostStart, end: hostStart + host.length, label: "ssh", explicit: true });
     if (m[5]) fields.push({ kind: "port", value: m[5], start: hostStart + host.length + 1, end: hostStart + host.length + 1 + m[5].length, label: "ssh", explicit: true });
+  }
+  // "masuk sebagai deploy", "login as ubuntu".
+  const as = /\b(?:masuk|login|log in|sign in|signin)[ \t]+(?:sebagai|as)[ \t]+([a-z_][a-z0-9_.-]{0,31})(?=$|[\s,;.)])/gi;
+  for (let m = as.exec(text); m; m = as.exec(text)) {
+    const start = m.index + m[0].length - m[1]!.length;
+    if (free(start, start + m[1]!.length)) fields.push({ kind: "user", value: m[1]!, start, end: start + m[1]!.length, label: "as", explicit: false });
   }
   const sshPort = /\bssh\b[^\n]*?[ \t]-p[ \t]*(\d{2,5})\b/gi;
   for (let m = sshPort.exec(text); m; m = sshPort.exec(text)) {

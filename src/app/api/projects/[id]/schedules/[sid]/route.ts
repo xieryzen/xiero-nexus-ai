@@ -1,3 +1,4 @@
+import { takeAccessForProject } from "@/lib/access/store";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
@@ -14,6 +15,8 @@ export const PATCH = handle(async (req, { params }) => {
   const project = loadOperableProject(params.id!, user);
   const schedule = loadSchedule(project.id, params.sid!);
   const body = await parseBody(req, scheduleUpdateSchema);
+  // What signs in is taken out of the instruction before it is stored (src/lib/access).
+  if (body.input) body.input = (await takeAccessForProject(user, project, body.input, { ip, userAgent })).text;
   const updated = updateSchedule(schedule, body);
   audit({
     actorUserId: user.id,

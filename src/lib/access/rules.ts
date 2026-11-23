@@ -135,7 +135,9 @@ export function siteOfKey(input: string | null | undefined): string {
     return "";
   }
   host = host.replace(/^www\./, "");
-  return /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,24}$/.test(host) ? host : "";
+  // A name with a dot in it, or an address: a panel on a machine of one's own has no name.
+  if (/^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/.test(host)) return host;
+  return /^(?=.{3,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,23}$/.test(host) ? host : "";
 }
 
 /**
@@ -148,7 +150,10 @@ export function keyMayGoTo(site: string | null | undefined, host: string): boole
   const s = siteOfKey(site);
   const h = host.toLowerCase().replace(/^\[|\]$/g, "");
   if (!s || !h) return false;
-  return h === s || h === `www.${s}` || h.endsWith(`.${s}`);
+  if (h === s) return true;
+  // An address has nothing under it.
+  if (/^[\d.]+$/.test(s)) return false;
+  return h === `www.${s}` || h.endsWith(`.${s}`);
 }
 
 // ─── What a text is about ────────────────────────────────────────────────────
@@ -188,17 +193,38 @@ export const GENERIC = {
 /**
  * What of an account's access a piece of work is handed: what its text
  * names, by name or by address. Where it names none but speaks of the kind
- * ("deploy it to my VPS") and the account has exactly one of that kind, that
- * one. Otherwise nothing: an agent whose task is not about a server is not
+ * ("deploy it to my VPS") and there is exactly one of that kind, that one.
+ * Otherwise nothing: an agent whose task is not about a server is not
  * handed one.
+ *
+ * `offerAll`: where the text speaks of the kind and names none of several,
+ * all of them. For the one who plans, who then names the one a task is
+ * about; never for the task itself.
  */
-export function relevantTo<T extends Named>(items: readonly T[], text: string, generic: RegExp): T[] {
+export function relevantTo<T extends Named>(items: readonly T[], text: string, generic: RegExp, opts: { offerAll?: boolean } = {}): T[] {
   if (items.length === 0 || !text.trim()) return [];
   const named = items.filter(
     (item) => says(text, item.name) || Boolean(item.host && says(text, item.host)) || Boolean(item.label && item.label.length >= 5 && says(text, item.label)),
   );
   if (named.length > 0) return named.slice(0, HANDED_AT_ONCE);
-  return items.length === 1 && generic.test(text) ? [items[0]!] : [];
+  if (!generic.test(text)) return [];
+  if (items.length === 1) return [items[0]!];
+  return opts.offerAll ? items.slice(0, HANDED_AT_ONCE) : [];
+}
+
+/**
+ * What a task of a run is handed, of what the run works with. As above, by
+ * the task's own text. Where no task of the run is about any of it (a
+ * workflow whose steps are written for every project, and only the goal
+ * says where the work is done), every task is handed all of it: the goal
+ * is about it, and nothing else in the run could reach it.
+ */
+export function relevantToTask<T extends Named>(items: readonly T[], taskText: string, allTaskTexts: readonly string[], generic: RegExp): T[] {
+  if (items.length === 0) return [];
+  const mine = relevantTo(items, taskText, generic);
+  if (mine.length > 0) return mine;
+  const somewhere = allTaskTexts.some((text) => relevantTo(items, text, generic).length > 0);
+  return somewhere ? [] : items.slice(0, HANDED_AT_ONCE);
 }
 
 // ─── What is said about it ───────────────────────────────────────────────────
