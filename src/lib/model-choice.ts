@@ -4,8 +4,19 @@ import { db } from "@/db";
 import { modelCapabilities, models, providers, users, workflows, type Capability, type Project } from "@/db/schema";
 import { adapterIsImplemented, getAdapter } from "./adapters";
 import { PlainError } from "./errors";
-import { isFailing } from "./model-health-rules";
-import { CHOICE_KINDS, choicesFor, fitsKind, priceFor, type ChoiceKind, type ChoiceModel } from "./model-choice-rules";
+import { isFailing, isResting } from "./model-health-rules";
+import {
+  CHOICE_KINDS,
+  askingOrder,
+  choicesFor,
+  fitsKind,
+  priceCeiling,
+  priceFor,
+  standInsEnabled,
+  standInsFor,
+  type ChoiceKind,
+  type ChoiceModel,
+} from "./model-choice-rules";
 import { countMediaTasks } from "./orchestrator/plan";
 import { NOT_SET_UP } from "./public-text";
 import { seesSetup } from "./roles";
@@ -17,8 +28,11 @@ import { seesSetup } from "./roles";
  */
 
 interface Askable extends ChoiceModel {
+  providerId: string;
   providerName: string;
   adapter: string;
+  /** Not chosen before this time: it did not answer a moment ago. */
+  retryAt: Date | null;
   /** The model's prices, for the order within each kind. */
   prices: Parameters<typeof priceFor>[0];
 }
@@ -42,11 +56,13 @@ function askable(): Askable[] {
       displayName: models.displayName,
       forUsers: models.forUsers,
       lastTestStatus: models.lastTestStatus,
+      retryAt: models.retryAt,
       inputPricePerMTok: models.inputPricePerMTok,
       outputPricePerMTok: models.outputPricePerMTok,
       pricePerImage: models.pricePerImage,
       pricePerSecond: models.pricePerSecond,
       pricePerMChars: models.pricePerMChars,
+      providerId: providers.id,
       providerName: providers.name,
       adapter: providers.adapter,
     })
@@ -69,10 +85,53 @@ function askable(): Askable[] {
     forUsers: m.forUsers,
     failing: isFailing(m),
     price: null,
+    providerId: m.providerId,
     providerName: m.providerName,
     adapter: m.adapter,
+    retryAt: m.retryAt,
     prices: m,
   }));
+}
+
+// ─── Stand-ins ───────────────────────────────────────────────────────────
+
+export interface AskingOrder {
+  /** The models to ask, the first first. */
+  ids: string[];
+  /** The ones among them that the work was not set to: the app's own choice. */
+  standIns: Set<string>;
+}
+
+/**
+ * The models a piece of chat work asks, in order: a task of a run with the
+ * models of its agent and of its project, or the manager of a run. The ones
+ * it is set to that can be used now come first, then the stand-ins (other
+ * models that work, model-choice-rules.ts), then the ones it is set to that
+ * are failing or resting, which are asked when nothing else answered.
+ *
+ * Read anew each time it is called: what is known about the models changes
+ * while a run works.
+ */
+export function askingOrderFor(own: readonly string[], opts: { wantsTools?: boolean } = {}): AskingOrder {
+  const now = Date.now();
+  const all = askable();
+  const chat = all.map((m) => ({ ...m, price: priceFor(m.prices, "chat") }));
+  const byId = new Map(chat.map((m) => [m.id, m] as const));
+  const usable = new Set(chat.filter((m) => !m.failing && !isResting(m, now)).map((m) => m.id));
+  let standIns: string[] = [];
+  if (standInsEnabled(process.env.MODEL_STAND_INS)) {
+    // A model that is set and cannot be found has no price to compare with: it sets no limit.
+    const set = [...new Set(own)].map((id) => byId.get(id)).filter((m): m is NonNullable<typeof m> => Boolean(m));
+    standIns = standInsFor(
+      chat.map((m) => ({
+        ...m,
+        resting: isResting(m, now),
+        tools: m.capabilities.includes("tool_calling") && getAdapter(m.adapter).supports.includes("tool_calling"),
+      })),
+      { own, ceiling: priceCeiling(set.map((m) => m.price)), wantsTools: opts.wantsTools === true },
+    );
+  }
+  return { ids: askingOrder(own, usable, standIns), standIns: new Set(standIns) };
 }
 
 function choices(all: Askable[], kind: ChoiceKind): string[] {

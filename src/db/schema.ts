@@ -207,6 +207,13 @@ export const models = sqliteTable(
     lastTestError: text("last_test_error"),
     // Checks failed in a row (v1.8): 0 when the last one passed. Decides how soon a failing model is asked again.
     checkFailures: integer("check_failures").notNull().default(0),
+    // What real work says about the model (v1.10): requests that failed in a
+    // row because of the provider, 0 when the last one was answered. Three
+    // put the model away as a failed check does (model-health-rules.ts).
+    useFailures: integer("use_failures").notNull().default(0),
+    // Not before this time is the model chosen by the app or asked by the
+    // check (v1.10): it said "not now", and until when where it said so.
+    retryAt: integer("retry_at", { mode: "timestamp_ms" }),
     // Marked for the work of users (v1.8): a user does not choose a model, the
     // app does, among the marked ones when there are any (model-choice.ts).
     forUsers: integer("for_users", { mode: "boolean" }).notNull().default(false),
