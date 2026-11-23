@@ -47,6 +47,7 @@ case "${ACTION}" in
     ;;
 esac
 
+NODE="$(input host | tr -d ' \r\n')"
 SERVER="$(input server)"
 APP_URL="$(input app_url)"
 HOST_KEY="$(input host_key)"
@@ -55,7 +56,18 @@ OPTIONS="$(input options)"
 OUTPUT_KEY="$(input output_key)"
 [ -n "${SERVER}" ] || SERVER="${SECRET_SERVER:-}"
 [ -n "${APP_URL}" ] || APP_URL="${SECRET_APP_URL:-}"
-[ -n "${HOST_KEY}" ] || HOST_KEY="${SECRET_HOST_KEY:-}"
+# A node that was typed is another machine than the one the secrets name: its
+# port is the one typed with it (or 22), a user typed in front of it is who
+# signs in, and the host key of the secrets is not its key.
+if [ -n "${NODE}" ]; then
+  bare="${NODE#*@}"
+  if [[ "${bare}" =~ ^(.+):[0-9]+$ ]]; then bare="${BASH_REMATCH[1]}"; fi
+  hide "${NODE}" "${NODE#*@}" "${bare}"
+  export DEPLOY_HOST="${NODE}" DEPLOY_PORT=""
+  case "${NODE}" in *@*) export DEPLOY_USER="" ;; esac
+elif [ -z "${HOST_KEY}" ]; then
+  HOST_KEY="${SECRET_HOST_KEY:-}"
+fi
 SERVER="$(printf '%s' "${SERVER}" | tr -d ' \r\n')"
 APP_URL="$(printf '%s' "${APP_URL}" | tr -d ' \r\n')"
 APP_URL="${APP_URL%/}"
@@ -91,12 +103,22 @@ OUT="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/node-output.txt"
 export DEPLOY_SERVER="${SERVER}" DEPLOY_APP_URL="${APP_URL}" DEPLOY_VERSION="${VERSION}" DEPLOY_HOST_KEY="${HOST_KEY}"
 export DEPLOY_OUTPUT="${OUT}"
 
+# What over-ssh.sh itself says goes to the log as before. Its last error is
+# kept as well, for the notice of a run that was not started: it names a
+# setting, never a value.
+SAID="${OUT}.said"
+on_node() {
+  { bash "${here}/over-ssh.sh" "$@" 2>&1 1>&3 3>&- | tee "${SAID}" >&2; return "${PIPESTATUS[0]}"; } 3>&1
+}
 code=0
 if [ "${#EXTRA[@]}" -gt 0 ]; then
-  bash "${here}/over-ssh.sh" "${ACTION}" -- "${EXTRA[@]}" || code=$?
+  on_node "${ACTION}" -- "${EXTRA[@]}" || code=$?
 else
-  bash "${here}/over-ssh.sh" "${ACTION}" || code=$?
+  on_node "${ACTION}" || code=$?
 fi
+why_not=""
+if [ -s "${SAID}" ]; then why_not="$(grep '^error: ' "${SAID}" | tail -n 1 | cut -c8-400 | tr -d '\r' || true)"; fi
+if [ -n "${why_not}" ]; then why_not=": ${why_not}"; else why_not=" (see the log)"; fi
 
 lines=0
 if [ -f "${OUT}" ]; then lines="$(wc -l < "${OUT}" | tr -d ' ')"; fi
@@ -164,8 +186,8 @@ fi
 
 case "${code}" in
   0) meaning="ended well" ;;
-  90) meaning="was not started: a setting is wrong (see the log)" ;;
-  91) meaning="was not started: the node could not be reached or did not let this in (see the log)" ;;
+  90) meaning="was not started: a setting is wrong${why_not}" ;;
+  91) meaning="was not started: the node could not be reached or did not let this in${why_not}" ;;
   92) meaning="lost its connection while it ran. It goes on on the node; run \"last-log\" to see how it ended" ;;
   93) meaning="was not started: the user on the node is not root and has no sudo without a password" ;;
   *) meaning="ended with code ${code} on the node" ;;
