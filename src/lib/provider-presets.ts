@@ -27,7 +27,7 @@ export interface ProviderPreset {
   note?: string;
 }
 
-export const PRESETS_READ_ON = "2026-11-15";
+export const PRESETS_READ_ON = "2026-11-23";
 
 export const PRESET_GROUP_LABELS: Record<PresetGroup, string> = {
   keyless: "No key needed",
@@ -46,6 +46,16 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     keyUrl: "https://app.kilo.ai/profile",
     free: "Its free models answer without a key, up to an hourly limit for one address.",
     note: "With the key of a free account, choose Bearer token: the same address then allows more. Free models may log what is sent.",
+  },
+  {
+    id: "blockrun",
+    name: "BlockRun",
+    group: "keyless",
+    adapter: "openai-compatible",
+    baseUrl: "https://blockrun.ai/api/v1",
+    authType: "none",
+    free: "Its free models answer without a key, with tools: 30 requests a minute and 300 an hour from one address.",
+    note: "It may answer with another free model than the one that was asked for. Free models may log what is sent.",
   },
   {
     id: "ovhcloud",
@@ -79,6 +89,16 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     note: "Its newer API takes a key and is billed.",
   },
   {
+    id: "vlm-run",
+    name: "VLM Run Gateway",
+    group: "keyless",
+    adapter: "openai-compatible",
+    baseUrl: "https://gateway.vlm.run/v1/openai",
+    authType: "none",
+    free: "Two small open models without a key, in beta: 10 requests a minute, 30 an hour and 100 a day from one address.",
+    note: "Leave the auth type at None: a key that is sent is refused. Its larger model asks for a key.",
+  },
+  {
     id: "groq",
     name: "Groq",
     group: "free-key",
@@ -87,6 +107,17 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     authType: "bearer",
     keyUrl: "https://console.groq.com/keys",
     free: "A free plan without a card: a number of requests a day for each model.",
+  },
+  {
+    id: "hetzner",
+    name: "Hetzner Inference",
+    group: "free-key",
+    adapter: "openai-compatible",
+    baseUrl: "https://inference.hetzner.com/api/v1",
+    authType: "bearer",
+    keyUrl: "https://experiments.hetzner.com/inference",
+    free: "Two open models, free while the service is an experiment: 10 requests a minute for a key.",
+    note: "The key is made by a Hetzner account. What is sent is not kept.",
   },
   {
     id: "mistral",

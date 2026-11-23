@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "bd9ea775-3cc4-4cb2-ab71-b20a6399d099",
+  "id": "3dac0667-d93b-4ffb-b829-21906ed5c4ab",
   "prevId": "3c981411-722b-407d-8e09-83d20cc57b8c",
   "tables": {
     "agent_knowledge": {
@@ -3445,6 +3445,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "stand_ins": {
+          "name": "stand_ins",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "created_by": {
           "name": "created_by",

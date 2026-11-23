@@ -48,6 +48,7 @@ export const PATCH = handle(async (req, { params }) => {
       ...(body.title !== undefined ? { title: body.title } : {}),
       ...(body.goal !== undefined ? { goal: body.goal } : {}),
       ...(body.memory !== undefined ? { memory: body.memory } : {}),
+      ...(body.standIns !== undefined ? { standIns: body.standIns } : {}),
       updatedAt: new Date(),
     })
     .where(eq(projects.id, p.id))

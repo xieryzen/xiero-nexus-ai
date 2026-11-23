@@ -1,4 +1,5 @@
 import { asc, desc, eq } from "drizzle-orm";
+import { standInsEnabled } from "@/lib/model-choice-rules";
 import { db } from "@/db";
 import { projects, teams, workflows } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
@@ -65,6 +66,7 @@ export default async function ProjectsPage() {
     <CommandCenter
       initialProjects={projectRows.map((p) => projectFor(user.role, serializeProject(p)))}
       chooses={chooses}
+      standInsDefault={standInsEnabled(process.env.MODEL_STAND_INS)}
       managerModels={managerModels}
       imageModels={imageModels}
       videoModels={videoModels}

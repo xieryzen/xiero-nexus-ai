@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,visibility,servers,browser
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
 //                                                 to over SSH (4012, 4013)
@@ -302,6 +302,10 @@ const appEnv = {
   // here, not an hour, so that the checks see it wait, go on, and give up.
   RUN_LIMIT_WAIT_MINUTES: "",
   RUN_LIMIT_WAIT_SECONDS: "6",
+  // A run does not go on with another model that works unless its project
+  // says so: the checks that fail a task by failing its models mean what they
+  // say, and the ones about stand-ins switch them on for their projects.
+  MODEL_STAND_INS: "0",
   NEXUS_WORKER: "",
   // The app would check its models by itself, at moments of its own choosing:
   // the checks ask for a round when they want one. That the server does it by

@@ -469,6 +469,10 @@ export const projects = sqliteTable(
     // Remember earlier runs (v1.5): the results of the last runs are given to
     // the next one, so a scheduled project does not repeat itself.
     memory: integer("memory", { mode: "boolean" }).notNull().default(false),
+    // Whether a run goes on with another model that works when the models it
+    // is set to do not answer (v1.10, model-choice.ts). Null: as the
+    // installation is set (MODEL_STAND_INS, on unless switched off).
+    standIns: integer("stand_ins", { mode: "boolean" }),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),

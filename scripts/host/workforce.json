@@ -5,10 +5,10 @@
     "Skills are in skills/ next to this file, a folder with a SKILL.md each: the way each kind of work is done here. The program puts them into the app and gives them to the agents and teams named below; an agent reads its own skills and its team's with every task. Edit a SKILL.md and run the workforce action with --update to change a skill; one that was changed on the Skills page is overwritten by that.",
     "Three skills are the owner's own and are not in this repository: xiero-premium-web-studio, xiero-nexus-ai and xiero-minecraft-forge (\"uploaded\": true below). They are uploaded on the Skills page, or sealed for the node with the workforce action; the teams that name them get them when the app has them, and are made without them until then. A skill that a team or an agent was given by hand on its page is kept: this file adds skills and takes none away.",
     "The agents write documents and files into a project's workspace. They do not compile, start a game, or touch a customer's server: the server has no sandbox runner. Every workflow therefore ends with a test list, a checklist or a review for a person, and says what was not run.",
-    "Everything here costs nothing. The providers Kilo Gateway, OVHcloud AI Endpoints, LLM7 and Pollinations take no key; the program adds them. The two Gemini models are the ones a key without billing can use: the voice, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the two agents that write for readers.",
-    "What costs nothing is limited: Kilo Gateway to 200 requests an hour from one address by its documentation (when it was counted on this server, to about a hundred), OVHcloud to 2 requests a minute for each model, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; before that, such an answer ended the attempt.",
-    "Every agent has a quick first model with Kilo Gateway, and a second with another provider, most with OVHcloud, whose models are open ones that stay. No agent depends on LLM7: without a key its allowance for a day lasts a few tasks. Its free models (codestral-latest and gpt-oss:20b answered) are in the app to be picked by hand. Free pools change: a model that is gone answers with an error, the agent goes on with its second model, and --test says which one it was. When Kilo Gateway's allowance is used up, every agent works on its second model: that was seen on this server, and a project that takes a minute and a half took ten.",
-    "gpt-oss-120b of OVHcloud is no agent's model: it is the one to pick as the manager model of a project, which plans, sums up, and is every task's last resort. \"tryRun\" uses it that way.",
+    "Everything here costs nothing. The providers Kilo Gateway, BlockRun, OVHcloud AI Endpoints, VLM Run Gateway, LLM7 and Pollinations take no key; the program adds them. The Gemini models are the ones a key without billing can use: the voice, Gemma 4 (31B), which answered steadily on this server and is the second model of most agents, and Gemini 4 Hydrogen, which answers slowly on that tier and is the second model of the agents that write for readers.",
+    "What costs nothing is limited: Kilo Gateway to 200 requests an hour from one address by its documentation (when it was counted on this server, to about a hundred), BlockRun to 30 requests a minute and 300 an hour from one address, OVHcloud to 2 requests a minute for each model, VLM Run Gateway to 100 requests a day, LLM7 to a daily allowance that a few tasks use up. From version 1.6 the app waits and asks again when a provider says \"too many requests\"; from 1.9 a task waits for a limit that ends; from 1.10 a task whose models do not answer is done by another model that works, and a model that does not answer is left out until it does.",
+    "Every agent has a quick first model with Kilo Gateway, and a second with another provider: Gemma 4 with the Gemini key, or a model of BlockRun for the agents that write code. The agents that write code have Kilo's own choice among its free models as their first (\"kilo-auto/free\"): the free model they had before was taken away by the gateway, and a name that is a choice does not go away. No agent depends on OVHcloud any more: from the address this server moved to, every model of it answered \"API rate limit exceeded\" for days; its models are in the app to be picked by hand, and the app uses them by itself when they answer. No agent depends on LLM7 or on VLM Run Gateway either: without a key the first lasts a few tasks a day, and the second has two small models. Free pools change: a model that is gone answers with an error, the app leaves it out and the agent goes on with its second model or with another that works, and --test says which one it was.",
+    "gpt-oss-120b of OVHcloud is no agent's model: \"tryRun\" plans with it. For the manager model of a project, which plans, sums up, and is every task's last resort, pick one that answers on the server at the time: the Models page says which do. From 1.10 a run whose manager model does not answer goes on with another model that works.",
     "What is sent to the free models of Kilo Gateway and LLM7 may be logged by the provider and used to improve its models: nothing personal or confidential.",
     "The free image model (Stable Diffusion XL at OVHcloud) makes square pictures of 1024 by 1024 only, and takes between ten seconds and a minute and a half for one, so the reel shows them cropped to its vertical frame.",
     "Two models that were tried and did not serve are switched off: one was rate-limited by its provider, the other took four minutes to answer. Qwen3.5-397B of OVHcloud is left out: it answered one word in seconds at times, and not within five minutes at another.",
@@ -27,12 +27,26 @@
       "timeoutMs": 300000,
       "notes": "Free models, no key. Its documentation allows 200 requests an hour from one address, for all its models together; on this server it answered \"sign up for free or come back later\" after about a hundred. The agents then go on with their second models, slowly. A free account at kilo.ai gives a key. The free models change often, and those hosted by NVIDIA are busy at times. What is sent may be logged and used to improve models: nothing personal or confidential."
     },
+    "BlockRun": {
+      "adapter": "openai-compatible",
+      "baseUrl": "https://blockrun.ai/api/v1",
+      "authType": "none",
+      "timeoutMs": 300000,
+      "notes": "Free models, no key: chat and tools. 30 requests a minute and 300 an hour from one address, for all its free models together. The gateway may answer with another free model than the one that was asked for. What is sent may be used by the hosts of the free models to improve their service: nothing personal or confidential."
+    },
     "OVHcloud AI Endpoints": {
       "adapter": "openai-compatible",
       "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
       "authType": "none",
       "timeoutMs": 300000,
       "notes": "Open models hosted in the EU, no key. 2 requests a minute for each model from one address."
+    },
+    "VLM Run Gateway": {
+      "adapter": "openai-compatible",
+      "baseUrl": "https://gateway.vlm.run/v1/openai",
+      "authType": "none",
+      "timeoutMs": 300000,
+      "notes": "Open models on the gateway's own machines, no key, in beta and meant for trying out: 10 requests a minute, 30 an hour and 100 a day from one address. Its larger model has asked for a key since November 2026; the two small ones answer without."
     },
     "LLM7": {
       "adapter": "openai-compatible",
@@ -70,13 +84,31 @@
     },
     "kilo-code": {
       "provider": "Kilo Gateway",
-      "model": "cohere/north-mini-code:free",
+      "model": "kilo-auto/free",
       "inputPricePerMTok": 0,
       "outputPricePerMTok": 0
     },
     "kilo-glyph": {
       "provider": "Kilo Gateway",
       "model": "stealth/glyph-cluster",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
+    },
+    "blockrun-laguna": {
+      "provider": "BlockRun",
+      "model": "poolside/laguna-xs-2.1",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
+    },
+    "blockrun-muse": {
+      "provider": "BlockRun",
+      "model": "nvidia/muse-glimmer-30b",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
+    },
+    "blockrun-bolt": {
+      "provider": "BlockRun",
+      "model": "nvidia/nemotron-3.5-bolt",
       "inputPricePerMTok": 0,
       "outputPricePerMTok": 0
     },
@@ -112,9 +144,21 @@
       ],
       "pricePerImage": 0
     },
+    "vlm-gemma": {
+      "provider": "VLM Run Gateway",
+      "model": "google/diffusiongemma-26b-a4b-it",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
+    },
     "gemini-hydrogen": {
       "provider": "gemini",
       "model": "gemini-4-hydrogen"
+    },
+    "gemini-gemma": {
+      "provider": "gemini",
+      "model": "gemma-4-31b-it",
+      "inputPricePerMTok": 0,
+      "outputPricePerMTok": 0
     },
     "gemini-voice": {
       "provider": "gemini",
@@ -217,7 +261,7 @@
       "name": "Manager",
       "role": "Project Manager",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -246,7 +290,7 @@
       "name": "CEO",
       "role": "Chief Executive Officer",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -273,7 +317,7 @@
       "name": "Designer",
       "role": "UI/UX and Visual Designer",
       "primary": "kilo-nemotron-vl",
-      "fallback": "ovh-qwen-27b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -309,7 +353,7 @@
       "name": "Frontend",
       "role": "Frontend Engineer",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",
@@ -343,7 +387,7 @@
       "name": "Backend",
       "role": "Backend Engineer",
       "primary": "kilo-glyph",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -375,7 +419,7 @@
       "name": "QA",
       "role": "QA Engineer",
       "primary": "kilo-glyph",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",
@@ -405,7 +449,7 @@
       "name": "Security Engineer",
       "role": "Security Engineer",
       "primary": "kilo-lightning",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -436,7 +480,7 @@
       "name": "Tester",
       "role": "Software Tester",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen-27b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -467,7 +511,7 @@
       "name": "DevOps",
       "role": "DevOps Engineer",
       "primary": "kilo-code",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -591,7 +635,7 @@
       "name": "Print Designer",
       "role": "Brochure and Catalogue Designer",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen-27b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -623,7 +667,7 @@
       "name": "Commerce Strategist",
       "role": "E-commerce Strategist",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -654,7 +698,7 @@
       "name": "Art Director",
       "role": "Art Director and Design Critic",
       "primary": "kilo-nemotron-vl",
-      "fallback": "ovh-qwen-27b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -685,7 +729,7 @@
       "name": "SEO Specialist",
       "role": "SEO Specialist",
       "primary": "kilo-lightning",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",
@@ -716,7 +760,7 @@
       "name": "Minecraft Game Designer",
       "role": "Minecraft Game and Product Designer",
       "primary": "kilo-nemotron",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -748,7 +792,7 @@
       "name": "Minecraft Plugin Developer",
       "role": "Minecraft Java Plugin Developer",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",
@@ -782,7 +826,7 @@
       "name": "Minecraft Addon Developer",
       "role": "Minecraft Bedrock Add-on Developer",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen-27b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -817,7 +861,7 @@
       "name": "Minecraft Server Admin",
       "role": "Minecraft Server Administrator",
       "primary": "kilo-glyph",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -849,7 +893,7 @@
       "name": "Minecraft QA",
       "role": "Minecraft QA Tester and Code Reviewer",
       "primary": "kilo-glyph",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",
@@ -912,7 +956,7 @@
       "name": "Pterodactyl Engineer",
       "role": "Pterodactyl and Linux Hosting Engineer",
       "primary": "kilo-code",
-      "fallback": "ovh-gpt-oss-20b",
+      "fallback": "gemini-gemma",
       "tools": [
         "list_files",
         "read_file",
@@ -944,7 +988,7 @@
       "name": "Discord Bot Developer",
       "role": "Discord Bot Developer",
       "primary": "kilo-code",
-      "fallback": "ovh-qwen36",
+      "fallback": "blockrun-laguna",
       "tools": [
         "list_files",
         "read_file",

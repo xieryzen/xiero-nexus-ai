@@ -807,6 +807,8 @@ export function ProjectRunner({
         initialSchedules={initialSchedules}
         initialRuns={initialRuns}
         initialMemory={project.memory}
+        initialStandIns={project.standIns}
+        showStandIns={chooses}
         refreshKey={finishedRuns}
       />
     </div>

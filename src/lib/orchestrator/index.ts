@@ -290,7 +290,7 @@ export function prepareRun(asSet: Project): RunSetup {
   } catch (e) {
     // A manager model that is switched off or gone: the run works with another
     // model that can be asked in its place (model-choice.ts), when there is one.
-    const other = standInsEnabled(process.env.MODEL_STAND_INS) ? askingOrderFor([]).ids[0] : undefined;
+    const other = (asSet.standIns ?? standInsEnabled(process.env.MODEL_STAND_INS)) ? askingOrderFor([], { standIns: true }).ids[0] : undefined;
     let standIn: ResolvedModel | null = null;
     if (other) {
       try {
@@ -467,6 +467,10 @@ export async function executeRun(runId: string): Promise<void> {
   // (another server process on the same database) within a couple of seconds.
   let flagChecked = 0;
   let flagged = false;
+  /** Whether this project's runs go on with stand-ins: as it is set now, or as the installation is. */
+  const standInsOf = (): boolean | null =>
+    db.select({ standIns: projects.standIns }).from(projects).where(eq(projects.id, projectId)).get()?.standIns ?? null;
+
   /**
    * One answer that is the run's own (its plan, its result): asked of the
    * models it is set to that can be used now, then of others that work, then
@@ -479,7 +483,7 @@ export async function executeRun(runId: string): Promise<void> {
     temperature: number,
   ): Promise<{ content: string; prompt: number; completion: number; model: ResolvedModel; started: number }> => {
     let last: unknown = new AppError(400, "no_model", "No model available");
-    for (const id of askingOrderFor(own).ids) {
+    for (const id of askingOrderFor(own, { standIns: standInsOf() }).ids) {
       if (isCancelled()) break;
       let model: ResolvedModel;
       try {
@@ -1284,7 +1288,7 @@ export async function executeRun(runId: string): Promise<void> {
           // that work, then the ones it is set to that are failing or resting
           // (model-choice.ts). What is known about the models changes while a
           // run works, so the order is made anew for each pass.
-          const order = askingOrderFor(candidates, { wantsTools: tools.length > 0 });
+          const order = askingOrderFor(candidates, { wantsTools: tools.length > 0, standIns: standInsOf() });
           // The model that did not answer just before, by its name.
           let before: string | null = null;
           for (const mid of order.ids) {
@@ -1819,7 +1823,7 @@ export async function executeRun(runId: string): Promise<void> {
           },
         ];
         // The reviewer's models that can be used now, then others that work, then its failing ones.
-        for (const reviewModelId of askingOrderFor(reviewModelIds).ids) {
+        for (const reviewModelId of askingOrderFor(reviewModelIds, { standIns: standInsOf() }).ids) {
           if (isCancelled()) break;
           try {
             const reviewModel = resolveChatModel(reviewModelId);

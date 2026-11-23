@@ -110,16 +110,18 @@ export interface AskingOrder {
  * are failing or resting, which are asked when nothing else answered.
  *
  * Read anew each time it is called: what is known about the models changes
- * while a run works.
+ * while a run works. `standIns`: whether others may stand in, where the work
+ * says so itself; otherwise MODEL_STAND_INS decides (on unless switched off).
  */
-export function askingOrderFor(own: readonly string[], opts: { wantsTools?: boolean } = {}): AskingOrder {
+export function askingOrderFor(own: readonly string[], opts: { wantsTools?: boolean; standIns?: boolean | null } = {}): AskingOrder {
   const now = Date.now();
   const all = askable();
   const chat = all.map((m) => ({ ...m, price: priceFor(m.prices, "chat") }));
   const byId = new Map(chat.map((m) => [m.id, m] as const));
   const usable = new Set(chat.filter((m) => !m.failing && !isResting(m, now)).map((m) => m.id));
   let standIns: string[] = [];
-  if (standInsEnabled(process.env.MODEL_STAND_INS)) {
+  // As the work is set (a project says so), or as the installation is.
+  if (opts.standIns ?? standInsEnabled(process.env.MODEL_STAND_INS)) {
     // A model that is set and cannot be found has no price to compare with: it sets no limit.
     const set = [...new Set(own)].map((id) => byId.get(id)).filter((m): m is NonNullable<typeof m> => Boolean(m));
     standIns = standInsFor(

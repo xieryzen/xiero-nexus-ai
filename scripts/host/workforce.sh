@@ -26,6 +26,13 @@
 #   --file <file>        What the workforce should be (default: workforce.json
 #                        next to this script).
 #   --user <name>        The administrator to sign in as.
+#   --as-owner           Sign in without a password, as the app's owner (with
+#                        --user, as that administrator): for root on the
+#                        machine the app runs on. The program writes itself a
+#                        session into the app's database that ends in an hour
+#                        and is removed when it is done, and the app's audit
+#                        log says so ("host.session"). This is the way when
+#                        the password in .env is no longer the right one.
 #   --dry-run            Say what would be done, and do nothing.
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but differs.
@@ -81,6 +88,7 @@ VOLUMES=""
 WINGS_CONFIG="/etc/pterodactyl/config.yml"
 PASS_ON=()
 SEALED_PASSWORD=""
+AS_OWNER=""
 SEALED_SKILLS=()
 SEALED_URLS=()
 
@@ -102,8 +110,9 @@ while [ "$#" -gt 0 ]; do
     --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
     --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --as-owner) AS_OWNER="1"; shift ;;
     -h | --help)
-      sed -n '2,73p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,80p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;
@@ -183,7 +192,7 @@ fi
 if [ -z "${ENV_FILE}" ]; then
   ENV_FILE="${APP_DIR}/.env"
   # Without NEXUS_PASSWORD, the administrator of the first start is in there.
-  if [ -z "${NEXUS_PASSWORD:-}" ] && [ ! -f "${ENV_FILE}" ]; then
+  if [ -z "${AS_OWNER}" ] && [ -z "${NEXUS_PASSWORD:-}" ] && [ ! -f "${ENV_FILE}" ]; then
     die "${ENV_FILE} does not exist, and NEXUS_PASSWORD is not set: there is nothing to sign in with."
   fi
 fi
@@ -217,6 +226,12 @@ fi
 
 ARGS=(--url "${URL}")
 [ ! -f "${ENV_FILE}" ] || ARGS+=(--env-file "${ENV_FILE}")
+if [ -n "${AS_OWNER}" ]; then
+  # The app's database: in the server's files, or next to the .env that was named.
+  DATABASE="${APP_DIR:-$(dirname "${ENV_FILE}")}/data/nexus.db"
+  [ -f "${DATABASE}" ] || die "--as-owner: ${DATABASE} is not there (the app's database)."
+  ARGS+=(--as-owner "${DATABASE}")
+fi
 
 # ── What was sealed for this node ────────────────────────────────────────────
 

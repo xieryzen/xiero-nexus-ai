@@ -29,6 +29,10 @@ export interface SerializedModel {
   lastTestError: string | null;
   /** Checks failed in a row; 0 when the last one passed. */
   checkFailures: number;
+  /** Requests of real work that failed in a row for something the provider did; 0 when the last one was answered. */
+  useFailures: number;
+  /** It did not answer and is neither chosen by the app nor asked by the check before this time. Null: no such time. */
+  retryAt: Date | null;
   /** Switched on, and left out of the model lists because its last check failed. */
   hidden: boolean;
   /** Marked for the work of users, who choose no model (model-choice.ts). */
@@ -89,6 +93,8 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     lastTestStatus: m.lastTestStatus,
     lastTestError: m.lastTestError,
     checkFailures: m.checkFailures,
+    useFailures: m.useFailures,
+    retryAt: m.retryAt,
     hidden: m.enabled && isFailing(m),
     forUsers: m.forUsers,
     notes: m.notes,

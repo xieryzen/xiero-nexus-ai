@@ -1,4 +1,5 @@
 import "server-only";
+import { standInsEnabled } from "./model-choice-rules";
 import { asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -153,6 +154,9 @@ export function serializeProject(p: Project, opts: { withTasks?: boolean } = {})
     speechModelRowId: p.speechModelRowId,
     maxMedia: p.maxMedia,
     memory: p.memory,
+    // Whether its runs go on with another model that works when the ones it is
+    // set to do not answer: as the project is set, or as the installation is.
+    standIns: p.standIns ?? standInsEnabled(process.env.MODEL_STAND_INS),
     // The machines its agents may work on over SSH, by name.
     servers: serverNamesByProject([p.id]).get(p.id) ?? [],
     // The site accounts its agents may sign in with, by name.
