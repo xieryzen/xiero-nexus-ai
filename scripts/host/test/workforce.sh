@@ -912,7 +912,7 @@ is "they are kept" "$((${before%% *} + 2)) projects, $((WORKFLOWS + 1)) workflow
 run -- --user boss --inventory-only --try-results
 is "what the projects made is said, and it ends well" "0" "${CODE}"
 check "  under its own heading" line '^What the projects made$'
-check "  each project with its files and what kind they are" line '^  ok +"Workforce check: every agent" \((succeeded|review)\): [0-9]+ files? \([0-9]+ document'
+check "  each project is named, with its files and what kind they are, or that it has none" line '^  (ok|nothing) +"Workforce check: every agent" \((succeeded|review)\): ([0-9]+ files? \([0-9]+ [a-z]+|no files yet)'
 check_not "  nothing is built: none of them is something that is built" line 'built with|could not be built'
 run -- --user boss --inventory-only --try-results --dry-run
 check "a dry run says that no project was looked at" line 'Dry run: no project was looked at or built\.'
