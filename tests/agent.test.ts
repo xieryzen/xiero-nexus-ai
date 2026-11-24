@@ -16,12 +16,18 @@ const call = (name: string, args: Record<string, unknown> = {}, id = `c_${name}`
 
 /** A model that answers from a list, and remembers what it was asked. */
 function scripted(answers: (ChatResult | ((messages: ChatMessage[]) => ChatResult))[]) {
-  const asked: { messages: ChatMessage[]; toolChoice: string; tools: string[] }[] = [];
+  const asked: { messages: ChatMessage[]; toolChoice: string; tools: string[]; continuing?: boolean; afterEmpty?: number }[] = [];
   let i = 0;
   return {
     asked,
-    chat: async (messages: ChatMessage[], opts: { tools: { name: string }[]; toolChoice: string }) => {
-      asked.push({ messages: [...messages], toolChoice: opts.toolChoice, tools: opts.tools.map((t) => t.name) });
+    chat: async (messages: ChatMessage[], opts: { tools: { name: string }[]; toolChoice: string; continuing?: boolean; afterEmpty?: number }) => {
+      asked.push({
+        messages: [...messages],
+        toolChoice: opts.toolChoice,
+        tools: opts.tools.map((t) => t.name),
+        ...(opts.continuing ? { continuing: true } : {}),
+        ...(opts.afterEmpty ? { afterEmpty: opts.afterEmpty } : {}),
+      });
       const next = answers[Math.min(i++, answers.length - 1)]!;
       return typeof next === "function" ? next(messages) : next;
     },
@@ -80,7 +86,7 @@ test("a model that answers at once is asked once, and the conversation is not ch
   const model = scripted([{ content: "Done.", usage: { promptTokens: 10, completionTokens: 2 } }]);
   const messages = [...BASE];
   const result = await runToolLoop({ chat: model.chat, messages, tools: [tool("noop", () => "ok")], maxSteps: 5, estimateTokens });
-  assert.deepEqual(result, { content: "Done.", steps: 1, toolCalls: 0, promptTokens: 10, completionTokens: 2, stopped: "answer" });
+  assert.deepEqual(result, { content: "Done.", steps: 1, toolCalls: 0, promptTokens: 10, completionTokens: 2, stopped: "answer", continued: 0, cut: false, emptied: 0 });
   assert.equal(model.asked[0]!.toolChoice, "auto");
   assert.deepEqual(messages, BASE);
 });
@@ -296,6 +302,164 @@ test("a cancelled run stops before the next call, and tools are not run", async 
   assert.deepEqual([result.stopped, result.content, ran, model.asked.length], ["cancelled", "", 1, 1]);
   const before = await runToolLoop({ chat: model.chat, messages: BASE, tools: [], maxSteps: 5, estimateTokens, isCancelled: () => true });
   assert.equal(before.stopped, "cancelled");
+});
+
+// ─── Replies that are no answer: cut at the length limit, or empty ───────────
+
+test("an answer that was cut at the length limit goes on, and the pieces are one answer", async () => {
+  const model = scripted([
+    { content: "", toolCalls: [call("list")] },
+    { content: "# PRD\n\nThe shop sells ench", finishReason: "length", usage: { promptTokens: 100, completionTokens: 40 } },
+    { content: "antments, and asks to con", finishReason: "length", usage: { promptTokens: 150, completionTokens: 40 } },
+    { content: "firm.", finishReason: "stop", usage: { promptTokens: 200, completionTokens: 5 } },
+  ]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a.txt")], maxSteps: 5, estimateTokens });
+  assert.equal(result.content, "# PRD\n\nThe shop sells enchantments, and asks to confirm.");
+  assert.deepEqual([result.stopped, result.continued, result.cut, result.steps, result.toolCalls], ["answer", 2, false, 4, 1]);
+  // What each call used is counted, the ones that went on included.
+  assert.equal(result.completionTokens >= 85, true);
+  // The model is shown what it wrote, and told to go on from there; whoever asks is told that this is the same answer.
+  assert.deepEqual([model.asked[1]!.continuing, model.asked[2]!.continuing, model.asked[3]!.continuing], [undefined, true, true]);
+  const third = model.asked[2]!.messages;
+  assert.deepEqual([third.at(-2)!.role, third.at(-2)!.content], ["assistant", "# PRD\n\nThe shop sells ench"]);
+  assert.equal(third.at(-1)!.role, "user");
+  assert.match(third.at(-1)!.content, /cut off.*Continue it from exactly where it stopped/);
+  assert.equal(model.asked[3]!.messages.at(-2)!.content, "antments, and asks to con");
+});
+
+test("going on does not use up the steps: a long answer at the last step is still whole", async () => {
+  const model = scripted([
+    { content: "", toolCalls: [call("list")] },
+    { content: "part one, ", finishReason: "length" },
+    { content: "part two, ", finishReason: "length" },
+    { content: "part three, ", finishReason: "length" },
+    { content: "the end.", finishReason: "stop" },
+  ]);
+  // Two steps: one for the tool, one for the answer.
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a.txt")], maxSteps: 2, estimateTokens });
+  assert.deepEqual([result.content, result.stopped, result.continued, result.cut], ["part one, part two, part three, the end.", "max_steps", 3, false]);
+  // The model was told once that it has no calls left, not with every part.
+  const told = model.asked[4]!.messages.filter((m) => m.role === "user" && /no tool calls left/.test(m.content));
+  assert.equal(told.length, 1);
+  assert.deepEqual(model.asked.slice(1).map((a) => a.toolChoice), ["none", "none", "none", "none"]);
+});
+
+test("it goes on only so often: an answer that is still cut says so", async () => {
+  const model = scripted([{ content: "again ", finishReason: "max_tokens" }]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [], maxSteps: 3, maxContinuations: 2, estimateTokens });
+  assert.deepEqual([result.content, result.continued, result.cut, result.stopped, model.asked.length], ["again again again ", 2, true, "answer", 3]);
+});
+
+test("going on that fails keeps what was written, as an answer that is cut", async () => {
+  let calls = 0;
+  const failing = async (): Promise<ChatResult> => {
+    calls++;
+    if (calls === 1) return { content: "The first half of the document", finishReason: "length" };
+    throw new Error("The provider is down.");
+  };
+  const result = await runToolLoop({ chat: failing, messages: BASE, tools: [], maxSteps: 3, estimateTokens });
+  assert.deepEqual([result.content, result.cut, result.stopped], ["The first half of the document", true, "answer"]);
+  // Asked to go on, it wrote nothing: the same.
+  const silent = scripted([{ content: "Half", finishReason: "length" }, { content: "", finishReason: "stop" }]);
+  const still = await runToolLoop({ chat: silent.chat, messages: BASE, tools: [], maxSteps: 3, estimateTokens });
+  assert.deepEqual([still.content, still.cut, still.continued], ["Half", true, 1]);
+});
+
+test("an account without tokens left does not go on: the answer stays cut", async () => {
+  const model = scripted([{ content: "Half", finishReason: "length" }]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [], maxSteps: 3, estimateTokens, outOfTokens: () => true });
+  assert.deepEqual([result.content, result.cut, result.continued, model.asked.length], ["Half", true, 0, 1]);
+});
+
+test("a reply with nothing in it after the tools were used is asked again, with a word to go on", async () => {
+  // What a weak model does in the middle of its work: no text, no call.
+  const model = scripted([
+    { content: "", toolCalls: [call("write", { path: "plugin.yml" })] },
+    { content: "" },
+    { content: "", toolCalls: [call("write", { path: "Shop.java" })] },
+    { content: "Both files are written." },
+  ]);
+  const written: string[] = [];
+  const result = await runToolLoop({
+    chat: model.chat,
+    messages: BASE,
+    tools: [tool("write", (args) => {
+      written.push(String(args.path));
+      return "saved";
+    })],
+    maxSteps: 8,
+    estimateTokens,
+  });
+  assert.deepEqual(written, ["plugin.yml", "Shop.java"]);
+  assert.deepEqual([result.content, result.stopped, result.emptied, result.toolCalls], ["Both files are written.", "answer", 1, 2]);
+  // The call after the empty reply says so, and the model is told to go on.
+  assert.deepEqual([model.asked[1]!.afterEmpty, model.asked[2]!.afterEmpty, model.asked[3]!.afterEmpty], [undefined, 1, undefined]);
+  const third = model.asked[2]!.messages;
+  assert.equal(third.at(-1)!.role, "user");
+  assert.match(third.at(-1)!.content, /last reply was empty.*make the next tool call/);
+  // No empty turn of the assistant is put into the conversation.
+  assert.equal(third.some((m) => m.role === "assistant" && !m.content && !m.toolCalls?.length), false);
+  assert.equal(model.asked[2]!.toolChoice, "auto");
+});
+
+test("an empty first reply is asked for again as it stands, and only so often", async () => {
+  const model = scripted([{ content: "" }, { content: "  \n" }, { content: "Here it is." }]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a")], maxSteps: 8, estimateTokens });
+  assert.deepEqual([result.content, result.emptied, result.steps], ["Here it is.", 2, 3]);
+  // Nothing is added before a tool was used: two messages of the person in a row are not what every model takes.
+  assert.equal(model.asked[2]!.messages.length, BASE.length);
+  assert.deepEqual(model.asked.map((a) => a.afterEmpty), [undefined, 1, 2]);
+
+  // A model that never writes anything: the loop ends, with nothing.
+  const mute = scripted([{ content: "" }]);
+  const nothing = await runToolLoop({ chat: mute.chat, messages: BASE, tools: [], maxSteps: 8, estimateTokens });
+  assert.deepEqual([nothing.content, nothing.stopped, nothing.emptied, mute.asked.length], ["", "answer", 2, 3]);
+  // As often as it is set to: not at all.
+  const once = scripted([{ content: "" }]);
+  await runToolLoop({ chat: once.chat, messages: BASE, tools: [], maxSteps: 8, maxEmptyRetries: 0, estimateTokens });
+  assert.equal(once.asked.length, 1);
+});
+
+test("empty replies in a row are counted anew after the work went on", async () => {
+  const model = scripted([
+    { content: "", toolCalls: [call("list", { n: 1 })] },
+    { content: "" },
+    { content: "" },
+    { content: "", toolCalls: [call("list", { n: 2 })] },
+    { content: "" },
+    { content: "Done." },
+  ]);
+  const result = await runToolLoop({ chat: model.chat, messages: BASE, tools: [tool("list", () => "a")], maxSteps: 12, estimateTokens });
+  assert.deepEqual([result.content, result.emptied, result.toolCalls], ["Done.", 3, 2]);
+  assert.deepEqual(model.asked.map((a) => a.afterEmpty), [undefined, undefined, 1, 2, undefined, 1]);
+});
+
+test("a call that was cut at the length limit is not run, and the model is told to write less at once", async () => {
+  let runs = 0;
+  const model = scripted([
+    { content: "", finishReason: "length", toolCalls: [{ id: "c1", name: "write", arguments: {}, invalidArguments: '{"path":"Shop.java","content":"public class Shop {' }] },
+    { content: "", toolCalls: [call("write", { path: "Shop.java", content: "part 1" })] },
+    { content: "Written in parts." },
+  ]);
+  const result = await runToolLoop({
+    chat: model.chat,
+    messages: BASE,
+    tools: [tool("write", () => {
+      runs++;
+      return "saved";
+    })],
+    maxSteps: 6,
+    estimateTokens,
+  });
+  assert.equal(runs, 1);
+  assert.equal(result.content, "Written in parts.");
+  const told = model.asked[1]!.messages.find((m) => m.role === "tool")!;
+  assert.equal(told.isError, true);
+  assert.match(told.content, /cut off at the length limit.*nothing was run.*write it in parts/);
+  // Arguments that are wrong for another reason are still shown as they came.
+  const other = scripted([{ content: "", finishReason: "tool_calls", toolCalls: [{ id: "c1", name: "write", arguments: {}, invalidArguments: "{not json" }] }, { content: "ok" }]);
+  await runToolLoop({ chat: other.chat, messages: BASE, tools: [tool("write", () => "saved")], maxSteps: 4, estimateTokens });
+  assert.match(other.asked[1]!.messages.find((m) => m.role === "tool")!.content, /not a JSON object: \{not json/);
 });
 
 test("tokens are estimated when the provider reports none", async () => {

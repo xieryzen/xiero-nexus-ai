@@ -7,6 +7,57 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-11-24
+
+Work stopped half way and looked finished. A model writes up to the length
+limit of one reply and stops there, in the middle of a sentence: the app took
+that for the answer, so half a PRD was handed over as the PRD. And a model
+that replied with nothing in the middle of its work, no text and no call,
+ended the answer in Chat with "No answer was written" after four of twenty
+files. Neither is an answer, and neither is taken for one now.
+
+### Fixed
+
+- **An answer that was cut at the length limit goes on until it is whole.**
+  When a model ends with the reason "length" (`max_tokens`, `MAX_TOKENS`),
+  it is shown what it wrote and asked to continue from exactly there, up to
+  eight times, and the pieces are one text: in Chat (the text on the page
+  grows, it is not begun again), in the tasks of a project with and without
+  tools, in the plan and in the final deliverable. What a model says again
+  when it goes on (the line, the sentence or the word it was cut in, a block
+  of code opened a second time) is left out once. An answer that is still
+  cut after that says so: under the answer in Chat, at the end of a
+  deliverable. Going on that fails keeps what was written.
+- **A reply with nothing in it is asked again**, twice at most in a row:
+  after the tools were used, with a word to go on from where the work is. In
+  Chat another model takes over when one can go on, and the page says that
+  it is asking again. Only a model that stays silent ends the answer, and
+  the message then says what to do: write "go on", and the work continues
+  from what was done.
+- **A tool call that was cut at the length limit** (a whole file in one
+  call) was answered with "the arguments were not a JSON object", and the
+  model made the same call again. It is told now that the call was cut and
+  nothing was run, and to write a long file in parts.
+
+### Changed
+
+- **An answer in Chat may take 32 model calls** (16 before), and
+  `CHAT_MAX_STEPS` sets another number between 4 and 100: work that is made
+  of many small steps, a file each, needs the room. A call that goes on with
+  an answer that was cut is not counted as one. The half hour an answer may
+  work, and the tokens of the account, hold as before.
+
+### Notes
+
+- Going on uses tokens: each time, the model is sent the conversation again
+  with what it wrote so far.
+- Whether a model says that it was cut is the provider's to say. One that
+  ends a cut reply with "stop" cannot be told from one that was done.
+- Tested against the providers of the tests, which cut their replies and
+  reply with nothing on request; not against the model in the report (a free
+  preview model behind a gateway), whose reason for saying nothing is not
+  known.
+
 ## [1.12.0] - 2026-11-24
 
 A project that ended said "succeeded" and showed text: what each agent wrote

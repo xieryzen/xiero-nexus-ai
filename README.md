@@ -1265,6 +1265,36 @@ of the tests, in a real browser; the runner's image built in CI, with real
 builds of a Paper plugin (Gradle 8 and 9) and a Maven project in it, its
 network rules, and one run after another.
 
+## Answers that are whole (v1.12.1)
+
+A model writes up to a length limit of its own, or of its provider, and stops
+there: in the middle of a sentence, of a file, of a call. And a weak model
+sometimes replies with nothing at all in the middle of its work. Taken as
+they come, half a document is handed over as the document, and work ends
+after four files of twenty. Neither is taken for the answer:
+
+- **Cut at the length limit** (the model ends with `length`, `max_tokens` or
+  `MAX_TOKENS`): the model is shown what it wrote and asked to continue from
+  exactly where it stopped, up to eight times. The pieces are one text. This
+  holds in Chat, where the text on the page grows; in the tasks of a
+  project, with and without tools; in the plan; and in the final
+  deliverable. An answer that is still cut after that says so.
+- **Nothing in the reply**, no text and no tool call: the model is asked
+  again, twice at most in a row, and after its tools were used it is told to
+  go on from where the work is. In Chat another model takes over when one
+  can. Only a model that stays silent ends the answer; "go on" as the next
+  message continues from what was done.
+- **A tool call cut at the limit** (a whole file in one call) is not run: the
+  model is told so, and to write a long file in parts.
+
+An answer in Chat may take 32 model calls (`CHAT_MAX_STEPS`, 4 to 100), half
+an hour, and the tokens of the account. A task of a project takes as many
+steps as its agent is set to (Agents page, up to 40).
+
+What this cannot do: a provider that cuts a reply and calls it finished
+cannot be told from a model that was done; and going on costs tokens, since
+the conversation is sent again each time.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -1605,6 +1635,7 @@ account you register through the UI becomes the owner.
 | `SANDBOX_ALLOWED_COMMANDS` | no | comma list overriding the default command allowlist |
 | `SANDBOX_MAX_SECONDS` | no | The longest a program or a build may run in the runner: default 120, between 10 and 3600. `runner-service.sh` sets 900, for Gradle. |
 | `BUILT_PATH` | no | Folder for what builds made, the packages that are downloaded from a project's page (default: a `built` folder next to the database file, so `./data/built`). Back it up together with the database. |
+| `CHAT_MAX_STEPS` | no | The model calls one answer in Chat may take, the answer itself included: default 32, between 4 and 100. An answer that ends at this number says so, and goes on when asked to. See [Answers that are whole](#answers-that-are-whole-v1121). |
 | `AUTO_MEDIA` | no | Whether a project that names no model for pictures, voice-overs or videos gets them from a model the app chooses, when its goal asks for them: on unless `0` (also `off`, `false`, `no`). |
 | `SEARCH_PROVIDER` | no | The search service behind the agent tool *Search the web*: `brave`, `tavily` or `searxng`. **Unset = the tool is unavailable.** |
 | `SEARCH_API_KEY` | no | The key of that service (not needed for SearXNG). |

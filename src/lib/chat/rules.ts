@@ -11,8 +11,22 @@ export const CHAT_TITLE_MAX = 80;
 export const HISTORY_MESSAGES = 40;
 /** Characters of them, counted from the newest. */
 export const HISTORY_CHARS = 60_000;
-/** Model calls one answer may take, the answer itself included. */
-export const CHAT_MAX_STEPS = 16;
+/** Model calls one answer may take, the answer itself included, unless CHAT_MAX_STEPS says otherwise. */
+export const CHAT_MAX_STEPS = 32;
+export const CHAT_MIN_MAX_STEPS = 4;
+export const CHAT_MAX_MAX_STEPS = 100;
+
+/**
+ * The model calls one answer may take. Work that is made of many small steps
+ * (a file each) needs room; what it uses is held by the time an answer may
+ * take and by the tokens of the account. An answer that ends at this number
+ * says so, and goes on when it is asked to.
+ */
+export function chatMaxSteps(setting: string | undefined = process.env.CHAT_MAX_STEPS): number {
+  const n = Number((setting ?? "").trim());
+  if (!setting?.trim() || !Number.isFinite(n)) return CHAT_MAX_STEPS;
+  return Math.min(CHAT_MAX_MAX_STEPS, Math.max(CHAT_MIN_MAX_STEPS, Math.round(n)));
+}
 /** How long one answer may work, with everything its tools do. */
 export const ANSWER_MAX_MS = 30 * 60_000;
 /** Conversations an account keeps; the ones written in longest ago make way. */
@@ -51,7 +65,7 @@ export interface MessageDetails {
   /** What was put in front of the model from the account's memory. */
   remembered?: { notes: number; passages: number };
   /** Why it ended, when it did not end with the answer. */
-  stopped?: "cancelled" | "max_steps" | "tokens" | "time";
+  stopped?: "cancelled" | "max_steps" | "tokens" | "time" | "length";
   error?: string;
 }
 

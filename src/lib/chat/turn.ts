@@ -18,7 +18,7 @@ import { textFor } from "../shown";
 import { closeRun } from "../ssh/sessions";
 import { hasTokensLeft } from "../tokens";
 import { computeCost, estimateTokens, recordUsage } from "../usage";
-import { ANSWER_MAX_MS, CHAT_MAX_STEPS, callLine, type MessageDetails, type SourceNote, type ToolNote } from "./rules";
+import { ANSWER_MAX_MS, chatMaxSteps, callLine, type MessageDetails, type SourceNote, type ToolNote } from "./rules";
 import { addMessage, historyFor, nameFromFirst, scrubChat, type MessageDTO } from "./store";
 import { chatTools, type ChatToolContext } from "./tools";
 
@@ -237,7 +237,8 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
 
     // ── The models in turn. A step that a model does not answer is asked of
     // the next one, which goes on from what was done so far. Where none takes
-    // the first request with tools, they are asked without.
+    // the first request with tools, they are asked without. A model whose
+    // reply had nothing in it is not asked again while another can go on.
     const candidates = input.candidates;
     let current = 0;
     let plain = false;
@@ -247,17 +248,38 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
     let aboutTools = false;
     const toolsOf = (resolved: ResolvedModel) => !plain && getAdapter(resolved.provider.adapter).supports.includes("tool_calling");
 
-    const ask = async (messages: ChatMessage[], o: { tools: ToolDefinition[]; toolChoice: ToolChoice }): Promise<ChatResult> => {
+    const ask = async (
+      messages: ChatMessage[],
+      o: { tools: ToolDefinition[]; toolChoice: ToolChoice; continuing?: boolean; afterEmpty?: number },
+    ): Promise<ChatResult> => {
       step++;
-      if (step > 1) {
+      // Whether a tool was used in this answer: what comes then goes on from its result.
+      const acted = messages.some((m) => m.role === "tool");
+      if (o.continuing) {
+        // The answer reached the length limit of one reply: what is on the page stays, and goes on.
+        emit({ progress: "The answer reached the length limit of one reply. Going on with it" });
+      } else if (step > 1) {
         draft = "";
         emit({ reset: true });
+      }
+      if (o.afterEmpty) {
+        const from = candidates[current];
+        const next = candidates.findIndex((c, i) => i > current && (!acted || (toolsOf(c) && o.tools.length > 0)));
+        if (next !== -1) current = next;
+        const to = candidates[current];
+        emit({
+          progress: !seesSetup(user.role)
+            ? "The reply was empty. Asking again"
+            : from && to && to !== from
+              ? `${nameOf(from)} gave an empty reply. Asking ${nameOf(to)}`
+              : `${from ? nameOf(from) : "The model"} gave an empty reply. Asking it again`,
+        });
       }
       for (;;) {
         const resolved = candidates[current];
         if (!resolved) {
           // Nobody took the first request. Where that can be about the tools, once more without them.
-          if (!plain && step === 1 && aboutTools) {
+          if (!plain && !acted && aboutTools) {
             plain = true;
             current = 0;
             continue;
@@ -266,14 +288,16 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
         }
         const withTools = toolsOf(resolved) && o.tools.length > 0;
         // A model that takes no tools cannot go on from a step that used them.
-        if (!withTools && step > 1) {
+        if (!withTools && acted) {
           current++;
           continue;
         }
         const asked = Date.now();
         wrote = false;
         // Without tools, the model is told so: it must not write as if it had acted.
-        const sent = withTools ? messages : step === 1 ? messagesWith([]) : messages;
+        // What the loop added since (an answer that was cut, and the word to go on) stays.
+        const untold = messagesWith([]);
+        const sent = withTools || acted ? messages : [...untold, ...messages.slice(untold.length)];
         try {
           const result = await gatewayChatStream(
             resolved,
@@ -316,7 +340,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
           lastFailure = err;
           // Part of an answer is on the page: another model does not go on from there.
           if (wrote || isCancelled()) throw err;
-          if (withTools && step === 1 && (!(err instanceof AppError) || mayBeAboutTools(err))) aboutTools = true;
+          if (withTools && !acted && (!(err instanceof AppError) || mayBeAboutTools(err))) aboutTools = true;
           current++;
           const next = candidates[current];
           if (next) emit({ progress: seesSetup(user.role) ? `${nameOf(resolved)} did not answer. Asking ${nameOf(next)}` : "No answer yet. Asking again" });
@@ -328,7 +352,7 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
       chat: ask,
       messages: messagesWith(tools.map((t) => t.definition.name)),
       tools,
-      maxSteps: CHAT_MAX_STEPS,
+      maxSteps: chatMaxSteps(),
       outOfTokens: () => !hasTokensLeft(user.id),
       estimateTokens,
       isCancelled,
@@ -357,11 +381,16 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
       emit({ done: true, finishReason: stoppedAs(), usage: { promptTokens, completionTokens }, message: stored });
       return;
     }
+    // A model that wrote nothing was asked again (loop.ts) before this is said.
     const content =
       result.content.trim() ||
-      (toolNotes.length > 0 ? "No answer was written. What was done is listed with this message." : "The answer came back empty. Send the message again.");
-    const stored = store(content, result.stopped === "answer" ? {} : { stopped: result.stopped });
-    emit({ done: true, finishReason: result.stopped, usage: { promptTokens, completionTokens }, message: stored });
+      (toolNotes.length > 0
+        ? "No answer was written, also when the model was asked again. What was done is listed with this message. Write “go on”, and the work goes on from there."
+        : "The answer came back empty, also when it was asked for again. Send the message again.");
+    // An answer that is still cut after it went on as often as it may says so.
+    const ended = result.stopped !== "answer" ? result.stopped : result.cut ? "length" : null;
+    const stored = store(content, ended ? { stopped: ended } : {});
+    emit({ done: true, finishReason: ended ?? "answer", usage: { promptTokens, completionTokens }, message: stored });
   } catch (err) {
     if (taken.length > 0) scrubChat(chat.id, taken);
     if (isCancelled()) {
