@@ -32,6 +32,13 @@
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but
 #                        differs from the file.
+#   --give-tools         For the agents that are there under the names of the
+#                        file: give each the tools the file names for it that
+#                        this server can do now and that the agent does not
+#                        have. For a server that got a sandbox runner or a
+#                        search service after its agents were made. Nothing
+#                        else of an agent is changed, and no tool is taken
+#                        away.
 #   --only <parts>       Only these parts: accounts, providers, models,
 #                        skills, agents, teams, workflows (separated by commas).
 #   --account <name>     An account the app is to have, with --account-email
@@ -1848,8 +1855,19 @@ def plan_agents(state, definition, options, plan, slots, skill_ids):
                 differs.append(key)
         if agent.get("status") != "active":
             plan.notes.append("%s is switched off in the app. That is left as it is." % where)
+        # The tools the file names for it that the server can do and the agent lacks.
+        lacks = [tool for tool in tools if tool not in (agent.get("tools") or [])]
         if not differs:
             plan.same.append('agent "%s"' % wanted["name"])
+        elif getattr(options, "give_tools", False) and not options.update and lacks:
+            def give(agent=agent, lacks=lacks):
+                api(state.app, "PATCH", "/api/agents/%s" % agent["id"], {"tools": list(agent.get("tools") or []) + lacks})
+
+            plan.changes.append(Change("agents", "%s: give it %s, which the file names for it and this server can do now. Nothing else of it is changed." % (
+                where, ", ".join(lacks)), give))
+            rest = [key for key in differs if key != "tools"]
+            if rest:
+                plan.notes.append("%s also differs from the file in other things (%s). They are left as they are; --update changes them." % (where, ", ".join(shown(rest))))
         elif options.update:
             def update(agent=agent, body=body):
                 api(state.app, "PATCH", "/api/agents/%s" % agent["id"], body(have=agent.get("skillIds"), have_tools=agent.get("tools")))
@@ -2651,6 +2669,7 @@ def options_from(argv):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--update", action="store_true")
+    parser.add_argument("--give-tools", action="store_true")
     parser.add_argument("--only", default="")
     parser.add_argument("--account", default="")
     parser.add_argument("--account-email", default="")

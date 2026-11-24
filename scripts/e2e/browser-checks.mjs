@@ -376,6 +376,109 @@ try {
     await snap("project-run");
   }
 
+  // ─── What a project made ───────────────────────────────────────────────────
+  begin("Browser: what a project made");
+  const siteProject = projects.find((p) => p.title === "Lighthouse Tours: the site!");
+  const pluginProject = projects.find((p) => p.title === "Shop plugin");
+  if (siteProject && pluginProject) {
+    await open(`/dashboard/projects/${siteProject.id}`);
+    const above = await page.evaluate(() => {
+      const card = document.querySelector('[data-testid="project-result"]');
+      const task = [...document.querySelectorAll("main *")].find((el) => el.children.length === 0 && (el.textContent ?? "").trim() === "Tool: site");
+      return Boolean(card && task && card.compareDocumentPosition(task) & Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+    check("the result stands at the top of the project page, above the tasks", above && (await has("Web site")) && (await has("Download all (.zip)")), null);
+    const summary = await page.$eval('[data-testid="result-summary"]', (el) => el.textContent.trim()).catch(() => null);
+    check("  it says what there is", /^5 files · [\d.]+ (B|KB) · a web site of 2 pages$/.test(summary ?? ""), summary);
+
+    // The site, in its frame: a real page, with its style sheet and its script at work.
+    const frameOf = async (selector) => (await page.waitForSelector(selector, { timeout: 10_000 })).contentFrame();
+    let frame = await frameOf('[data-testid="result-site-frame"]');
+    const scripted = await frame.waitForFunction(() => document.getElementById("by-script")?.textContent === "set by the script", { timeout: 15_000 }).then(() => true, () => false);
+    const shown = await frame.evaluate(() => ({ title: document.getElementById("title")?.textContent, background: getComputedStyle(document.body).backgroundColor, color: getComputedStyle(document.querySelector("h1")).color }));
+    eq("the site is shown as a browser shows it: the page, its style sheet applied, its script run", [scripted, shown], [true, { title: "Lighthouse Tours", background: "rgb(250, 240, 200)", color: "rgb(20, 60, 120)" }]);
+    const apart = await frame.evaluate(() => {
+      const refused = (read) => {
+        try {
+          read();
+          return false;
+        } catch {
+          return true;
+        }
+      };
+      return { origin: window.origin, cookies: refused(() => document.cookie), storage: refused(() => window.localStorage.length), parent: refused(() => window.parent.document.title) };
+    });
+    eq("  the page in the frame is apart from the dashboard: no origin, no cookies, no storage, no way to its parent", apart, { origin: "null", cookies: true, storage: true, parent: true });
+    // A link in the page leads to the next page, inside the frame; one that starts at the root of the site too.
+    await frame.click('a[href="about.html"]');
+    frame = await frameOf('[data-testid="result-site-frame"]');
+    check("  a link of the page leads on, inside the frame", await frame.waitForFunction(() => document.querySelector("h1")?.textContent === "About the keepers", { timeout: 10_000 }).then(() => true, () => false), null);
+    await clickText(/^\s*Reload\s*$/);
+    frame = await frameOf('[data-testid="result-site-frame"]');
+    await frame.waitForFunction(() => document.getElementById("root-link") !== null, { timeout: 10_000 }).catch(() => undefined);
+    await frame.click("#root-link");
+    frame = await frameOf('[data-testid="result-site-frame"]');
+    check("  so does a link that starts at the root of the site: it stays in the project", await frame.waitForFunction(() => document.querySelector("h1")?.textContent === "About the keepers", { timeout: 10_000 }).then(() => true, () => false), frame.url());
+    await page.select('[data-testid="result-site"] select[aria-label="Page"]', "about.html");
+    frame = await frameOf('[data-testid="result-site-frame"]');
+    check("  another page of the site is chosen from the list", (await frame.waitForFunction(() => document.querySelector("h1")?.textContent === "About the keepers", { timeout: 10_000 }).then(() => true, () => false)) && frame.url().endsWith("/about.html"), frame.url());
+    await clickText(/^\s*Phone width\s*$/);
+    eq("  and shown as wide as a phone", await page.$eval('[data-testid="result-site-frame"]', (el) => Math.round(el.getBoundingClientRect().width)), 390);
+    await clickText(/^\s*Full width\s*$/);
+    const newTab = await page.$eval('[data-testid="result-site-open"]', (a) => [a.getAttribute("href"), a.target, a.rel]);
+    check("  a new tab opens the page itself, without the dashboard's rights", /^\/site\/[^/]+\/about\.html$/.test(newTab[0]) && newTab[1] === "_blank" && newTab[2].includes("noopener"), newTab);
+    await snap("result-site");
+
+    // The files, each shown as what it is.
+    const fileButton = async (name) =>
+      page.evaluate((wanted) => {
+        const button = [...document.querySelectorAll('[data-testid="result-files"] nav button')].find((b) => b.querySelector("span.mono")?.textContent === wanted);
+        button?.scrollIntoView({ block: "center" });
+        button?.click();
+        return Boolean(button);
+      }, name);
+    eq("the files are listed by folder", await page.$$eval('[data-testid="result-files"] nav button span.mono', (spans) => spans.map((s) => s.textContent)), ["README.md", "about.html", "index.html", "style.css", "app.js"]);
+    await fileButton("README.md");
+    await page.waitForSelector('[data-testid="file-document"] h1', { timeout: 10_000 }).catch(() => undefined);
+    const doc = await page.$eval('[data-testid="file-document"]', (el) => ({ heading: el.querySelector("h1")?.textContent, bold: el.querySelector("strong")?.textContent, files: [...el.querySelectorAll("button")].map((b) => b.textContent), cells: [...el.querySelectorAll("table td")].map((c) => c.textContent), marks: /[#*`|]/.test(el.innerText) })).catch(() => null);
+    eq("a document is shown as a document: headings, bold, a table, and none of the marks it is written with", doc, { heading: "Lighthouse Tours", bold: "two pages", files: ["index.html", "about.html"], cells: ["css/style.css", "the look"], marks: false });
+    check("  with which task wrote it", await has("written by task #1"), null);
+    // A file the document names opens that file.
+    await page.evaluate(() => [...document.querySelectorAll('[data-testid="file-document"] button, [data-testid="file-document"] a')].find((el) => el.textContent === "index.html")?.click());
+    check("  a file the document names opens that file", await page.waitForFunction(() => document.querySelector('[data-testid="result-viewer"] p.mono')?.textContent === "index.html", { timeout: 5000 }).then(() => true, () => false), await page.$eval('[data-testid="result-viewer"] p.mono', (p) => p.textContent).catch(() => null));
+    await clickText(/^\s*Show the source\s*$/);
+    check("  a page is shown as a page, and as its source when asked", await page.waitForFunction(() => (document.querySelector('[data-testid="file-source"]')?.textContent ?? "").includes('<h1 id="title">Lighthouse Tours</h1>'), { timeout: 5000 }).then(() => true, () => false), null);
+    await fileButton("style.css");
+    check("  a style sheet as its text", await page.waitForFunction(() => (document.querySelector('[data-testid="file-source"]')?.textContent ?? "").includes("font-family: sans-serif"), { timeout: 5000 }).then(() => true, () => false), null);
+    const downloads = await page.evaluate(() => [document.querySelector('[data-testid="result-download"]')?.getAttribute("href"), document.querySelector('[data-testid="result-download"]')?.getAttribute("download"), document.querySelector('[data-testid="file-download"]')?.getAttribute("href")]);
+    eq("everything is one download, and each file its own", downloads, [`/api/projects/${siteProject.id}/download`, "Lighthouse-Tours-the-site.zip", `/api/projects/${siteProject.id}/file?path=css%2Fstyle.css`]);
+    const taskFiles = await page.$eval('[data-testid="task-files"]', (el) => el.textContent.replace(/\s+/g, " ").trim()).catch(() => null);
+    check("the task says which files it wrote", /README\.md/.test(taskFiles ?? "") && /index\.html/.test(taskFiles ?? "") && /css\/style\.css/.test(taskFiles ?? ""), taskFiles);
+    check("  and the final deliverable is there as text that is read, not as marks", (await page.$('[data-testid="final-deliverable"]')) !== null && (await has("FINAL DELIVERABLE")), null);
+    await snap("result-files");
+    await page.setViewport({ width: 390, height: 844 });
+    await open(`/dashboard/projects/${siteProject.id}`);
+    check("on a phone the result fits the screen", (await sideways()) <= 0 && (await page.$('[data-testid="result-site-frame"]')) !== null, await sideways());
+    await snap("result-phone");
+    await page.setViewport({ width: 1280, height: 900 });
+
+    // A package.
+    await open(`/dashboard/projects/${pluginProject.id}`);
+    const built = await page.$eval('[data-testid="result-built"]', (el) => el.innerText.replace(/\s+/g, " ")).catch(() => "");
+    check("a project that is built shows its package, with where it is from", /shop-1\.0\.0\.jar/.test(built) && /from the files as they are now/.test(built) && /These files are built into a package with Gradle \(build\.gradle\.kts\)/.test(built) && /The last build succeeded/.test(built), built);
+    const jarLink = await page.$eval('[data-testid="built-download"]', (a) => [a.getAttribute("href"), a.getAttribute("download")]).catch(() => null);
+    check("  and its download", /^\/api\/projects\/[0-9a-f-]{36}\/built\/[0-9a-f-]{36}$/.test(jarLink?.[0] ?? "") && jarLink?.[1] === "shop-1.0.0.jar", jarLink);
+    const builtSummary = await page.$eval('[data-testid="result-summary"]', (el) => el.textContent.trim()).catch(() => null);
+    check("  the summary names it", /^4 files · [\d.]+ (B|KB) · 1 built file$/.test(builtSummary ?? ""), builtSummary);
+    await page.click('[data-testid="build-now"]');
+    const rebuilt = await page.waitForFunction((before) => { const a = document.querySelector('[data-testid="built-download"]'); return a && a.getAttribute("href") !== before && !document.querySelector('[data-testid="build-busy"]'); }, { timeout: 20_000 }, jarLink?.[0]).then(() => true, () => false);
+    check("built again from the page: a new package takes the place of the old one", rebuilt && (await page.$$('[data-testid="built-download"]')).length === 1, null);
+    check("  the task that made the build work is among the tasks", await has("Make the project build"), null);
+    await snap("result-built");
+  } else {
+    check("the projects of the result checks exist (run the full checks first)", false, projects.map((p) => p.title));
+  }
+
   // ─── A run that stopped at a limit ─────────────────────────────────────────
   begin("Browser: a run that stopped half way is continued");
   // Left by the checks before: one task done, one that failed at its model's

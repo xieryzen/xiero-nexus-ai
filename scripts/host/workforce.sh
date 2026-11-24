@@ -36,6 +36,10 @@
 #   --dry-run            Say what would be done, and do nothing.
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but differs.
+#   --give-tools         Give the agents that are there the tools the file names
+#                        for them that this server can do now and they lack:
+#                        after a runner or a search service was set up. Nothing
+#                        else of an agent is changed.
 #   --only <parts>       accounts, providers, models, skills, agents, teams,
 #                        workflows (separated by commas).
 #   --account <name>     An account the app is to have, with --account-email
@@ -123,10 +127,10 @@ while [ "$#" -gt 0 ]; do
     --skill-url-sealed) need_value "$@"; SEALED_URLS+=("$2"); shift 2 ;;
     --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
-    --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --try-assistant | --try-assistant-all | --mark-tools | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --dry-run | --yes | --update | --give-tools | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --try-assistant | --try-assistant-all | --mark-tools | --inventory-only) PASS_ON+=("$1"); shift ;;
     --as-owner) AS_OWNER="1"; shift ;;
     -h | --help)
-      sed -n '2,94p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,98p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;

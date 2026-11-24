@@ -4,8 +4,8 @@
 # Pterodactyl node.
 #
 # What is in it: Node.js and npm, Python with pip and pytest, git, and for
-# what is built into a package: JDK 21 (and 17 and 25 where Debian has them),
-# Maven, and Gradle 8 and 9.
+# what is built into a package: JDK 21 and 25 as Debian ships them, JDK 17
+# from Temurin, Maven, and Gradle 8 and 9.
 FROM debian:trixie-slim
 
 # Gradle as its makers publish it, checked against the sums they publish.
@@ -13,6 +13,11 @@ ARG GRADLE_8=8.14.5
 ARG GRADLE_8_SHA256=6f74b601422d6d6fc4e1f9a1ab6522f642c2fdcbc15ae33ebd30ba3d7198e854
 ARG GRADLE_9=9.9.2
 ARG GRADLE_9_SHA256=971fcd7150ca4ba04852c0b2ca0d2d0ab9468e14b03473eab19528809914c76b
+# JDK 17, which this Debian does not ship and which plugins for Minecraft up
+# to 1.20.4 are compiled with: Temurin, checked against the sums of its makers.
+ARG TEMURIN_17=17.0.21.1+2
+ARG TEMURIN_17_SHA256_AMD64=0b0ac5eab6db6abaec68c9913bcddb31321e5da411c45073d520d9c125e6f7b4
+ARG TEMURIN_17_SHA256_ARM64=1d808f4b558e9de63d8ba3ead21ffc8b9de204894eff3c19d52c1480aa17cc58
 # What is fetched once, here, so that a build does not fetch it every time:
 # the Paper API in these versions, each with the Java it is compiled for.
 # Empty: nothing is fetched ahead.
@@ -36,8 +41,32 @@ RUN apt-get -o APT::Update::Error-Mode=any update \
       version="$(basename "${home}" | sed -n 's/^java-\([0-9][0-9]*\)-openjdk-.*/\1/p')"; \
       if [ -n "${version}" ] && [ -x "${home}/bin/javac" ]; then ln -sfn "${home}" "/opt/java/${version}"; fi; \
     done \
- && [ -x /opt/java/21/bin/javac ] \
- && echo "JDKs: $(ls /opt/java | sort -n | tr '\n' ' ')"
+ && [ -x /opt/java/21/bin/javac ]
+
+# JDK 17 where Debian did not have it. Without it the runner still builds:
+# what asks for Java 17 by name then has to ask for 21.
+RUN set -eu; \
+    if [ ! -x /opt/java/17/bin/javac ]; then \
+      case "$(dpkg --print-architecture)" in \
+        amd64) arch="x64"; sum="${TEMURIN_17_SHA256_AMD64}" ;; \
+        arm64) arch="aarch64"; sum="${TEMURIN_17_SHA256_ARM64}" ;; \
+        *) arch=""; sum="" ;; \
+      esac; \
+      if [ -n "${arch}" ]; then \
+        file="OpenJDK17U-jdk_${arch}_linux_hotspot_$(printf '%s' "${TEMURIN_17}" | tr '+' '_').tar.gz"; \
+        tag="jdk-$(printf '%s' "${TEMURIN_17}" | sed 's/+/%2B/')"; \
+        if curl -fsSL --retry 3 --connect-timeout 20 -o /tmp/jdk17.tar.gz "https://github.com/adoptium/temurin17-binaries/releases/download/${tag}/${file}" \
+          && echo "${sum}  /tmp/jdk17.tar.gz" | sha256sum -c -; then \
+          mkdir -p /opt/temurin-17; \
+          tar -xzf /tmp/jdk17.tar.gz -C /opt/temurin-17 --strip-components=1; \
+          ln -sfn /opt/temurin-17 /opt/java/17; \
+        else \
+          echo "JDK 17 could not be fetched, or is not the file its makers published: left out."; \
+        fi; \
+        rm -f /tmp/jdk17.tar.gz; \
+      fi; \
+    fi; \
+    echo "JDKs: $(ls /opt/java | sort -n | tr '\n' ' ')"
 
 RUN set -eu; \
     fetch() { \

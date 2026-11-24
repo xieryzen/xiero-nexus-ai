@@ -173,6 +173,22 @@ echo "A program reaches Maven Central, and no private address."
 # A project that says it was written for Gradle 9 is built with Gradle 9.
 answer="$(docker exec -e SELFTEST_GRADLE=9 "${NODE_NAME}" node /srv/selftest.mjs gradle 2> /dev/null || echo "no the question could not be asked")"
 case "${answer}" in ok\ *"Gradle 9)") found "With Gradle 9 too: ${answer#ok }." ;; *) fail "a Paper plugin did not build with Gradle 9 (${answer#no })." ;; esac
+# The other JDKs, each with both Gradles: what builds and what does not is
+# said, for whoever decides which Gradle a project is built with.
+for combo in "8 17 1.20.4" "9 17 1.20.4" "8 25 1.21.8" "9 25 1.21.8"; do
+  read -r gradle java paper <<< "${combo}"
+  if ! docker exec "${NODE_NAME}" test -x "/opt/java/${java}/bin/javac"; then
+    found "JDK ${java} is not in the image."
+    continue
+  fi
+  answer="$(docker exec -e "SELFTEST_GRADLE=${gradle}" -e "SELFTEST_JAVA=${java}" -e "SELFTEST_PAPER=${paper}" "${NODE_NAME}" node /srv/selftest.mjs gradle 2> /dev/null || echo "no the question could not be asked")"
+  case "${answer}" in
+    ok\ *) found "Java ${java} with Gradle ${gradle}: built in ${answer#ok }." ;;
+    *) found "Java ${java} with Gradle ${gradle}: NOT built (${answer#no })." ;;
+  esac
+done
+docker exec "${NODE_NAME}" test -x /opt/java/17/bin/javac || fail "JDK 17 is not in the image."
+
 cat << 'EOF' | ask
 {"timeoutMs": 300000,
  "files": [{"path": "settings.gradle.kts", "content": "rootProject.name = \"which\"\n"}, {"path": "gradle/wrapper/gradle-wrapper.properties", "content": "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.1.0-bin.zip\n"}],
