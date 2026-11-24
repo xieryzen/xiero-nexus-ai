@@ -120,7 +120,7 @@ version, Pterodactyl, upgrading, rolling back, and publishing a new version.
 - **File management** — view/edit/create/delete files through the dashboard;
   paths are validated (no absolute paths, no `..` traversal, safe characters).
 - **Sandboxed execution** — run a build/test command against the workspace. Code
-  runs **only** in an external isolated runner (see [`sandbox-runner/`](sandbox-runner)),
+  runs **only** in an external isolated runner (see [`scripts/host/runner/`](scripts/host/runner)),
   never on the app host. If `SANDBOX_URL` is unset, execution is disabled and
   returns a clear message.
 - **Guardrails** — command **allowlist** (first token must be an allowed
@@ -1193,6 +1193,78 @@ What this is not, and what was tested:
   and `--try-ssh <host>` whether the app reaches a machine over SSH from
   where it runs ([scripts/host/README.md](scripts/host/README.md)).
 
+## What a project made (v1.12.0)
+
+Until v1.12.0 a project that ended said "succeeded" and showed text: what
+each agent wrote about its work, and a summary. The site, the plugin, the
+pictures were in the workspace, behind a button. Now the project page starts
+with **what was made**.
+
+- **The result, on top of the project page.** A web site is shown the way a
+  browser shows it, with its style sheets and its scripts, at full width or
+  as wide as a phone, and opens in a tab of its own. Every file is listed by
+  folder and looked at in place: a document as a document (headings, tables,
+  lists, code), a page as the page or as its source, pictures, sound and
+  video as themselves, anything else as text. Each file is downloaded by
+  itself, and **Download all (.zip)** hands over everything in one file, the
+  project's pictures and voice-overs under `media/` included. A task's card
+  says which files it wrote, and the final deliverable is rendered, not
+  shown as the marks it is written with.
+- **The site runs in a sandbox, apart from the dashboard.** It is served
+  under `/site/<token>/…`, where the token names the project, ends after 24
+  hours and is signed by the server. The pages there get no cookie of the
+  dashboard and no access to it: they are sent with `Content-Security-Policy:
+  sandbox` (scripts and forms allowed, the origin of the app not), and only
+  the app's own pages may frame them. Whoever has the address can look at
+  the files of that project until it ends, without signing in: that is what
+  the tab is for, and what to keep in mind before passing the address on.
+- **A project that is built is built.** The files of a Gradle or a Maven
+  project (a Minecraft plugin above all) are built **in the runner** when
+  the run's tasks are done: `gradle build -x test` or `mvn package`, never
+  the project's own wrapper. The package (`build/libs/*.jar`,
+  `target/*.jar`, an add-on's `.mcaddon`, a `.zip` under `dist/`) is kept
+  and **downloaded from the project page**, which says whether it is from
+  the files as they are now. **Build** builds again at any time.
+- **A build that fails goes back to the agent.** The agent that wrote the
+  build file gets a task "Make the project build" with what the build
+  printed, and the tool to run commands for that task, whether or not it was
+  ticked for the agent; then the project is built again, twice at most. The
+  manager and the reviewer are told how the build ended. A project that
+  still does not build ends in `review` and says so, with the end of the
+  build's output; **Let the AI fix it** on the page does the same once more.
+- **Pictures and voice-overs without a model being chosen.** A goal that asks
+  for images, voice-overs or videos gets them from a model the app chooses
+  when the project names none (`AUTO_MEDIA`; a project whose media limit is
+  0 gets none). A piece is planned with the file name it is kept under, so a
+  page can refer to it: `media/hero.png`.
+- **The runner.** Builds need the runner ([`scripts/host/runner/`](scripts/host/runner)):
+  a container with JDK 17, 21 and 25, Gradle 8 and 9, Maven, Node.js and
+  Python, where every program runs as a user without rights, and whose
+  network reaches the internet and no private address. On a Pterodactyl node
+  `runner-service.sh` sets it up next to the server and writes `SANDBOX_URL`
+  into its `.env` (the actions `runner-plan` and `runner` of the Deploy
+  workflow). **Without a runner nothing is built**, and the page says so; the
+  files are shown and downloaded all the same.
+
+| | |
+|---|---|
+| `GET /api/projects/{id}/result` | What there is: the files with their kinds and sizes, the site and the address of its preview, the media, what was built, and how the project is built. |
+| `GET /api/projects/{id}/download` | Everything as one `.zip`. |
+| `GET /api/projects/{id}/file?path=` | One file, as a download. |
+| `POST /api/projects/{id}/build` | Build now. `400 nothing_to_build` when the files are no Gradle or Maven project, `400 execution_disabled` without a runner, `409 build_active` while a build of the project runs. |
+| `GET` / `DELETE /api/projects/{id}/built/{fileId}` | A package, and removing it. |
+
+Limits: a project keeps up to 40 built files and 256 MB of them, and a new
+package takes the place of the ones from the same folder. A build may run as
+long as `SANDBOX_MAX_SECONDS` allows (900 seconds on a node set up by the
+script). What is built is what the build file says: a build that needs a
+private repository, or a JDK other than 17, 21 or 25, fails and says why.
+
+What was tested: the pages and the API against the providers and the runner
+of the tests, in a real browser; the runner's image built in CI, with real
+builds of a Paper plugin (Gradle 8 and 9) and a Maven project in it, its
+network rules, and one run after another.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -1528,9 +1600,12 @@ account you register through the UI becomes the owner.
 | `MODEL_STAND_INS` | no | Whether a run goes on with another model that works when the models a task, or the run itself, is set to do not answer: on unless `0` (also `off`, `false`, `no`). A project can say for itself (**Go on with another model**). A stand-in never costs more than the dearest model the task was set to. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |
-| `SANDBOX_URL` | no | URL of an isolated sandbox runner. **Unset = execution disabled** (nothing runs on the app host). See `sandbox-runner/`. |
-| `SANDBOX_TOKEN` | no | bearer token the app sends to the sandbox runner |
+| `SANDBOX_URL` | no | URL of an isolated runner. **Unset = execution disabled** (nothing runs on the app host, and no project is built). See [`scripts/host/runner/`](scripts/host/runner); on a Pterodactyl node `runner-service.sh` sets it up. |
+| `SANDBOX_TOKEN` | no | bearer token the app sends to the runner |
 | `SANDBOX_ALLOWED_COMMANDS` | no | comma list overriding the default command allowlist |
+| `SANDBOX_MAX_SECONDS` | no | The longest a program or a build may run in the runner: default 120, between 10 and 3600. `runner-service.sh` sets 900, for Gradle. |
+| `BUILT_PATH` | no | Folder for what builds made, the packages that are downloaded from a project's page (default: a `built` folder next to the database file, so `./data/built`). Back it up together with the database. |
+| `AUTO_MEDIA` | no | Whether a project that names no model for pictures, voice-overs or videos gets them from a model the app chooses, when its goal asks for them: on unless `0` (also `off`, `false`, `no`). |
 | `SEARCH_PROVIDER` | no | The search service behind the agent tool *Search the web*: `brave`, `tavily` or `searxng`. **Unset = the tool is unavailable.** |
 | `SEARCH_API_KEY` | no | The key of that service (not needed for SearXNG). |
 | `SEARCH_URL` | no | The search address: required for `searxng` (its `/search`), optional otherwise. |
@@ -1733,11 +1808,11 @@ src/
   instrumentation.ts       # starts the background worker with the server
 assets/fonts/              # the font for subtitles (Noto Sans Bold, SIL Open Font License)
 drizzle/                   # generated SQL migrations
-sandbox-runner/            # reference external code-execution runner (Docker)
 scripts/                   # release tooling: package, smoke-test, publish, download
 scripts/e2e/               # mock provider and end-to-end checks
 scripts/host/              # for a Pterodactyl node: install, upgrade, the site in nginx, disk report, the workforce from a file
                            # with its skills (scripts/host/skills), running them over SSH, and their tests
+scripts/host/runner/       # the runner programs and builds run in (Docker), set up by scripts/host/runner-service.sh
 .github/workflows/         # CI: check, end-to-end, bundle, publish releases
 tests/                     # node:test unit tests
 ```
@@ -1775,7 +1850,10 @@ connections, the token), access handed over in a conversation (what is found
 in a message and what is left where it is, in English and Indonesian; who
 may hand access over; where a key may be sent; what a run is handed; the
 marks the app writes are nobody's password), the upgrade of a 1.10
-database, and the release tooling
+database, what a project made (the kinds of files, what is a web site and
+what is built how, the ZIP that is written, Markdown, the token of a
+preview, what is kept of a build), the turns a build takes back to its
+agent, the runner's server, and the release tooling
 (channels, version ordering, release selection, checksums).
 
 On every push, CI runs typecheck, lint and these tests, the end-to-end checks
@@ -1804,7 +1882,7 @@ npm run test:e2e
 
 It starts a mock provider ([`scripts/e2e/mock-provider.mjs`](scripts/e2e/mock-provider.mjs))
 and the built app on a throwaway database in the system's temporary folder,
-and makes about 600 checks through the app's HTTP API. From v1.4.0: the
+and makes about 1,500 checks through the app's HTTP API. From v1.4.0: the
 three request styles for images and videos, files returned inline, as links
 and behind redirects, the API key never leaving the provider's address,
 refused file types and oversized downloads, the life of a video job, access
@@ -1853,7 +1931,14 @@ account's project runs, and by nobody else; a wrong password, an address
 on a private network, sign-ins that keep failing; a key that is sent to its
 site and to no other; notes and earlier conversations in front of the
 assistant; an answer that goes on when its page goes away, and one that is
-stopped. At the end the server
+stopped. From v1.12.0: what a project made, with a runner of the tests that
+builds what it is sent ([the result](#what-a-project-made-v1120)): a site
+served under its token, with a token that is forged, ended or of another
+project refused, and no way from one project's address to another's files;
+the download of everything and of one file; a plugin that is built at the
+end of its run, a build that fails and is made to work by the agent that
+wrote it, one that never works, and a build asked for from the page; and
+pictures made for a project that names no model. At the end the server
 is told to stop in the middle of a run and started again. No real provider
 is called and nothing is billed. The mock is written from the providers'
 public documentation, so passing it shows that the app is consistent with

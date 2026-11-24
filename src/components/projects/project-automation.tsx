@@ -387,11 +387,11 @@ export function ProjectAutomation({
                 </div>
                 {shown?.id === run.id && (
                   <div className="mt-3 space-y-3">
-                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-surface-2 p-3 font-sans text-sm text-ink">
+                    <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-surface-2 p-3 font-sans text-sm text-ink">
                       {shown.text ?? "(nothing)"}
                     </pre>
                     {shown.review && (
-                      <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-surface-2 p-3 font-sans text-xs text-ink-2">
+                      <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-surface-2 p-3 font-sans text-xs text-ink-2">
                         {shown.review}
                       </pre>
                     )}

@@ -469,7 +469,7 @@ export function KnowledgeClient({
                                 </Badge>
                               ))}
                             </p>
-                            <p className="mt-1.5 line-clamp-6 whitespace-pre-wrap text-sm text-ink-2">{hit.content}</p>
+                            <p className="mt-1.5 line-clamp-6 whitespace-pre-wrap break-words text-sm text-ink-2">{hit.content}</p>
                           </li>
                         ))}
                       </ol>

@@ -713,7 +713,7 @@ export function ProjectRunner({
       />
 
       <Card title="Goal" className="mb-6">
-        <p className="whitespace-pre-wrap text-sm text-ink-2">{project.goal}</p>
+        <p className="whitespace-pre-wrap break-words text-sm text-ink-2">{project.goal}</p>
         {handed.length > 0 && (
           <p className="mt-3 border-t border-line pt-3 text-xs text-ink-3" data-testid="handed">
             A run works with what you handed over yourself and this goal is about, whatever tools its agents have:{" "}
@@ -781,7 +781,7 @@ export function ProjectRunner({
                         <Link href={t.progressLink} className="btn btn-primary shrink-0 px-2.5 py-1 text-xs">Open the page</Link>
                       </div>
                     )}
-                    {t.error && <p className="mt-2 whitespace-pre-wrap rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{t.error}</p>}
+                    {t.error && <p className="mt-2 whitespace-pre-wrap break-words rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{t.error}</p>}
                   </div>
                   <StateBadge state={t.status} />
                 </div>
@@ -899,7 +899,7 @@ export function ProjectRunner({
                       {t.kind === "text" ? "output" : t.kind === "audio" ? "spoken text" : t.kind === "render" ? "details" : "prompt"}
                     </button>
                     {expanded.has(t.seq) && (
-                      <pre className={cn("mt-2 max-h-80 overflow-auto rounded-md border border-line bg-surface-2 p-3 text-xs text-ink-2", "whitespace-pre-wrap")}>
+                      <pre className={cn("mt-2 max-h-80 overflow-auto rounded-md border border-line bg-surface-2 p-3 text-xs text-ink-2", "whitespace-pre-wrap break-words")}>
                         {t.artifact}
                       </pre>
                     )}
@@ -931,7 +931,7 @@ export function ProjectRunner({
               {looksLikeMarkdown(deliverable) ? (
                 <Markdown source={deliverable} files={resultPaths} onFile={showFile} className="text-ink" />
               ) : (
-                <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">{deliverable}</pre>
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-ink">{deliverable}</pre>
               )}
             </div>
           </Card>
@@ -944,7 +944,7 @@ export function ProjectRunner({
             {looksLikeMarkdown(review) ? (
               <Markdown source={review} files={resultPaths} onFile={showFile} />
             ) : (
-              <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink-2">{review}</pre>
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-ink-2">{review}</pre>
             )}
           </Card>
         </div>

@@ -267,7 +267,7 @@ export function ProjectResultCard({
         {media.length > 0 && (
           <div data-testid="result-media">
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-3">Pictures, videos and voice-overs ({media.length})</h3>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {media.map((asset) => (
                 <div key={asset.id} className="min-w-0">
                   <MediaView asset={asset} heightClass="h-56" />
@@ -401,7 +401,7 @@ export function ProjectResultCard({
               </Link>
             </div>
             {showFiles && (
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,17rem)_minmax(0,1fr)]">
                 <nav aria-label="Files of the project" className="max-h-80 overflow-auto rounded-md border border-line lg:max-h-[32rem]">
                   {groups.map((group) => (
                     <div key={group.folder || "/"}>

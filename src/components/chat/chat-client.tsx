@@ -716,7 +716,7 @@ function Sources({ sources, error }: { sources: SourceNote[]; error: string | nu
                 <span className="mono text-ink-3">[{s.n}]</span> {s.documentTitle}
                 <span className="text-ink-3"> · {s.collectionName}</span>
               </p>
-              <p className="mt-0.5 whitespace-pre-wrap">{s.excerpt}</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words">{s.excerpt}</p>
             </li>
           ))}
         </ol>

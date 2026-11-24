@@ -908,6 +908,14 @@ run -- --user boss --file "${FILE}" --yes --try-run --keep-try-run
 is "with --keep-try-run it ends well" "0" "${CODE}"
 check "and says where they are" line 'Kept +the project "Workforce check: every agent" is on the Projects page, and its workflow on the Workflows page'
 is "they are kept" "$((${before%% *} + 2)) projects, $((WORKFLOWS + 1)) workflows" "$(left)"
+# What the projects made, as their pages show it (from 1.12): asked without a file.
+run -- --user boss --inventory-only --try-results
+is "what the projects made is said, and it ends well" "0" "${CODE}"
+check "  under its own heading" line '^What the projects made$'
+check "  each project with its files and what kind they are" line '^  ok +"Workforce check: every agent" \((succeeded|review)\): [0-9]+ files? \([0-9]+ document'
+check_not "  nothing is built: none of them is something that is built" line 'built with|could not be built'
+run -- --user boss --inventory-only --try-results --dry-run
+check "a dry run says that no project was looked at" line 'Dry run: no project was looked at or built\.'
 python3 - "${FILE}" "${WORK}/no-try.json" << 'PYTHON_END'
 import json, sys
 d = json.load(open(sys.argv[1]))

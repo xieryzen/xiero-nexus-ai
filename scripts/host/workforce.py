@@ -116,10 +116,20 @@
 #                        conversation: whether the app reaches it over SSH
 #                        from where it runs. Nothing is signed in to and
 #                        nothing is kept. Needs to sign in as an owner.
+#   --try-results        Afterwards, say what the projects of the account that
+#                        signed in made, as their pages show it: the files,
+#                        the web site among them and whether it is shown to a
+#                        visitor in its sandbox, the packages that were built,
+#                        and how each project is built. From version 1.12.
+#   --try-build          The same, and every project that is built (a Gradle
+#                        or a Maven project) and has no package of its files
+#                        as they are is built now, in the runner: its package
+#                        is kept as on the project page. A build that fails
+#                        is said with the end of what it printed.
 #   --inventory-only     Say what the app has, and stop. No file is needed.
-#                        With --try-assistant, --try-assistant-all or
-#                        --try-ssh: say it, do those, and stop; the workforce
-#                        is not looked at.
+#                        With --try-assistant, --try-assistant-all, --try-ssh,
+#                        --try-results or --try-build: say it, do those, and
+#                        stop; the workforce is not looked at.
 #
 # In the file, a skill can also be one of your own: `"my-skill": {"uploaded":
 # true}` names a skill that is uploaded on the Skills page (or with
@@ -2497,6 +2507,106 @@ def try_ssh(app, host, port):
     return 1
 
 
+def page_headers(app, path):
+    """What a visitor without a session gets at an address of the app: the status and the headers, with redirects followed."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(app.url + path, method="GET", headers={"user-agent": AGENT})
+    try:
+        response = opener.open(request, timeout=30)
+    except urllib.error.HTTPError as err:
+        response = err
+    except (urllib.error.URLError, socket.timeout, ConnectionError, OSError) as err:
+        return 0, {}, str(getattr(err, "reason", err))
+    try:
+        body = response.read(200000)
+    except (socket.timeout, ConnectionError, OSError):
+        body = b""
+    return response.getcode(), dict((key.lower(), value) for key, value in response.headers.items()), body.decode("utf-8", "replace")
+
+
+def try_results(app, build):
+    """What the projects made, as their pages show it: the files, the web site among them and whether it is
+    shown, the packages. With `build`, the ones that are built are built now. Returns how many things failed."""
+    head("What the projects made" + (", and building the ones that are built" if build else ""))
+    status, data = app.call("GET", "/api/projects")
+    projects = (data or {}).get("projects") if isinstance(data, dict) else None
+    if status != 200 or not isinstance(projects, list):
+        row("FAILED", "the projects could not be listed (%s%s)." % (status, reason_of(data)))
+        return 1
+    if not projects:
+        row("Nothing", "this account sees no project.")
+        return 0
+    failed = 0
+    for project in projects[:40]:
+        name = '"%s" (%s)' % (short(project.get("title") or "?", 60), project.get("status") or "?")
+        status, data = app.call("GET", "/api/projects/%s/result" % project["id"])
+        if status == 404 and not isinstance((data or {}).get("error") if isinstance(data, dict) else None, dict):
+            row("FAILED", "this version of the app does not say what a project made (it does from 1.12).")
+            return failed + 1
+        result = (data or {}).get("result") if isinstance(data, dict) else None
+        if status != 200 or not isinstance(result, dict):
+            row("FAILED", "%s: its result could not be read (%s%s)." % (name, status, reason_of(data)))
+            failed += 1
+            continue
+        files = result.get("files") or []
+        built = result.get("built") or []
+        site = result.get("site")
+        plan = result.get("build")
+        if not files and not built:
+            row("nothing", "%s: no files yet." % name)
+            continue
+        kinds = {}
+        for item in files:
+            kinds[item.get("kind") or "?"] = kinds.get(item.get("kind") or "?", 0) + 1
+        row("ok", "%s: %s (%s)%s%s" % (
+            name, plural(len(files), "file"), ", ".join("%d %s" % (count, kind if count == 1 or kind in ("code", "data", "text", "other", "?") else kind + "s") for kind, count in sorted(kinds.items())),
+            "; a web site that starts at %s, %s" % (site.get("entry"), plural(len(site.get("pages") or []), "page")) if site else "",
+            "; built: %s" % ", ".join("%s (%d bytes%s)" % (b.get("path"), b.get("size") or 0, "" if b.get("current") else ", from the files as they were") for b in built) if built else ""))
+        preview = result.get("preview")
+        if site and preview:
+            # As the frame of the project page asks for it: without a session.
+            code, headers, body = page_headers(app, preview["base"] + urllib.parse.quote(site["entry"]))
+            policy = headers.get("content-security-policy", "")
+            if code == 200 and policy.startswith("sandbox ") and "allow-same-origin" not in policy and "text/html" in headers.get("content-type", ""):
+                more("its site is shown: %s answers without a session, as a page in a sandbox (%d characters)." % (site["entry"], len(body)), indent=15)
+            else:
+                row("FAILED", "%s: its site is not shown as it should be: %s answered %s, as %s, with the policy \"%s\"." % (
+                    name, site["entry"], code or body, headers.get("content-type", "nothing"), short(policy, 80)))
+                failed += 1
+        if not plan:
+            continue
+        how = (plan.get("plan") or {}).get("label") or "?"
+        last = plan.get("last")
+        said = "never built" if not last else "the last build %s%s" % (
+            "succeeded" if last.get("ok") else "failed (exit code %s)" % last.get("exitCode"), "" if last.get("current") else ", on the files as they were")
+        if not plan.get("runner"):
+            more("it is built with %s (%s); this server has no runner to build with (scripts/host/runner-service.sh sets one up)." % (how, said), indent=15)
+            continue
+        if not build or (last and last.get("ok") and last.get("current")):
+            more("it is built with %s: %s." % (how, said), indent=15)
+            continue
+        started = time.time()
+        status, data = app.call("POST", "/api/projects/%s/build" % project["id"], {}, timeout=3700)
+        outcome = (data or {}).get("build") if isinstance(data, dict) else None
+        took = "%d s" % round(time.time() - started)
+        if status == 200 and isinstance(outcome, dict) and outcome.get("ok"):
+            kept = outcome.get("kept") or []
+            more("built with %s in %s: %s." % (how, took, ", ".join("%s (%d bytes)" % (k.get("path"), k.get("size") or 0) for k in kept) or "it left no package behind"), indent=15)
+        elif status == 200 and isinstance(outcome, dict):
+            row("FAILED", "%s: the build with %s failed after %s (%s). The end of what it said:" % (
+                name, how, took, "its time was up" if outcome.get("timedOut") else "exit code %s" % outcome.get("exitCode")))
+            for line in str(outcome.get("log") or "").strip().splitlines()[-25:]:
+                more(short(line, 300), indent=15)
+            more("On the project page, \"Let the AI fix it\" gives the build to the agent that wrote it.", indent=15)
+            failed += 1
+        else:
+            row("FAILED", "%s: it could not be built (%s%s)." % (name, status, reason_of(data)))
+            failed += 1
+    if len(projects) > 40:
+        more("%d more projects are not looked at." % (len(projects) - 40))
+    return failed
+
+
 def try_run(state, definition, slots, keep):
     """Small projects done by the models of the file. Returns how many things failed."""
     spec = definition.get("tryRun")
@@ -2685,6 +2795,8 @@ def options_from(argv):
     parser.add_argument("--try-assistant-all", action="store_true")
     parser.add_argument("--mark-tools", action="store_true")
     parser.add_argument("--try-ssh", default="")
+    parser.add_argument("--try-results", action="store_true")
+    parser.add_argument("--try-build", action="store_true")
     parser.add_argument("--test-media", action="store_true")
     parser.add_argument("--keep-test-media", action="store_true")
     parser.add_argument("--inventory-only", action="store_true")
@@ -2893,6 +3005,8 @@ def not_tried(options, text):
         left.append("no project was run")
     if options.try_ssh:
         left.append("no machine was asked for its host key")
+    if options.try_results or options.try_build:
+        left.append("no project was looked at or built")
     return text % " and ".join(left) if left else ""
 
 
@@ -2905,6 +3019,8 @@ def more_checks(state, options):
         failed += try_assistant_all(state.read(), options.mark_tools)
     if options.try_ssh:
         failed += try_ssh(state.app, options.try_ssh[0], options.try_ssh[1])
+    if options.try_results or options.try_build:
+        failed += try_results(state.app, options.try_build)
     return failed
 
 
