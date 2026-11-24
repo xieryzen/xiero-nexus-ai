@@ -383,7 +383,7 @@ export function KnowledgeClient({
                     aria-current={c.id === selectedId ? "true" : undefined}
                     className={cn(
                       "w-full rounded-md border px-3 py-2.5 text-left transition",
-                      c.id === selectedId ? "border-signal/50 bg-signal/10" : "border-line hover:border-ink-3",
+                      c.id === selectedId ? "border-accent/60 bg-accent-soft" : "border-line hover:border-ink-3",
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
@@ -475,7 +475,7 @@ export function KnowledgeClient({
                       </ol>
                     ))}
                   <p className="mt-3 text-xs text-ink-3">
-                    Use it in <Link href="/dashboard/chat" className="text-signal hover:underline">Chat</Link> (the Knowledge button)
+                    Use it in <Link href="/dashboard/chat" className="text-accent-ink hover:underline">Chat</Link> (the Knowledge button)
                     {selected.visibility === "shared"
                       ? isAdmin
                         ? ", or give it to an agent on the Agents page."

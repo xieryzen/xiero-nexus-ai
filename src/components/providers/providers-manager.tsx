@@ -233,8 +233,8 @@ export function ProvidersManager({
       )}
 
       {!isAdmin && (
-        <p className={cn("mt-4 text-xs text-ink-3")}>
-          Provider configuration is restricted to administrators.
+        <p className={cn("mt-4 text-xs text-ink-3")} data-testid="providers-view-only">
+          Providers and their keys are changed by the owner of this installation. You can look at them here.
         </p>
       )}
     </div>

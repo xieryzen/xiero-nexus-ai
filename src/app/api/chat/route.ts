@@ -10,7 +10,9 @@ import { createChat, loadChat } from "@/lib/chat/store";
 import { isAnswering, runChatTurn } from "@/lib/chat/turn";
 import { requireAppChoices, requireChatChoices } from "@/lib/model-choice";
 import { getClientMeta } from "@/lib/request";
-import { seesSetup } from "@/lib/roles";
+import { assertFeature } from "@/lib/plans";
+import { tierOf } from "@/lib/roles";
+import { namedChatModel } from "@/lib/chat-models";
 import { textFor } from "@/lib/shown";
 import type { ChatMessage } from "@/lib/adapters/types";
 import {
@@ -51,9 +53,13 @@ export const POST = handle(async (req) => {
   const body = await parseBody(req, chatRequestSchema);
   assertTokensLeft(user.id); // 402 before anything is asked of a provider
   const kept = body.message !== undefined;
-  // Someone who is shown the setup names the model, or leaves it to the app.
-  // Anyone else gets the app's choice, whatever the request names.
-  const named = seesSetup(user.role) && body.modelRowId ? body.modelRowId : null;
+  // Answers that are based on one's documents are a feature of a plan.
+  if (body.collectionIds?.length) assertFeature(user, "knowledge");
+  // A conversation is answered by the model it names, when that is one the
+  // account is offered and its role may choose (chat-models.ts), or by the
+  // app's choice among the models of that role.
+  const tier = tierOf(user);
+  const named = body.modelRowId ? namedChatModel(user, body.modelRowId) : null;
   const candidates: ResolvedModel[] = [];
   if (named) {
     candidates.push(resolveChatModel(named)); // throws safe errors
@@ -62,7 +68,7 @@ export const POST = handle(async (req) => {
     // asked, since nobody is there to pick another model by hand. A
     // conversation that works with tools asks the models that take them first.
     let problem: unknown = null;
-    for (const id of (kept ? requireChatChoices() : requireAppChoices("chat")).slice(0, CHOICES_TRIED)) {
+    for (const id of (kept ? requireChatChoices(tier) : requireAppChoices("chat", tier)).slice(0, CHOICES_TRIED)) {
       try {
         candidates.push(resolveChatModel(id));
       } catch (err) {

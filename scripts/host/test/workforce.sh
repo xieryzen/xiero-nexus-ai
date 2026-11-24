@@ -749,6 +749,18 @@ check "another role than it has is reported" line 'Account "rina" is in the app 
 is "  and left as it is" "owner" "$(ask /api/admin/users '[u["role"] for u in d["users"] if u["username"] == "rina"][0]')"
 run -- --user boss --file "${FILE}" --yes --update --only accounts --account rina --account-email rina@example.test --account-role admin
 is "with --update it is changed" "admin" "$(ask /api/admin/users '[u["role"] for u in d["users"] if u["username"] == "rina"][0]')"
+# From version 2.0 a user has a plan, and an account is asked for by it.
+run NEXUS_ACCOUNT_PASSWORD="the-first-password-of-putu" -- --user boss --file "${FILE}" --yes --only accounts --account putu --account-email putu@example.test --account-role pro
+check "an account is asked for by its plan" line 'done +Account "putu" <putu@example\.test>: add it, as a user with the plan Pro\.'
+is "  it is a user with that plan, and has what the plan has a month" "user pro pro 25000000" "$(ask /api/admin/users '[" ".join([u["role"], u["plan"], u["tier"], str(u["tokenLimit"])]) for u in d["users"] if u["username"] == "putu"][0]')"
+run -- --user boss --file "${FILE}" --yes --only accounts --account putu --account-email putu@example.test --account-role pro
+check "  a second time it is as asked" says 'account "putu" (a user with the plan Pro)'
+run -- --user boss --file "${FILE}" --yes --only accounts --account putu --account-email putu@example.test --account-role user
+check "  asked for as a user, its plan is left as it is" says 'account "putu" (a user)'
+run -- --user boss --file "${FILE}" --yes --update --only accounts --account putu --account-email putu@example.test --account-role ultra
+is "  with --update its plan is changed" "user ultra" "$(ask /api/admin/users '[" ".join([u["role"], u["tier"]]) for u in d["users"] if u["username"] == "putu"][0]')"
+PUTU_ID="$(ask /api/admin/users '[u["id"] for u in d["users"] if u["username"] == "putu"][0]')"
+api DELETE "/api/admin/users/${PUTU_ID}" > /dev/null
 run -- --user boss --file "${FILE}" --yes --only accounts --account sari --account-email sari@example.test
 is "a new account without a password is refused" "1" "${CODE}"
 check "  with where the password goes" says "NEXUS_ACCOUNT_PASSWORD in the environment, at least 10 characters"

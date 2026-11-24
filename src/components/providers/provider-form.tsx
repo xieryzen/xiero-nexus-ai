@@ -345,7 +345,7 @@ export function ProviderForm({
           />
           <button
             type="button"
-            className="text-xs text-signal hover:underline"
+            className="text-xs text-accent-ink hover:underline"
             onClick={() => setConfig(EXAMPLE_CONFIG)}
           >
             Start from the example (Ollama’s own chat API)

@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireSetupOwner } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -20,7 +20,7 @@ function load(id: string) {
 }
 
 export const PATCH = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const existing = load(params.id!);
   const body = await parseBody(req, modelUpdateSchema);
@@ -37,6 +37,8 @@ export const PATCH = handle(async (req, { params }) => {
     "pricePerSecond",
     "pricePerMChars",
     "notes",
+    "minTier",
+    "position",
   ] as const) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
@@ -62,7 +64,7 @@ export const PATCH = handle(async (req, { params }) => {
 });
 
 export const DELETE = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const existing = load(params.id!);
   db.delete(models).where(eq(models.id, existing.id)).run();

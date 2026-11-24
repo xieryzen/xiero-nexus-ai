@@ -6,6 +6,7 @@ import { loadOperableProject, loadOwnedProject } from "@/lib/project-access";
 import { getClientMeta } from "@/lib/request";
 import { createSchedule, listSchedules, serializeSchedule } from "@/lib/schedules";
 import { scheduleCreateSchema } from "@/lib/validation";
+import { assertFeatureFor } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,8 @@ export const POST = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
   const project = loadOperableProject(params.id!, user);
+  // A schedule runs the project for the account it belongs to: a feature of that account's plan.
+  assertFeatureFor(project.createdBy, "automation");
   const body = await parseBody(req, scheduleCreateSchema);
   // What signs in is taken out of the instruction before it is stored (src/lib/access).
   const taken = body.input ? await takeAccessForProject(user, project, body.input, { ip, userAgent }) : null;

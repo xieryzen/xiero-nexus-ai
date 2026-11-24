@@ -295,7 +295,7 @@ export function ProjectResultCard({
               <ul className="mb-3 divide-y divide-line rounded-md border border-line">
                 {built.map((b) => (
                   <li key={b.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5">
-                    <Icon name="package" size={18} className="shrink-0 text-signal" />
+                    <Icon name="package" size={18} className="shrink-0 text-accent-ink" />
                     <div className="min-w-0 flex-1">
                       <p className="mono truncate text-sm text-ink" title={b.path}>
                         {b.name}
@@ -367,7 +367,7 @@ export function ProjectResultCard({
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       {last.log && (
-                        <button type="button" onClick={() => setShowLog(!showLog)} className="text-xs font-medium text-signal hover:underline" aria-expanded={showLog}>
+                        <button type="button" onClick={() => setShowLog(!showLog)} className="text-xs font-medium text-accent-ink hover:underline" aria-expanded={showLog}>
                           {showLog ? "Hide" : "View"} what the build said
                         </button>
                       )}
@@ -419,7 +419,7 @@ export function ProjectResultCard({
                               aria-current={f.path === selected ? "true" : undefined}
                               className={cn(
                                 "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-surface-2",
-                                f.path === selected ? "bg-signal/10 text-ink" : "text-ink-2",
+                                f.path === selected ? "bg-accent-soft text-ink" : "text-ink-2",
                               )}
                             >
                               <Icon name={KIND_ICON[f.kind]} size={13} className="shrink-0 text-ink-3" />

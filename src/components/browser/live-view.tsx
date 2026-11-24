@@ -232,7 +232,7 @@ export function LiveView({ id, initial, seesBrowserPage = true }: { id: string; 
           <p className="mono min-w-0 flex-1 truncate text-xs text-ink-3" data-testid="live-url">{pageUrl || "…"}</p>
         </header>
         <div
-          className="relative bg-black/40 outline-none focus:ring-2 focus:ring-signal/60"
+          className="relative bg-black/40 outline-none focus:ring-2 focus:ring-accent/40"
           tabIndex={0}
           onKeyDown={onKey}
           role="application"

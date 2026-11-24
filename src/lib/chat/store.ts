@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { chatMessages, chats, type Chat, type ChatLine } from "@/db/schema";
 import type { ChatMessage } from "../adapters/types";
@@ -18,6 +18,8 @@ export interface ChatSummary {
   id: string;
   title: string;
   messages: number;
+  /** Pinned by its account: it stays on top of the list. */
+  pinned: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -70,6 +72,7 @@ export function listChats(userId: string, limit = 100): ChatSummary[] {
     id: row.id,
     title: row.title,
     messages: counts.get(row.id) ?? 0,
+    pinned: row.pinnedAt !== null,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
   }));
@@ -93,7 +96,15 @@ export function createChat(userId: string, opts: { title?: string; modelRowId?: 
     .returning()
     .get();
   // Beyond the number kept, the conversations that were written in longest ago make way.
-  const old = db.select({ id: chats.id }).from(chats).where(eq(chats.userId, userId)).orderBy(desc(chats.updatedAt)).limit(1000).offset(CHATS_KEPT).all();
+  // A pinned one stays.
+  const old = db
+    .select({ id: chats.id })
+    .from(chats)
+    .where(and(eq(chats.userId, userId), isNull(chats.pinnedAt)))
+    .orderBy(desc(chats.updatedAt))
+    .limit(1000)
+    .offset(CHATS_KEPT)
+    .all();
   if (old.length > 0) db.delete(chats).where(inArray(chats.id, old.map((r) => r.id))).run();
   return row;
 }
@@ -104,6 +115,14 @@ export function renameChat(userId: string, id: string, title: string): Chat {
   if (!clean) throw Errors.badRequest("Enter a name for the conversation.");
   db.update(chats).set({ title: clean }).where(eq(chats.id, chat.id)).run();
   return { ...chat, title: clean };
+}
+
+/** Pin a conversation to the top of its account's list, or let it go again. Its place among the others does not change. */
+export function pinChat(userId: string, id: string, pinned: boolean): Chat {
+  const chat = loadChat(userId, id);
+  const pinnedAt = pinned ? (chat.pinnedAt ?? new Date()) : null;
+  db.update(chats).set({ pinnedAt }).where(eq(chats.id, chat.id)).run();
+  return { ...chat, pinnedAt };
 }
 
 export function deleteChat(userId: string, id: string): void {

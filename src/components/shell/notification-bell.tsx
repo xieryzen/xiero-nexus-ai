@@ -99,7 +99,7 @@ export function NotificationBell() {
     <div className="relative" ref={box}>
       <button
         type="button"
-        className="btn-ghost relative p-2"
+        className="relative rounded-lg p-2 text-ink-2 transition hover:bg-ink/[0.06] hover:text-ink"
         aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
         aria-expanded={open}
         aria-haspopup="true"
@@ -112,7 +112,7 @@ export function NotificationBell() {
         <Icon name="bell" />
         {unread > 0 && (
           <span
-            className="absolute right-0.5 top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-signal px-1 text-[10px] font-semibold leading-none text-canvas"
+            className="absolute right-0.5 top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-signal px-1 text-[10px] font-semibold leading-none text-signal-ink"
             data-testid="unread-count"
           >
             {unread > 9 ? "9+" : unread}
@@ -122,7 +122,7 @@ export function NotificationBell() {
 
       {open && (
         <div
-          className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-line bg-surface shadow-xl animate-fade-in"
+          className="absolute right-0 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-line bg-surface shadow-pop animate-fade-in"
           role="dialog"
           aria-label="Notifications"
         >

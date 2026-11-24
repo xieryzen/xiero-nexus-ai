@@ -43,7 +43,8 @@
 #   --only <parts>       accounts, providers, models, skills, agents, teams,
 #                        workflows (separated by commas).
 #   --account <name>     An account the app is to have, with --account-email
-#                        <address> and --account-role owner|admin|user. Its
+#                        <address> and --account-role owner|admin|user (from
+#                        version 2.0 also a plan: free|pro|plus|ultra). Its
 #                        password comes in NEXUS_ACCOUNT_PASSWORD, or sealed:
 #   --account-password-sealed <text>
 #                        The password of that account, sealed for this node

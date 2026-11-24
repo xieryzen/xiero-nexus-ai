@@ -52,7 +52,7 @@ export function TwoFactorForm() {
             }}
             className={cn(
               "flex-1 rounded px-3 py-1.5 font-medium transition",
-              mode === m ? "bg-signal text-signal-ink" : "text-ink-2 hover:text-ink",
+              mode === m ? "bg-primary text-primary-ink" : "text-ink-2 hover:text-ink",
             )}
           >
             {m === "totp" ? "Authenticator" : "Recovery code"}

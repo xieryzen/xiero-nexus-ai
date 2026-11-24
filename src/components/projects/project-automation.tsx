@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { describeCron, nextRuns, scheduleProblem } from "@/lib/cron";
 import { keptLine, type Kept } from "@/lib/access/rules";
@@ -66,6 +67,7 @@ export function ProjectAutomation({
   initialStandIns,
   showStandIns = false,
   refreshKey,
+  schedulesNotInPlan = null,
 }: {
   projectId: string;
   initialSchedules: ScheduleDTO[];
@@ -77,6 +79,8 @@ export function ProjectAutomation({
   showStandIns?: boolean;
   /** Changes when a run ends, so that the history is read again. */
   refreshKey: number;
+  /** Said in the place of "Add schedule" when the plan of the project's account has no schedules. */
+  schedulesNotInPlan?: string | null;
 }) {
   const [schedules, setSchedules] = useState(initialSchedules);
   const [runs, setRuns] = useState(initialRuns);
@@ -228,13 +232,21 @@ export function ProjectAutomation({
         title="Schedules"
         description="Run this project by itself. The server starts the run at the time; no page has to be open."
         actions={
-          !adding ? (
+          !adding && !schedulesNotInPlan ? (
             <Button variant="ghost" onClick={() => setAdding(true)}>
               <Icon name="plus" /> Add schedule
             </Button>
           ) : undefined
         }
       >
+        {schedulesNotInPlan && (
+          <p className="mb-4 text-sm text-ink-2" data-testid="schedules-not-in-plan">
+            {schedulesNotInPlan}{" "}
+            <Link href="/dashboard/plans" className="font-medium text-accent-ink hover:underline">
+              See the plans
+            </Link>
+          </p>
+        )}
         {adding && (
           <form onSubmit={add} className="mb-4 space-y-4 rounded-md border border-line bg-surface-2/40 p-4">
             <div className="grid gap-4 sm:grid-cols-3">
@@ -380,7 +392,7 @@ export function ProjectAutomation({
                     {run.error && <p className="mt-1 text-xs text-danger">{run.error}</p>}
                   </div>
                   {run.hasDeliverable && (
-                    <button type="button" className="text-xs font-medium text-signal hover:underline" onClick={() => show(run)}>
+                    <button type="button" className="text-xs font-medium text-accent-ink hover:underline" onClick={() => show(run)}>
                       {shown?.id === run.id ? "Hide" : "View"} what it delivered
                     </button>
                   )}

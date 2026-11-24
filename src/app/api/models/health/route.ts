@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireSetupOwner } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { healthStatus, runHealthRound } from "@/lib/model-health";
@@ -27,7 +27,7 @@ const runSchema = z.object({
  * model lists; one that passes is offered again.
  */
 export const POST = handle(async (req) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, runSchema);
   const limit = rateLimit(`models:health:${user.id}`, 30, 10 * 60_000);

@@ -6,6 +6,7 @@ import { adapterIsImplemented, getAdapter } from "./adapters";
 import { resolveMediaApi, type MediaApi } from "./adapters/media-protocol";
 import { MEDIA_CAPABILITY, isMediaOnly } from "./capabilities";
 import { isFailing } from "./model-health-rules";
+import type { Tier } from "./roles";
 
 /**
  * The models a user can pick from: enabled, on an enabled provider whose
@@ -29,6 +30,17 @@ export interface UsableModel {
   pricePerMChars: number | null;
   /** Whether its provider's adapter can pass tools on to the model. */
   tools: boolean;
+  providerId: string;
+  /** Where its provider stands among the providers: the lowest first. */
+  providerPriority: number;
+  /** Marked for the work of users. */
+  forUsers: boolean;
+  /** The lowest role that may choose it in a conversation. */
+  minTier: Tier;
+  /** Where an owner put it among the models of its provider. */
+  position: number | null;
+  outputPricePerMTok: number | null;
+  contextWindow: number | null;
 }
 
 export function usableModels(): UsableModel[] {
@@ -41,6 +53,13 @@ export function usableModels(): UsableModel[] {
       pricePerSecond: models.pricePerSecond,
       pricePerMChars: models.pricePerMChars,
       lastTestStatus: models.lastTestStatus,
+      forUsers: models.forUsers,
+      minTier: models.minTier,
+      position: models.position,
+      outputPricePerMTok: models.outputPricePerMTok,
+      contextWindow: models.contextWindow,
+      providerId: providers.id,
+      providerPriority: providers.priority,
       providerName: providers.name,
       adapter: providers.adapter,
       baseUrl: providers.baseUrl,
@@ -73,6 +92,13 @@ export function usableModels(): UsableModel[] {
     pricePerSecond: m.pricePerSecond,
     pricePerMChars: m.pricePerMChars,
     tools: getAdapter(m.adapter).supports.includes("tool_calling"),
+    providerId: m.providerId,
+    providerPriority: m.providerPriority,
+    forUsers: m.forUsers,
+    minTier: m.minTier,
+    position: m.position,
+    outputPricePerMTok: m.outputPricePerMTok,
+    contextWindow: m.contextWindow,
   }));
 }
 

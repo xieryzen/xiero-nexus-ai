@@ -1,4 +1,5 @@
 import { modelFor } from "@/lib/model-choice";
+import { assertFeature } from "@/lib/plans";
 import { seesSetup } from "@/lib/roles";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
@@ -24,6 +25,7 @@ export const dynamic = "force-dynamic";
  */
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "studio_video");
   maybeSweep();
   const limit = rateLimit(`media:video:${user.id}`, 10, 60_000);
   if (!limit.ok) {
@@ -47,7 +49,7 @@ export const POST = handle(async (req) => {
 
   const asset = await startVideo({
     userId: user.id,
-    modelRowId: modelFor(user.role, body.modelRowId, "video"),
+    modelRowId: modelFor(user, body.modelRowId, "video"),
     prompt: body.prompt,
     durationSeconds: body.durationSeconds,
     aspectRatio: body.aspectRatio,

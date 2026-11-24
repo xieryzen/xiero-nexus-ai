@@ -9,8 +9,8 @@ import { Errors } from "@/lib/errors";
 import { rateLimit } from "@/lib/ratelimit";
 import { getClientMeta } from "@/lib/request";
 import { assertSecureTransport, createSession, setSessionCookie } from "@/lib/session";
-import { defaultTokenLimit } from "@/lib/token-rules";
 import { registerSchema } from "@/lib/validation";
+import { defaultPlan } from "@/lib/plan-rules";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +47,8 @@ export const POST = handle(async (req) => {
       email: body.email,
       passwordHash: hashPassword(body.password),
       role,
-      tokenLimit: defaultTokenLimit(),
+      // Someone who registers is a user with the plan new accounts have: Free, unless DEFAULT_PLAN names another.
+      plan: defaultPlan(),
     })
     .returning()
     .get();

@@ -2,27 +2,158 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  /* Control-room palette (RGB triplets for Tailwind <alpha-value>) */
-  --canvas: 9 11 14;
-  --surface: 17 20 26;
-  --surface-2: 23 27 34;
-  --line: 38 43 52;
-  --line-strong: 56 63 75;
-  --ink: 233 237 243;
-  --ink-2: 159 167 180;
-  --ink-3: 109 117 130;
-  --signal: 245 181 68; /* amber */
-  --signal-ink: 26 18 4;
-  --ok: 61 196 134;
-  --warn: 232 170 60;
-  --danger: 240 94 94;
-  --info: 96 165 250;
+/*
+ * The typefaces, served by the app itself (fonts/LICENSE.txt): a geometric
+ * sans for the controls and a serif for what is read. No request leaves for
+ * a font service.
+ */
+@font-face {
+  font-family: "Nexus Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("./fonts/figtree-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Nexus Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("./fonts/figtree-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "Nexus Serif";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url("./fonts/source-serif-4-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "Nexus Serif";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url("./fonts/source-serif-4-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "Nexus Serif";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 200 900;
+  src: url("./fonts/source-serif-4-latin-wght-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+/*
+ * The colours of the app, as RGB triplets for Tailwind's <alpha-value>.
+ * In the dark: a near-black page, cards a step lighter, a sidebar a step
+ * darker. In the light: warm paper and white cards. Three colours carry
+ * meaning: the page's own black or white for what is pressed (primary), a
+ * blue for what is on or chosen (accent), and a clay orange for the mark, the
+ * field that is written in and the button that sends (signal).
+ * `data-theme` on <html> says which holds; without it, what the device
+ * prefers does (the script in layout.tsx sets it before the first paint,
+ * from what the reader chose under Settings).
+ */
+:root {
+  --canvas: 250 249 245;
+  --sidebar: 244 243 236;
+  --surface: 255 255 255;
+  --surface-2: 240 238 230;
+  --surface-3: 226 223 213;
+  --field: 255 255 255;
+  --bubble: 240 238 230;
+  --code: 245 244 237;
+  --line: 232 230 220;
+  --line-strong: 209 207 197;
+  --ink: 20 20 19;
+  --ink-2: 61 61 58;
+  --ink-3: 115 114 108;
+  --primary: 20 20 19;
+  --primary-ink: 250 249 245;
+  --signal: 201 100 66;
+  --signal-ink: 255 255 255;
+  --accent: 36 120 214;
+  --accent-ink: 26 99 189;
+  --accent-soft: 219 234 253;
+  --ok: 43 122 80;
+  --warn: 166 100 10;
+  --danger: 186 52 42;
+  --info: 37 99 175;
+  --shadow: 20 20 19;
+  color-scheme: light;
+
+  --font-sans: "Nexus Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  --font-serif: "Nexus Serif", ui-serif, "Iowan Old Style", "Palatino Linotype",
+    Georgia, Cambria, "Times New Roman", Times, serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code",
     Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+:root[data-theme="dark"] {
+  --canvas: 21 21 21;
+  --sidebar: 17 17 17;
+  --surface: 32 32 30;
+  --surface-2: 49 49 47;
+  --surface-3: 61 61 58;
+  --field: 26 26 24;
+  --bubble: 44 44 42;
+  --code: 15 15 15;
+  --line: 42 42 40;
+  --line-strong: 61 60 58;
+  --ink: 250 250 248;
+  --ink-2: 195 194 189;
+  --ink-3: 153 150 145;
+  --primary: 249 249 247;
+  --primary-ink: 21 21 21;
+  --signal: 218 119 87;
+  --signal-ink: 255 255 255;
+  --accent: 41 120 213;
+  --accent-ink: 109 168 236;
+  --accent-soft: 3 32 66;
+  --ok: 110 190 140;
+  --warn: 214 152 40;
+  --danger: 236 126 125;
+  --info: 109 168 236;
+  --shadow: 0 0 0;
+  color-scheme: dark;
+}
+
+/* Until the script has run, and where scripts are off: what the device prefers. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --canvas: 21 21 21;
+    --sidebar: 17 17 17;
+    --surface: 32 32 30;
+    --surface-2: 49 49 47;
+    --surface-3: 61 61 58;
+    --field: 26 26 24;
+    --bubble: 44 44 42;
+    --code: 15 15 15;
+    --line: 42 42 40;
+    --line-strong: 61 60 58;
+    --ink: 250 250 248;
+    --ink-2: 195 194 189;
+    --ink-3: 153 150 145;
+    --primary: 249 249 247;
+    --primary-ink: 21 21 21;
+    --signal: 218 119 87;
+    --signal-ink: 255 255 255;
+    --accent: 41 120 213;
+    --accent-ink: 109 168 236;
+    --accent-soft: 3 32 66;
+    --ok: 110 190 140;
+    --warn: 214 152 40;
+    --danger: 236 126 125;
+    --info: 109 168 236;
+    --shadow: 0 0 0;
+    color-scheme: dark;
+  }
 }
 
 @layer base {
@@ -30,23 +161,25 @@
     border-color: rgb(var(--line));
   }
   html {
-    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
   body {
     background-color: rgb(var(--canvas));
     color: rgb(var(--ink));
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
   }
   ::selection {
-    background: rgb(var(--signal) / 0.3);
+    background: rgb(var(--signal) / 0.25);
   }
   :focus-visible {
     outline: 2px solid rgb(var(--signal) / 0.7);
     outline-offset: 2px;
-    border-radius: 4px;
+    border-radius: 6px;
   }
-  /* Thin, dark scrollbars that match the console */
+  /* Thin scrollbars in the colours of the page. */
   * {
     scrollbar-width: thin;
     scrollbar-color: rgb(var(--line-strong)) transparent;
@@ -60,6 +193,14 @@
     border-radius: 999px;
     border: 2px solid rgb(var(--canvas));
   }
+  /* A phone zooms into a field whose text is smaller than 16px: fields are 16px there. */
+  @media (max-width: 639px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px !important;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -72,33 +213,115 @@
 
 @layer components {
   .card {
-    @apply rounded-lg border border-line bg-surface shadow-panel;
+    @apply rounded-2xl border border-line bg-surface;
   }
   .label {
-    @apply block text-xs font-medium uppercase tracking-wider text-ink-3;
+    @apply block text-[13px] font-medium text-ink-2;
   }
+  /* A field: the clay border says which one is written in. */
   .input {
-    @apply w-full rounded-md border border-line bg-surface-2 px-3 py-2 text-sm text-ink
+    @apply w-full rounded-xl border border-line-strong bg-field px-3.5 py-2.5 text-sm text-ink
       placeholder:text-ink-3 focus:border-signal focus:outline-none focus:ring-1
-      focus:ring-signal/40 disabled:opacity-50;
+      focus:ring-signal disabled:opacity-50;
   }
+  /* Buttons are pills. The one that matters is the page's own black or white. */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2
       text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply btn bg-signal text-signal-ink hover:brightness-110 active:brightness-95;
+    @apply btn bg-primary text-primary-ink hover:opacity-90 active:opacity-80;
   }
   .btn-ghost {
-    @apply btn border border-line bg-transparent text-ink hover:bg-surface-2;
+    @apply btn bg-surface-2 text-ink hover:bg-surface-3;
   }
   .btn-danger {
-    @apply btn border border-danger/40 bg-transparent text-danger hover:bg-danger/10;
+    @apply btn bg-danger/10 text-danger hover:bg-danger/20;
   }
   .badge {
-    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-transparent px-2.5 py-0.5 text-xs font-medium;
+  }
+  /*
+   * A list of rows that belong together (settings, a sheet to choose from):
+   * each row a card of its own, a hair apart, the corners of the whole round.
+   */
+  .list-group {
+    @apply flex flex-col gap-0.5 overflow-hidden rounded-[20px];
+  }
+  .list-row {
+    @apply flex min-h-[3.25rem] w-full items-center gap-3.5 bg-surface px-4 py-3 text-left text-[15px] text-ink transition;
+  }
+  a.list-row:hover,
+  button.list-row:not(:disabled):hover {
+    @apply bg-surface-2/70;
+  }
+  /* The heading over such a list. */
+  .list-title {
+    @apply px-4 pb-2 pt-1 text-sm text-ink-2;
+  }
+  /* The button a page floats over its list on a phone: its main action. */
+  .fab {
+    @apply btn-primary fixed bottom-5 right-4 z-20 h-12 px-5 text-[15px] shadow-pop;
   }
   .mono {
     font-family: var(--font-mono);
   }
+  .serif {
+    font-family: var(--font-serif);
+  }
+  /* A row of a menu or of the sidebar. */
+  .nav-row {
+    @apply flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-ink transition
+      hover:bg-ink/[0.07];
+  }
+  .nav-row[aria-current="page"],
+  .nav-row[aria-current="true"] {
+    @apply bg-ink/[0.13] font-medium;
+  }
+  /* A button that is only an icon: large enough for a finger. */
+  .icon-btn {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-ink-2 transition
+      hover:bg-ink/[0.07] hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  /* What floats over the page: a menu, a list to choose from. */
+  .popover {
+    @apply rounded-2xl border border-line-strong bg-surface shadow-pop;
+  }
+}
+
+@layer utilities {
+  /* The room a phone keeps for its own bars. */
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  /* As tall as the screen is now, also where a phone's address bar comes and goes. */
+  .h-screen-d {
+    height: 100vh;
+    height: 100dvh;
+  }
+  .min-h-screen-d {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* An answer in a conversation: set as a text to read. */
+.prose-chat {
+  font-family: var(--font-serif);
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: rgb(var(--ink));
+}
+.prose-chat code,
+.prose-chat pre {
+  font-family: var(--font-mono);
 }

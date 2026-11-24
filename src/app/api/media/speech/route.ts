@@ -1,4 +1,5 @@
 import { modelFor } from "@/lib/model-choice";
+import { assertFeature } from "@/lib/plans";
 import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { Errors } from "@/lib/errors";
@@ -15,6 +16,7 @@ export const maxDuration = 300;
 /** Generate speech from text. Answers when the audio is stored, with the new asset. */
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "studio_voice");
   maybeSweep();
   const limit = rateLimit(`media:speech:${user.id}`, 20, 60_000);
   if (!limit.ok) {
@@ -23,7 +25,7 @@ export const POST = handle(async (req) => {
   const body = await parseBody(req, speechGenerateSchema);
   const asset = await generateSpeech({
     userId: user.id,
-    modelRowId: modelFor(user.role, body.modelRowId, "audio"),
+    modelRowId: modelFor(user, body.modelRowId, "audio"),
     text: body.text,
     voice: body.voice,
     format: body.format,

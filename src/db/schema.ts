@@ -56,11 +56,24 @@ export const users = sqliteTable(
     twoFactorConfirmedAt: integer("two_factor_confirmed_at", {
       mode: "timestamp_ms",
     }),
-    // The tokens of the account (v1.8, src/lib/token-rules.ts): how many it
-    // may use in all, which an owner sets, and how many it has used. The
-    // count only grows; an owner is not held to the limit.
-    tokenLimit: integer("token_limit").notNull().default(10_000_000),
+    // The plan of a user (v2.0, src/lib/roles.ts): with the role it makes the
+    // six roles of the pages. It says nothing for an admin or an owner.
+    plan: text("plan", { enum: ["free", "pro", "plus", "ultra"] })
+      .notNull()
+      .default("free"),
+    // The tokens of the account (v2.0, src/lib/token-rules.ts). It may use
+    // the allowance of its role in a calendar month, or its own where an
+    // owner set one here. `periodTokens` is what it used in the month
+    // `tokensPeriod` ("2026-11"), counted with the input weight; another
+    // month starts the count again. `tokensUsed` is every token it ever
+    // used, unweighted: for information.
+    tokenAllowance: integer("token_allowance"),
+    tokensPeriod: text("tokens_period").notNull().default(""),
+    periodTokens: integer("period_tokens").notNull().default(0),
     tokensUsed: integer("tokens_used").notNull().default(0),
+    // Before v2.0: the most an account could use in all. Read by nothing any
+    // more; kept so that the version before can still open this database.
+    tokenLimit: integer("token_limit").notNull().default(10_000_000),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -217,6 +230,15 @@ export const models = sqliteTable(
     // Marked for the work of users (v1.8): a user does not choose a model, the
     // app does, among the marked ones when there are any (model-choice.ts).
     forUsers: integer("for_users", { mode: "boolean" }).notNull().default(false),
+    // The lowest role that may choose the model in a conversation (v2.0,
+    // src/lib/roles.ts): free, pro, plus, ultra, admin or owner.
+    minTier: text("min_tier", { enum: ["free", "pro", "plus", "ultra", "admin", "owner"] })
+      .notNull()
+      .default("free"),
+    // Where an owner put it among the models of its provider (v2.0): the
+    // lowest number first. Null: by its name, the newest and highest first
+    // (src/lib/model-rank.ts).
+    position: integer("position"),
     notes: text("notes"),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -247,6 +269,20 @@ export const modelCapabilities = sqliteTable(
   }),
 );
 
+// ─── Settings of the installation ───────────────────────────────────────────
+
+/**
+ * What an owner set for the whole installation (v2.0), one row for each
+ * thing: under "plans" what each role has (src/lib/plan-rules.ts). The value
+ * is JSON; what is not set is what the app ships with.
+ */
+export const appSettings = sqliteTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedBy: text("updated_by").references(() => users.id, { onDelete: "set null" }),
+  updatedAt: updatedAt(),
+});
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -265,6 +301,8 @@ export const chats = sqliteTable(
       onDelete: "set null",
     }),
     systemPrompt: text("system_prompt"),
+    /** When its account pinned it to the top of its list (v2.0). Null: it is not pinned. */
+    pinnedAt: integer("pinned_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

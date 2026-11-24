@@ -103,6 +103,7 @@ export function StudioClient({
   initialNextOffset,
   isAdmin,
   project,
+  notInPlan,
 }: {
   imageModels: StudioModel[];
   videoModels: StudioModel[];
@@ -113,6 +114,8 @@ export function StudioClient({
   isAdmin: boolean;
   /** Set when the page shows what one project's runs produced. */
   project: { id: string; title: string } | null;
+  /** The kinds the plan of the account does not have, with what is said about each. */
+  notInPlan?: Partial<Record<"image" | "video" | "audio", string>>;
 }) {
   // ── Library ────────────────────────────────────────────────────────────────
   const [assets, setAssets] = useState(initialAssets);
@@ -575,7 +578,7 @@ export function StudioClient({
                                   aria-pressed={order >= 0}
                                   className={cn(
                                     "flex w-full items-center gap-2.5 rounded-md border p-2 text-left text-xs transition",
-                                    order >= 0 ? "border-signal/60 bg-signal/10" : "border-line hover:border-ink-3",
+                                    order >= 0 ? "border-accent/60 bg-accent-soft" : "border-line hover:border-ink-3",
                                   )}
                                 >
                                   {thumb(asset, "h-10 w-10 shrink-0")}
@@ -587,7 +590,7 @@ export function StudioClient({
                                     </span>
                                   </span>
                                   {order >= 0 && (
-                                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal text-[11px] font-semibold text-canvas">
+                                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent text-[11px] font-semibold text-white">
                                       {order + 1}
                                     </span>
                                   )}
@@ -632,7 +635,7 @@ export function StudioClient({
                                     aria-pressed={order >= 0}
                                     className={cn(
                                       "flex w-full items-center gap-2.5 rounded-md border p-2 text-left text-xs transition",
-                                      order >= 0 ? "border-signal/60 bg-signal/10" : "border-line hover:border-ink-3",
+                                      order >= 0 ? "border-accent/60 bg-accent-soft" : "border-line hover:border-ink-3",
                                     )}
                                   >
                                     {thumb(asset, "h-8 w-8 shrink-0")}
@@ -641,7 +644,7 @@ export function StudioClient({
                                       {asset.durationSeconds ? <span className="text-ink-3">{Math.round(asset.durationSeconds * 10) / 10}s</span> : null}
                                     </span>
                                     {order >= 0 && (
-                                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal text-[11px] font-semibold text-canvas">
+                                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-accent text-[11px] font-semibold text-white">
                                         {order + 1}
                                       </span>
                                     )}
@@ -711,6 +714,15 @@ export function StudioClient({
                     </div>
                   </>
                 )
+              ) : notInPlan?.[tab as "image" | "video" | "audio"] ? (
+                <div data-testid="studio-not-in-plan">
+                  <Alert tone="neutral">
+                    {notInPlan[tab as "image" | "video" | "audio"]}{" "}
+                    <Link href="/dashboard/plans" className="font-medium text-accent-ink hover:underline">
+                      See the plans
+                    </Link>
+                  </Alert>
+                </div>
               ) : models.length === 0 ? (
                 <Alert tone="warn">
                   {isAdmin
@@ -841,7 +853,7 @@ export function StudioClient({
                                   aria-label={`Start from: ${asset.prompt.slice(0, 80)}`}
                                   className={cn(
                                     "block rounded border-2 transition",
-                                    startImage?.id === asset.id ? "border-signal" : "border-transparent hover:border-ink-3",
+                                    startImage?.id === asset.id ? "border-accent" : "border-transparent hover:border-ink-3",
                                   )}
                                 >
                                   {thumb(asset, "h-16 w-16")}
@@ -930,7 +942,7 @@ export function StudioClient({
                     <button
                       type="button"
                       onClick={() => setShowAdvanced((v) => !v)}
-                      className="text-xs font-medium text-signal hover:underline"
+                      className="text-xs font-medium text-accent-ink hover:underline"
                     >
                       {showAdvanced ? "Hide" : "Show"} advanced options ({isAdmin ? "exact size, extra parameters" : "exact size"})
                     </button>
@@ -1006,7 +1018,7 @@ export function StudioClient({
               aria-pressed={filter === f}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs transition",
-                filter === f ? "border-signal/50 text-signal" : "border-line text-ink-2 hover:text-ink",
+                filter === f ? "border-accent/60 text-accent-ink" : "border-line text-ink-2 hover:text-ink",
               )}
             >
               {f === "all" ? "All" : f === "image" ? "Images" : f === "video" ? "Videos" : "Voice"}
@@ -1019,7 +1031,7 @@ export function StudioClient({
               aria-pressed={everyone}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs transition",
-                everyone ? "border-signal/50 text-signal" : "border-line text-ink-2 hover:text-ink",
+                everyone ? "border-accent/60 text-accent-ink" : "border-line text-ink-2 hover:text-ink",
               )}
               title="Administrators can see what every user generated"
             >

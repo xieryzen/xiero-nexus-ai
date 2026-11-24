@@ -3,9 +3,9 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import type { User } from "@/db/schema";
 import { Errors } from "./errors";
-import { isAdminRole, isOwnerRole } from "./roles";
-import { tokenSummary } from "./token-rules";
+import { isAdminRole, isOwnerRole, tierOf } from "./roles";
 import { readSession } from "./session";
+import { tokensOf } from "./tokens";
 
 export type SessionState =
   | { status: "none" }
@@ -59,21 +59,41 @@ export function requireOwner(message = "Only an owner manages accounts"): User {
   return user;
 }
 
+/**
+ * Require an owner for what sets the installation up: its providers, their
+ * keys and its models (v2.0). An admin is shown them and changes none.
+ */
+export function requireSetupOwner(): User {
+  return requireOwner("Only an owner changes the providers and the models. An admin is shown them.");
+}
+
 /** Public-safe shape of a user (never includes secrets). */
 export function publicUser(user: User) {
-  const tokens = tokenSummary(user);
+  const tokens = tokensOf(user);
   return {
     id: user.id,
     username: user.username,
     email: user.email,
+    /** owner, admin or user: as before 2.0. */
     role: user.role,
+    /** The plan of a user: free, pro, plus or ultra. Null for an admin and an owner. */
+    plan: user.role === "user" ? user.plan : null,
+    /** The role as the pages say it: free, pro, plus, ultra, admin or owner. */
+    tier: tierOf(user),
     status: user.status,
     twoFactorEnabled: user.twoFactorEnabled,
-    /** The most tokens the account may use in all. Null: it is not limited (an owner). */
+    /** The tokens the account may use in a calendar month. Null: it is not limited (an owner). */
     tokenLimit: tokens.limit,
+    /** Whether that is the account's own allowance, not the one of its role. */
+    tokenLimitIsOwn: tokens.custom,
+    /** What it used this month, as it is counted: input weighs less than output. */
     tokensUsed: tokens.used,
-    /** What is left of the limit. Null: not limited. */
+    /** What is left of the month. Null: not limited. */
     tokensLeft: tokens.left,
+    /** When the count starts again: the first of the next month, UTC. */
+    tokensRenewAt: new Date(tokens.renewsAt).toISOString(),
+    /** Every token the account ever used, unweighted. */
+    tokensUsedInAll: tokens.total,
     createdAt: user.createdAt,
   };
 }

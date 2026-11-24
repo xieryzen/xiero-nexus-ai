@@ -270,7 +270,7 @@ function RecoveryCodes({ codes, onDismiss }: { codes: string[]; onDismiss: () =>
   }
 
   return (
-    <div className="rounded-md border border-signal/40 bg-signal/10 p-4">
+    <div className="rounded-md border border-accent/60 bg-accent-soft p-4">
       <p className="text-sm font-medium text-ink">Save your recovery codes</p>
       <p className="mt-1 text-xs text-ink-2">
         Each code works once. Store them somewhere safe — they’re shown only now.

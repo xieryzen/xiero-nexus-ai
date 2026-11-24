@@ -11,6 +11,7 @@ import {
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
 import { documentCreateSchema } from "@/lib/validation";
 import { kickWorker } from "@/lib/worker";
+import { assertFeature } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,7 @@ export const GET = handle(async (_req, { params }) => {
  */
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
+  assertFeature(user, "knowledge");
   const collection = loadManagedCollection(params.id!, user);
   maybeSweep();
   const limit = rateLimit(`knowledge:add:${user.id}`, 60, 60_000);

@@ -21,7 +21,7 @@ const SCOPE_INFO: Record<ApiScope, { label: string; what: string }> = {
 function Secret({ label, value, note }: { label: string; value: string; note: string }) {
   const [copied, setCopied] = useState<boolean | null>(null);
   return (
-    <div className="rounded-md border border-signal/40 bg-signal/10 p-3">
+    <div className="rounded-md border border-accent/60 bg-accent-soft p-3">
       <p className="text-sm font-medium text-ink">{label}</p>
       <div className="mt-2 flex items-center gap-2">
         <code className="mono min-w-0 flex-1 select-all break-all rounded bg-canvas px-2.5 py-1.5 text-xs text-ink" data-testid="secret-value">
@@ -113,6 +113,7 @@ function WebhookCard({ initial }: { initial: WebhookDTO | null }) {
 
   return (
     <Card
+      id="notifications"
       title="Notification webhook"
       description="Send your notifications (a run finished, a video is ready, a schedule could not start) to an address of yours as well: a chat channel's incoming webhook, or your own service."
     >
@@ -182,12 +183,18 @@ function ApiKeysCard({
   models,
   baseUrl,
   chooses,
+  inPlan,
+  notInPlan,
 }: {
   initial: ApiKeyDTO[];
   models: { id: string; label: string }[];
   baseUrl: string;
   /** Whether a key names its models. A user's key does not: it sends "auto", and the app chooses. */
   chooses: boolean;
+  /** Whether the plan of the account has API keys. Without them no key is made, and the ones there do not answer. */
+  inPlan: boolean;
+  /** What is said where it has not. */
+  notInPlan?: string;
 }) {
   const [keys, setKeys] = useState(initial);
   const [open, setOpen] = useState(false);
@@ -251,10 +258,11 @@ function ApiKeysCard({
 
   return (
     <Card
+      id="api-keys"
       title="API keys"
       description="Use this server from your own programs. The API speaks the OpenAI format, so existing clients work when they are pointed at it. A key acts as you, within what it is allowed."
       actions={
-        !open ? (
+        !open && inPlan ? (
           <Button variant="ghost" onClick={() => setOpen(true)}>
             <Icon name="plus" /> New key
           </Button>
@@ -262,6 +270,17 @@ function ApiKeysCard({
       }
     >
       <div className="space-y-4">
+        {!inPlan && (
+          <div data-testid="keys-not-in-plan">
+            <Alert tone="neutral">
+              {notInPlan ?? "API keys are not part of your plan."}{" "}
+              <a href="/dashboard/plans" className="font-medium text-accent-ink hover:underline">
+                See the plans
+              </a>
+              {keys.length > 0 && " The keys you made are kept, and answer again when your plan has them."}
+            </Alert>
+          </div>
+        )}
         {error && <Alert tone="danger">{error}</Alert>}
         {created && (
           <>
@@ -288,7 +307,7 @@ function ApiKeysCard({
               <ul className="grid gap-1.5 sm:grid-cols-2">
                 {API_SCOPES.map((scope) => (
                   <li key={scope}>
-                    <label className={cn("flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-sm", scopes.has(scope) ? "border-signal/50 bg-signal/10" : "border-line")}>
+                    <label className={cn("flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-sm", scopes.has(scope) ? "border-accent/60 bg-accent-soft" : "border-line")}>
                       <input
                         type="checkbox"
                         className="mt-0.5 accent-current"
@@ -433,6 +452,8 @@ export function IntegrationsClient({
   models,
   baseUrl,
   chooses = true,
+  keysInPlan = true,
+  keysNotInPlan,
 }: {
   webhook: WebhookDTO | null;
   apiKeys: ApiKeyDTO[];
@@ -441,10 +462,13 @@ export function IntegrationsClient({
   baseUrl: string;
   /** Whether the account is shown the setup, and so names models. */
   chooses?: boolean;
+  /** Whether the plan of the account has API keys. */
+  keysInPlan?: boolean;
+  keysNotInPlan?: string;
 }) {
   return (
     <div className="mt-6 space-y-6">
-      <ApiKeysCard initial={apiKeys} models={models} baseUrl={baseUrl} chooses={chooses} />
+      <ApiKeysCard initial={apiKeys} models={models} baseUrl={baseUrl} chooses={chooses} inPlan={keysInPlan} notInPlan={keysNotInPlan} />
       <WebhookCard initial={webhook} />
     </div>
   );

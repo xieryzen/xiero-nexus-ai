@@ -75,7 +75,7 @@ export function RegisterForm({ blocked = false }: { blocked?: boolean }) {
       </form>
       <p className="mt-4 text-center text-sm text-ink-2">
         Already registered?{" "}
-        <Link href="/login" className="font-medium text-signal hover:underline">
+        <Link href="/login" className="font-medium text-accent-ink hover:underline">
           Sign in
         </Link>
       </p>

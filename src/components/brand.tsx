@@ -28,13 +28,40 @@ export function LogoMark({ size = 28 }: { size?: number }) {
   );
 }
 
+/**
+ * The mark of a new conversation and of the assistant: a hub with eight
+ * spokes that end in nodes, in the clay of the app. The "nexus", drawn large.
+ */
+export function NexusMark({ size = 44 }: { size?: number }) {
+  const spokes = [0, 45, 90, 135, 180, 225, 270, 315].map((angle, i) => {
+    const reach = i % 2 === 0 ? 19 : 13.5;
+    const rad = (angle * Math.PI) / 180;
+    // Rounded, so that the server and the browser write the same numbers.
+    return { x: Math.round((24 + reach * Math.cos(rad)) * 100) / 100, y: Math.round((24 + reach * Math.sin(rad)) * 100) / 100, r: i % 2 === 0 ? 3.1 : 2.5 };
+  });
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <g stroke="rgb(var(--signal))" strokeWidth="2.4" strokeLinecap="round">
+        {spokes.map((s, i) => (
+          <line key={i} x1="24" y1="24" x2={s.x} y2={s.y} />
+        ))}
+      </g>
+      <g fill="rgb(var(--signal))">
+        <circle cx="24" cy="24" r="4.6" />
+        {spokes.map((s, i) => (
+          <circle key={i} cx={s.x} cy={s.y} r={s.r} />
+        ))}
+      </g>
+    </svg>
+  );
+}
+
 export function Wordmark() {
   return (
     <span className="flex items-center gap-2.5">
-      <LogoMark />
-      <span className="text-[15px] font-semibold tracking-tight text-ink">
-        Xiero Nexus{" "}
-        <span className="text-signal">AI</span>
+      <NexusMark size={30} />
+      <span className="serif text-xl font-medium tracking-tight text-ink">
+        Xiero Nexus <span className="text-signal">AI</span>
       </span>
     </span>
   );

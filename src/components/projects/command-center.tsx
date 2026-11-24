@@ -44,6 +44,7 @@ export function CommandCenter({
   servers = [],
   siteAccounts = [],
   chooses = true,
+  mediaNotInPlan = null,
   standInsDefault = true,
 }: {
   initialProjects: ProjectDTO[];
@@ -60,6 +61,8 @@ export function CommandCenter({
    * installation can do, and the form asks only what the project may make.
    */
   chooses?: boolean;
+  /** Which kinds of media the plan of the account does not have, in a sentence. */
+  mediaNotInPlan?: string | null;
   /** Whether a run goes on with another model that works, as this installation is set. */
   standInsDefault?: boolean;
   /** Whether this server can join clips into one video (it has ffmpeg). */
@@ -188,8 +191,8 @@ export function CommandCenter({
   return (
     <div>
       <PageHeader
-        title="AI Manager"
-        description="Describe a goal. The Manager plans it into tasks and delegates to your agents."
+        title="Projects"
+        description="Describe a goal. The AI Manager plans it into tasks and hands them to the agents."
         actions={!open && canCreate ? <Button onClick={() => setOpen(true)}><Icon name="plus" /> New project</Button> : undefined}
       />
 
@@ -307,6 +310,14 @@ export function CommandCenter({
                       {chooses ? ", made with the app's own choice where none is named" : ""}. A media limit of 0 (advanced settings) means none.
                     </p>
                   )}
+                  {mediaNotInPlan && (
+                    <p className="text-xs text-ink-3" data-testid="media-not-in-plan">
+                      {mediaNotInPlan}{" "}
+                      <Link href="/dashboard/plans" className="font-medium text-accent-ink hover:underline">
+                        See the plans
+                      </Link>
+                    </p>
+                  )}
                   {mediaProblem && <Alert tone="warn">{mediaProblem}</Alert>}
                 </div>
               )}
@@ -325,7 +336,7 @@ export function CommandCenter({
                 </div>
               )}
 
-              <button type="button" onClick={() => setShowAdv((s) => !s)} className="text-xs font-medium text-signal hover:underline">
+              <button type="button" onClick={() => setShowAdv((s) => !s)} className="text-xs font-medium text-accent-ink hover:underline">
                 {showAdv ? "Hide" : "Show"} advanced settings (limits, memory, approval)
               </button>
               {showAdv && (

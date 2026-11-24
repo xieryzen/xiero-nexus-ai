@@ -3,6 +3,7 @@ import { AUTO_MODEL, listCollections } from "@/lib/knowledge/service";
 import { kindsAvailable } from "@/lib/model-choice";
 import { embeddingModelOptions } from "@/lib/model-options";
 import { KnowledgeClient } from "@/components/knowledge/knowledge-client";
+import { PlanNotice } from "@/components/plan-notice";
 import { isAdminRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,9 @@ export default function KnowledgePage({
   const collections = listCollections(user);
   const wanted = typeof searchParams.collection === "string" ? searchParams.collection : null;
   return (
-    <KnowledgeClient
+    <>
+      <PlanNotice account={user} feature="knowledge" />
+      <KnowledgeClient
       initialCollections={collections}
       // Someone who is shown the setup chooses the embedding model. A user
       // says only whether a collection is searched by meaning as well.
@@ -31,5 +34,6 @@ export default function KnowledgePage({
       initialSelectedId={collections.some((c) => c.id === wanted) ? wanted : (collections[0]?.id ?? null)}
       isAdmin={isAdminRole(user.role)}
     />
+    </>
   );
 }

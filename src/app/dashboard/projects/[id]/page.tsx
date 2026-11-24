@@ -11,10 +11,12 @@ import { chatModels } from "@/lib/model-options";
 import { listRuns, serializeRun } from "@/lib/runs";
 import { listSchedules, serializeSchedule } from "@/lib/schedules";
 import { tokensLeftFor } from "@/lib/tokens";
+import { notInPlan } from "@/lib/plan-rules";
+import { getPlanSettings, hasFeatureFor } from "@/lib/plans";
 import { serializeProject } from "@/lib/workforce";
 import { projectResult } from "@/lib/result";
 import { ProjectRunner } from "@/components/projects/project-runner";
-import { isAdminRole, seesSetup } from "@/lib/roles";
+import { isAdminRole, seesSetup, tierOf } from "@/lib/roles";
 import { assetFor, projectFor } from "@/lib/for-viewer";
 import { kindsAvailable, withRunModels } from "@/lib/model-choice";
 import { accountsFor, accountsOfProject, browsersOf } from "@/lib/browser/accounts";
@@ -116,6 +118,14 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       videoModelLabel={modelLabel(asRun.videoModelRowId, project.videoModelRowId)}
       speechModelLabel={modelLabel(asRun.speechModelRowId, project.speechModelRowId)}
       initialSchedules={listSchedules(project.id).map(serializeSchedule)}
+      // Schedules are a feature of a plan (v2.0): the plan of the account the project belongs to.
+      schedulesNotInPlan={
+        hasFeatureFor(project.createdBy, "automation")
+          ? null
+          : project.createdBy === user.id
+            ? notInPlan(getPlanSettings(), tierOf(user), "automation")
+            : "Schedules are not part of the plan of the account this project belongs to."
+      }
       initialRuns={listRuns(project.id, 30).map((run) => serializeRun(run, user.role))}
     />
   );

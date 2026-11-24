@@ -2,7 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { providerCredentials, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireSetupOwner } from "@/lib/auth";
 import { parseCustomHttpConfig } from "@/lib/adapters/custom-http-protocol";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
@@ -25,7 +25,7 @@ export const GET = handle(async (_req, { params }) => {
 });
 
 export const PATCH = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const existing = load(params.id!);
   const body = await parseBody(req, providerUpdateSchema);
@@ -102,7 +102,7 @@ export const PATCH = handle(async (req, { params }) => {
 });
 
 export const DELETE = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const existing = load(params.id!);
   db.delete(providers).where(eq(providers.id, existing.id)).run();

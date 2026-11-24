@@ -13,11 +13,12 @@ import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { getClientMeta } from "@/lib/request";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
 import { projectCreateSchema } from "@/lib/validation";
-import { isAdminRole, seesSetup } from "@/lib/roles";
+import { isAdminRole, seesSetup, tierOf } from "@/lib/roles";
 import { projectFor } from "@/lib/for-viewer";
 import { appChoice } from "@/lib/model-choice";
 import { checkedAccountIds, setProjectAccounts } from "@/lib/browser/accounts";
 import { checkedServerIds, setProjectServers } from "@/lib/ssh/servers";
+import { assertFeature } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,7 @@ export const GET = handle(async () => {
 
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "projects");
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, projectCreateSchema);
 
@@ -40,6 +42,7 @@ export const POST = handle(async (req) => {
   // kinds of media the project may make (any value in the model's place).
   const chooses = seesSetup(user.role);
   const WHAT = { image: "images", video: "videos", audio: "voice-overs" } as const;
+  const MEDIA_FEATURE = { image: "studio_image", video: "studio_video", audio: "studio_voice" } as const;
   const wanted = {
     image: Boolean(body.imageModelRowId),
     video: Boolean(body.videoModelRowId),
@@ -53,7 +56,10 @@ export const POST = handle(async (req) => {
         body[key] = null;
         continue;
       }
-      body[key] = appChoice(kind);
+      // A kind of media the plan of the account does not have: said here, not at the task that would make it.
+      assertFeature(user, MEDIA_FEATURE[kind]);
+      // What the run works with is chosen at the run, among the models of the account's role.
+      body[key] = appChoice(kind, tierOf(user));
       if (!body[key]) {
         throw new PlainError(400, "bad_request", `This installation cannot make ${WHAT[kind]} yet. An administrator has to set it up.`);
       }
@@ -100,7 +106,8 @@ export const POST = handle(async (req) => {
       for (const kind of ["image", "video", "audio"] as const) {
         if (need[kind] === 0) continue;
         const key = kind === "image" ? "imageModelRowId" : kind === "video" ? "videoModelRowId" : "speechModelRowId";
-        body[key] = body[key] ?? appChoice(kind);
+        assertFeature(user, MEDIA_FEATURE[kind]);
+        body[key] = body[key] ?? appChoice(kind, tierOf(user));
         if (!body[key]) {
           throw new PlainError(
             400,

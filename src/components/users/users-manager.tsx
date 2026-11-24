@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Fragment, useState } from "react";
 import type { PublicUser } from "@/lib/auth";
 import { apiFetch, ApiError } from "@/lib/client";
-import { ROLES, roleLabel, type Role } from "@/lib/roles";
+import { TIERS, tierLabel, type Tier } from "@/lib/roles";
 import { formatTokens, parseTokens } from "@/lib/token-rules";
 import { DateTime } from "@/components/time";
 import { Alert, Badge, Button, Card, Field, Input, Select, StatusDot } from "@/components/ui";
@@ -13,9 +13,11 @@ type Patch = {
   username?: string;
   email?: string;
   password?: string;
-  role?: Role;
+  /** One of the six roles. */
+  role?: Tier;
   status?: "active" | "disabled";
-  tokenLimit?: number;
+  /** The account's own allowance for a month. Null: the one of its role again. */
+  tokenLimit?: number | null;
   resetTwoFactor?: true;
   signOut?: true;
 };
@@ -30,18 +32,21 @@ function randomPassword(): string {
 
 const roleTone = (role: string) => (role === "owner" ? "signal" : role === "admin" ? "info" : "neutral");
 
+/** The roles in a list to choose from: the highest first. */
+const CHOICES = [...TIERS].reverse();
+
 export function UsersManager({
   initialUsers,
   currentUserId,
   canManage,
-  defaultTokenLimit,
+  allowances,
 }: {
   initialUsers: PublicUser[];
   currentUserId: string;
   /** An owner manages the accounts; an administrator sees them. */
   canManage: boolean;
-  /** What a new account may use, unless the owner says otherwise. */
-  defaultTokenLimit: number;
+  /** What each role may use in a month, as the plans say. Null: not limited. */
+  allowances: Record<Tier, number | null>;
 }) {
   const [users, setUsers] = useState(initialUsers);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -53,7 +58,8 @@ export function UsersManager({
   // The form for a new account.
   const [adding, setAdding] = useState(false);
   const [creating, setCreating] = useState(false);
-  const emptyAccount = { username: "", email: "", password: "", role: "user" as Role, tokenLimit: formatTokens(defaultTokenLimit) };
+  // Without a number of its own, a new account has the tokens of its role.
+  const emptyAccount = { username: "", email: "", password: "", role: "free" as Tier, tokenLimit: "" };
   const [fresh, setFresh] = useState(emptyAccount);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -106,7 +112,7 @@ export function UsersManager({
     setError(null);
     setDone(null);
     try {
-      const tokenLimit = fresh.role === "owner" ? null : parseTokens(fresh.tokenLimit);
+      const tokenLimit = fresh.role === "owner" || !fresh.tokenLimit.trim() ? null : parseTokens(fresh.tokenLimit);
       const res = await apiFetch<{ user: PublicUser }>("/api/admin/users", {
         method: "POST",
         body: JSON.stringify({
@@ -149,7 +155,7 @@ export function UsersManager({
   return (
     <div className="space-y-6">
       {!canManage && (
-        <Alert tone="neutral">Accounts are managed by an owner. You can see them here, and change none.</Alert>
+        <Alert tone="neutral">Accounts are managed by the owner. You can see them here, and change none.</Alert>
       )}
       {error && <Alert tone="danger">{error}</Alert>}
       {done && <Alert tone="ok">{done}</Alert>}
@@ -209,29 +215,32 @@ export function UsersManager({
                 </div>
               </Field>
               <Field label="Role" htmlFor="new-role" hint={roleHint(fresh.role)}>
-                <Select id="new-role" value={fresh.role} onChange={(e) => setFresh({ ...fresh, role: e.target.value as Role })}>
-                  {[...ROLES].reverse().map((role) => (
+                <Select id="new-role" value={fresh.role} onChange={(e) => setFresh({ ...fresh, role: e.target.value as Tier })}>
+                  {CHOICES.map((role) => (
                     <option key={role} value={role}>
-                      {roleLabel(role)}
+                      {tierLabel(role)}
                     </option>
                   ))}
                 </Select>
               </Field>
               <Field
-                label="Token limit"
+                label="Tokens a month"
                 htmlFor="new-token-limit"
                 hint={
                   fresh.role === "owner"
-                    ? "An owner is not held to a limit."
-                    : parseTokens(fresh.tokenLimit) === null
-                      ? "A whole number of tokens, such as 10,000,000."
-                      : `${formatTokens(parseTokens(fresh.tokenLimit) ?? 0)} tokens in all, for everything the account does. You can change it later.`
+                    ? "An owner is not held to an allowance."
+                    : !fresh.tokenLimit.trim()
+                      ? `Left empty: what ${tierLabel(fresh.role)} has, ${formatTokens(allowances[fresh.role] ?? 0)} a month.`
+                      : parseTokens(fresh.tokenLimit) === null
+                        ? "A whole number of tokens, such as 10,000,000 or 10M."
+                        : `${formatTokens(parseTokens(fresh.tokenLimit) ?? 0)} tokens a month for this account, whatever its role has. You can change it later.`
                 }
               >
                 <Input
                   id="new-token-limit"
-                  inputMode="numeric"
+                  inputMode="text"
                   value={fresh.role === "owner" ? "No limit" : fresh.tokenLimit}
+                  placeholder={fresh.role === "owner" ? undefined : `${formatTokens(allowances[fresh.role] ?? 0)} (as its role)`}
                   disabled={fresh.role === "owner"}
                   onChange={(e) => setFresh({ ...fresh, tokenLimit: e.target.value })}
                   autoComplete="off"
@@ -242,7 +251,7 @@ export function UsersManager({
                   id="create-account"
                   type="submit"
                   loading={creating}
-                  disabled={fresh.role !== "owner" && parseTokens(fresh.tokenLimit) === null}
+                  disabled={fresh.role !== "owner" && fresh.tokenLimit.trim() !== "" && parseTokens(fresh.tokenLimit) === null}
                 >
                   Make the account
                 </Button>
@@ -251,11 +260,7 @@ export function UsersManager({
           ) : (
             <p className="text-sm text-ink-2">
               {users.length} {users.length === 1 ? "account" : "accounts"}:{" "}
-              {ROLES.map((role) => {
-                const count = users.filter((u) => u.role === role).length;
-                return `${count} ${roleLabel(role).toLowerCase()}${count === 1 ? "" : "s"}`;
-              }).join(", ")}
-              .
+              {CHOICES.map((role) => `${users.filter((u) => u.tier === role).length} ${tierLabel(role)}`).join(", ")}.
             </p>
           )}
         </Card>
@@ -269,7 +274,7 @@ export function UsersManager({
                 <th className="px-5 py-2.5 font-medium">User</th>
                 <th className="px-5 py-2.5 font-medium">2FA</th>
                 <th className="px-5 py-2.5 font-medium">Role</th>
-                <th className="px-5 py-2.5 font-medium">Tokens</th>
+                <th className="px-5 py-2.5 font-medium">Tokens this month</th>
                 <th className="px-5 py-2.5 font-medium">Status</th>
                 <th className="px-5 py-2.5 font-medium">Joined</th>
                 {canManage && <th className="px-5 py-2.5 font-medium" />}
@@ -295,29 +300,27 @@ export function UsersManager({
                       <td className="px-5 py-3">
                         {editable ? (
                           <Select
-                            className="w-32"
+                            className="w-28"
                             aria-label={`Role of ${u.username}`}
-                            value={u.role}
+                            value={u.tier}
                             disabled={busy[u.id]}
-                            onChange={(e) =>
-                              update(u, { role: e.target.value as Role }, `"${u.username}" is ${roleLabel(e.target.value).toLowerCase()} now.`)
-                            }
+                            onChange={(e) => update(u, { role: e.target.value as Tier }, `"${u.username}" is ${tierLabel(e.target.value)} now.`)}
                           >
-                            {[...ROLES].reverse().map((role) => (
+                            {CHOICES.map((role) => (
                               <option key={role} value={role}>
-                                {roleLabel(role)}
+                                {tierLabel(role)}
                               </option>
                             ))}
                           </Select>
                         ) : (
-                          <Badge tone={roleTone(u.role)}>{roleLabel(u.role)}</Badge>
+                          <Badge tone={roleTone(u.role)}>{tierLabel(u.tier)}</Badge>
                         )}
                       </td>
                       <td className="px-5 py-3" data-tokens={u.username}>
                         {u.tokenLimit === null ? (
                           <>
                             <div className="text-ink-2">No limit</div>
-                            <div className="text-xs text-ink-3">{formatTokens(u.tokensUsed)} used</div>
+                            <div className="whitespace-nowrap text-xs text-ink-3">{formatTokens(u.tokensUsed)} used this month</div>
                           </>
                         ) : limitOf === u.id ? (
                           <form
@@ -329,7 +332,7 @@ export function UsersManager({
                               const ok = await update(
                                 u,
                                 { tokenLimit: limit },
-                                `"${u.username}" may use ${formatTokens(limit)} tokens in all now: ${formatTokens(Math.max(0, limit - u.tokensUsed))} are left.`,
+                                `"${u.username}" may use ${formatTokens(limit)} tokens a month now: ${formatTokens(Math.max(0, limit - u.tokensUsed))} are left of this one.`,
                               );
                               if (ok) setLimitOf(null);
                             }}
@@ -338,7 +341,7 @@ export function UsersManager({
                               <Input
                                 className="w-36"
                                 aria-label={`Token limit of ${u.username}`}
-                                inputMode="numeric"
+                                inputMode="text"
                                 value={limitDraft}
                                 onChange={(e) => setLimitDraft(e.target.value)}
                                 autoComplete="off"
@@ -361,11 +364,30 @@ export function UsersManager({
                             <Button type="button" variant="ghost" onClick={() => setLimitOf(null)}>
                               Cancel
                             </Button>
+                            {u.tokenLimitIsOwn && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                loading={busy[u.id]}
+                                title={`${formatTokens(allowances[u.tier] ?? 0)} a month, as ${tierLabel(u.tier)} has`}
+                                onClick={async () => {
+                                  const ok = await update(u, { tokenLimit: null }, `"${u.username}" has the tokens of its role again: ${formatTokens(allowances[u.tier] ?? 0)} a month.`);
+                                  if (ok) setLimitOf(null);
+                                }}
+                              >
+                                As its role
+                              </Button>
+                            )}
                           </form>
                         ) : (
                           <>
                             <div className={u.tokensLeft === 0 ? "whitespace-nowrap text-danger" : "whitespace-nowrap text-ink"}>
-                              {formatTokens(u.tokensUsed)} <span className="text-ink-3">of</span> {formatTokens(u.tokenLimit)}
+                              {formatTokens(u.tokensUsed)} <span className="text-ink-3">of</span> {formatTokens(u.tokenLimit)}{" "}
+                              {u.tokenLimitIsOwn && (
+                                <span className="ml-0.5 rounded-full bg-ink/[0.08] px-1.5 py-px text-[10px] font-medium text-ink-2" title="This account's own allowance, not the one of its role">
+                                  own
+                                </span>
+                              )}
                             </div>
                             <div className="whitespace-nowrap text-xs text-ink-3">
                               {u.tokensLeft === 0 ? "used up" : `${formatTokens(u.tokensLeft ?? 0)} left`}
@@ -373,7 +395,7 @@ export function UsersManager({
                               {canManage && (
                                 <button
                                   type="button"
-                                  className="text-signal hover:underline"
+                                  className="text-accent-ink hover:underline"
                                   aria-label={`Change the token limit of ${u.username}`}
                                   onClick={() => {
                                     setError(null);
@@ -419,7 +441,7 @@ export function UsersManager({
                       {canManage && (
                         <td className="whitespace-nowrap px-5 py-3 text-right">
                           {isSelf ? (
-                            <Link href="/dashboard/settings" className="text-sm text-signal hover:underline">
+                            <Link href="/dashboard/settings" className="text-sm text-accent-ink hover:underline">
                               Your account
                             </Link>
                           ) : (
@@ -560,8 +582,8 @@ export function UsersManager({
   );
 }
 
-function roleHint(role: Role): string {
-  if (role === "owner") return "Everything an administrator does, the accounts, and everyone's token limit.";
-  if (role === "admin") return "Providers, models, agents, teams, workflows, skills, and everyone's projects.";
-  return "Their own projects, chats, media and keys.";
+function roleHint(role: Tier): string {
+  if (role === "owner") return "Everything: the accounts, the plans, the providers and the models.";
+  if (role === "admin") return "Every feature, and a limited admin area: agents, teams, workflows and skills to manage, the rest to look at.";
+  return `Their own work, with the tokens and the features of the ${tierLabel(role)} plan. No admin area.`;
 }

@@ -152,7 +152,7 @@ export default async function ObservabilityPage() {
 
       <Card title="Agent performance" description="Aggregated across all project runs.">
         {stats.length === 0 ? (
-          <EmptyState title="No agent runs yet" description="Run a project in the AI Manager to populate metrics." />
+          <EmptyState title="No agent runs yet" description="Run a project on the Projects page to populate metrics." />
         ) : (
           <div className="-m-5 overflow-x-auto">
             <table className="w-full text-sm">

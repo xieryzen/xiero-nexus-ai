@@ -87,7 +87,7 @@ function TeamForm({
                 onClick={() => toggle(a.id)}
                 className={cn(
                   "rounded-full border px-3 py-1 text-xs font-medium transition",
-                  members.has(a.id) ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                  members.has(a.id) ? "border-accent/60 bg-accent-soft text-accent-ink" : "border-line text-ink-2 hover:text-ink",
                 )}
               >
                 {a.name} · {a.role}
@@ -122,7 +122,7 @@ function TeamForm({
                 }
                 className={cn(
                   "rounded-full border px-3 py-1 text-xs font-medium transition",
-                  skillIds.has(s.id) ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                  skillIds.has(s.id) ? "border-accent/60 bg-accent-soft text-accent-ink" : "border-line text-ink-2 hover:text-ink",
                 )}
               >
                 {s.name}

@@ -2,6 +2,7 @@ import { handle, json, parseBody } from "@/lib/api";
 import { requireUser } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { createCollection, listCollections, serializeCollection } from "@/lib/knowledge/service";
+import { assertFeature } from "@/lib/plans";
 import { getClientMeta } from "@/lib/request";
 import { collectionCreateSchema } from "@/lib/validation";
 import { kickWorker } from "@/lib/worker";
@@ -16,6 +17,7 @@ export const GET = handle(async () => {
 
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "knowledge");
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, collectionCreateSchema);
   const collection = createCollection(user, body);
