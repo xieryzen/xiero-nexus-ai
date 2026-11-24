@@ -4476,6 +4476,107 @@ export async function automation(ctx) {
     for (const key of ["ho-chat", "ho-spare"]) await admin.post(`/api/models/${state.models[key]}/test`);
     await admin.patch(`/api/models/${state.models["ho-spare"]}`, { forUsers: false });
 
+    // What a model does that is no answer (v1.12.1): it stops at the length
+    // limit of one reply, in the middle of a document, or it replies with
+    // nothing in the middle of its work. Neither is taken for the answer.
+    begin("Handover: an answer that was cut at the length limit goes on until it is whole");
+    /** The document the mock writes for "LONG-ANSWER: <n>", in <n> replies that each end at the limit. */
+    const longDocument = (n) => Array.from({ length: n * 3 }, (_, i) => `Section ${i + 1}: the enchant shop sells sharpness, protection and unbreaking at level ${i + 1}.`).join("\n");
+    const chatRequests = async () => (await mockLog()).filter((l) => l.method === "POST" && l.path.endsWith("/chat/completions")).map((l) => l.body);
+    const storedLast = async (who, chatId) => (await who.get(`/api/chats/${chatId}`)).data?.messages?.at(-1);
+    await mockReset();
+    const prd = await say(hana, "Tulis PRD plugin enchant shop, lengkap.\nLONG-ANSWER: 3");
+    const prdRequests = await chatRequests();
+    eq(
+      "a document that takes three replies is one answer, with nothing lost and nothing twice",
+      [prd.error, prd.answer === longDocument(3), prd.answer.length, prd.done?.finishReason, prdRequests.length],
+      [null, true, longDocument(3).length, "answer", 3],
+    );
+    eq(
+      "  the model is shown what it wrote, and asked to go on from exactly there",
+      prdRequests.slice(1).map((b) => [b.messages.at(-2)?.role, longDocument(3).includes(String(b.messages.at(-2)?.content)), b.messages.at(-1)?.role, /^Your reply was cut off.*Continue it from exactly where it stopped/.test(String(b.messages.at(-1)?.content))]),
+      [["assistant", true, "user", true], ["assistant", true, "user", true]],
+    );
+    eq("  on the page it is one text that grows: it is not begun again", [prd.streamed === longDocument(3), prd.events.some((e) => e.reset), prd.progress.some((p) => /length limit of one reply/.test(p))], [true, false, true]);
+    const prdStored = await storedLast(hana, prd.chat?.id);
+    eq("  the conversation keeps the whole of it, and says nothing of an early end", [prdStored?.role, prdStored?.content === longDocument(3), prdStored?.details?.stopped ?? null], ["assistant", true, null]);
+    await mockReset();
+    const afterWork = await say(hana, `${doing(["remember", { note: "Hana wants the PRD in Indonesian." }])}\nLONG-ANSWER: 2`);
+    eq("the same after the tools were used", [afterWork.error, afterWork.tools.map((t) => [t.name, t.isError]), afterWork.answer === longDocument(2), (await chatRequests()).length], [null, [["remember", false]], true, 3]);
+    await mockReset();
+    const endless = await say(hana, "Tulis semuanya.\nLONG-ANSWER: 40");
+    const endlessStored = await storedLast(hana, endless.chat?.id);
+    eq(
+      "an answer goes on only so often: what is there is kept, and the page says that it was cut",
+      [endless.error, (await chatRequests()).length, longDocument(40).startsWith(endless.answer), endless.answer.length > longDocument(40).length / 6, endless.done?.finishReason, endlessStored?.details?.stopped],
+      [null, 9, true, true, "length", "length"],
+    );
+
+    begin("Handover: a reply with nothing in it is not the answer");
+    await mockReset();
+    const stalled = await say(
+      hana,
+      `${doing(["remember", { note: "Folder plugin sudah dibuat." }], ["remember", { note: "File plugin.yml sudah ditulis." }])}\nEMPTY-REPLIES: stalled 1 1`,
+    );
+    const stalledRequests = await chatRequests();
+    eq(
+      "a model that replies with nothing in the middle of its work is asked again, and the work goes on to its end",
+      [stalled.error, stalled.tools.map((t) => [t.name, t.isError]), stalled.answer.startsWith("DONE after 2 tool results"), stalledRequests.length],
+      [null, [["remember", false], ["remember", false]], true, 4],
+    );
+    eq(
+      "  it is told that its reply was empty, and to go on from where it is",
+      [stalledRequests[1]?.messages.at(-1)?.role, stalledRequests[2]?.messages.at(-1)?.role, /^Your last reply was empty\. Go on with the task/.test(String(stalledRequests[2]?.messages.at(-1)?.content))],
+      ["tool", "user", true],
+    );
+    check("  the page says that it is asking again, and a user is not told which model that was", stalled.progress.includes("The reply was empty. Asking again") && !JSON.stringify(stalled.events).includes("ho-chat"), stalled.progress);
+    const stalledNotes = ((await memoryOf(hana))?.notes ?? []).map((n) => n.content);
+    check("  what both calls did is there", stalledNotes.includes("Folder plugin sudah dibuat.") && stalledNotes.includes("File plugin.yml sudah ditulis."), stalledNotes);
+    await mockReset();
+    const atFirst = await say(hana, "hai\nEMPTY-REPLIES: at-first 1 0");
+    const atFirstRequests = await chatRequests();
+    eq(
+      "an empty first reply is asked for again, with the request as it stands",
+      [atFirst.error, atFirst.answer.startsWith("OUTPUT of"), atFirstRequests.length, atFirstRequests[1]?.messages.length === atFirstRequests[0]?.messages.length, atFirstRequests[1]?.messages.at(-1)?.role],
+      [null, true, 2, true, "user"],
+    );
+    // With another model to turn to, the one that said nothing is not asked again.
+    await admin.patch(`/api/models/${state.models["ho-spare"]}`, { forUsers: true });
+    await mockReset();
+    const handedOver = await say(hana, `${doing(["remember", { note: "Langkah satu." }], ["remember", { note: "Langkah dua." }])}\nEMPTY-REPLIES: handed-over 1 1`);
+    const askedModels = (await chatRequests()).map((b) => b.model);
+    eq(
+      "where another model can go on, it is asked in place of the one that replied with nothing",
+      [handedOver.error, handedOver.tools.length, handedOver.answer.startsWith("DONE after 2 tool results"), askedModels],
+      [null, 2, true, ["ho-chat", "ho-chat", "ho-spare", "ho-spare"]],
+    );
+    await mockReset();
+    const mute = await say(hadi, `${doing(["remember", { note: "Satu langkah saja." }])}\nEMPTY-REPLIES: mute 99 1`, { modelRowId: state.models["ho-chat"] });
+    const muteStored = await storedLast(hadi, mute.chat?.id);
+    eq(
+      "a model that says nothing however often it is asked: the page says so, and what was done stays with the message",
+      [mute.error, (await chatRequests()).length, /^No answer was written, also when the model was asked again\..*go on/.test(mute.answer), muteStored?.details?.tools?.map((t) => t.name)],
+      [null, 4, true, ["remember"]],
+    );
+    check("  whoever is shown the setup is told which model it was", mute.progress.some((p) => /Mock.* gave an empty reply\. Asking it again|ho-chat.* gave an empty reply\. Asking it again/.test(p)), mute.progress);
+    const wentOn = await say(hadi, "go on", { chatId: mute.chat?.id, modelRowId: state.models["ho-chat"] });
+    check("  asked to go on, the next answer knows what was done before", wentOn.error === null && wentOn.answer.startsWith("OUTPUT of") && JSON.stringify((await chatRequests()).at(-1)?.messages ?? []).includes("Satu langkah saja."), wentOn.answer);
+    await admin.patch(`/api/models/${state.models["ho-spare"]}`, { forUsers: false });
+
+    begin("Handover: the document of a task is whole as well");
+    await agent("Long Hand", "Long Hand", { tools: [], primaryModelRowId: state.models["ho-chat"] });
+    const longFlow = await workflow("Handover: a long document", [{ title: "Write the PRD", objective: "Write the whole PRD.\nLONG-ANSWER: 4", role: "Long Hand" }]);
+    const longProject = await hadi.post("/api/projects", { title: "PRD enchant shop", goal: "Tulis PRD plugin enchant shop.", managerModelRowId: state.models["ho-chat"], workflowId: longFlow });
+    await mockReset();
+    const longRun = await runProject(hadi, longProject.data?.project?.id);
+    const longTask = ((await hadi.get(`/api/projects/${longProject.data?.project?.id}`)).data?.project?.tasks ?? [])[0];
+    eq(
+      "a task whose document takes four replies hands over all of it",
+      [longProject.status, longRun.events.filter((e) => e.type === "status").at(-1)?.status, longTask?.status, String(longTask?.artifact ?? "").includes(longDocument(4)), String(longTask?.artifact ?? "").includes("cut off at the length limit")],
+      [201, "succeeded", "succeeded", true, false],
+    );
+    eq("  each reply it took was a request to the model", (await chatRequests()).filter((b) => JSON.stringify(b.messages).includes("LONG-ANSWER: 4")).length, 4);
+
     begin("Handover: the agents of a run work with it, whatever tools they have");
     const ssh = (...calls) => calls.map((c) => `SSH: ${JSON.stringify(typeof c === "string" ? { command: c } : c)}`).join("\n");
     await agent("Bare Hands", "Bare Hands", { tools: [], primaryModelRowId: state.models["ho-chat"] });

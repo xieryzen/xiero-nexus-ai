@@ -28,6 +28,7 @@ import { keySetOf } from "@/lib/access/tools";
 import { notesForTask } from "@/lib/agent/memory";
 import { DEFAULT_MAX_STEPS, MAX_MAX_STEPS, parseToolNames } from "@/lib/agent/catalog";
 import { runToolLoop, type LoopTool, type ToolCallEvent } from "@/lib/agent/loop";
+import { CUT_NOTE, askWhole } from "@/lib/agent/whole";
 import { buildTools } from "@/lib/agent/tools";
 import { isMediaOnly } from "@/lib/capabilities";
 import {
@@ -208,15 +209,31 @@ function serversForPlan(servers: readonly ServerForAgent[], workforce: Agent[]):
   );
 }
 
+/**
+ * One request to a model, without tools. An answer that was cut at the
+ * length limit of one reply goes on until it is whole (agent/whole.ts): a
+ * plan, a document and the final deliverable are long, and half of one is
+ * not the work. The tokens are those of every call it took.
+ */
 async function invoke(
   resolved: ResolvedModel,
   messages: ChatMessage[],
   temperature: number,
-): Promise<{ content: string; prompt: number; completion: number }> {
-  const r = await gatewayChat(resolved, messages, { temperature });
-  const prompt = r.usage?.promptTokens ?? estimateTokens(messages.map((m) => m.content).join("\n"));
-  const completion = r.usage?.completionTokens ?? estimateTokens(r.content);
-  return { content: r.content, prompt, completion };
+  stop?: () => boolean,
+): Promise<{ content: string; prompt: number; completion: number; cut: boolean }> {
+  let prompt = 0;
+  let completion = 0;
+  const whole = await askWhole(
+    async (sent) => {
+      const r = await gatewayChat(resolved, sent, { temperature });
+      prompt += r.usage?.promptTokens ?? estimateTokens(sent.map((m) => m.content).join("\n"));
+      completion += r.usage?.completionTokens ?? estimateTokens(r.content);
+      return r;
+    },
+    messages,
+    { stop },
+  );
+  return { content: whole.content, prompt, completion, cut: whole.cut };
 }
 
 /**
@@ -491,7 +508,7 @@ export async function executeRun(runId: string): Promise<void> {
     own: string[],
     messages: ChatMessage[],
     temperature: number,
-  ): Promise<{ content: string; prompt: number; completion: number; model: ResolvedModel; started: number }> => {
+  ): Promise<{ content: string; prompt: number; completion: number; cut: boolean; model: ResolvedModel; started: number }> => {
     let last: unknown = new AppError(400, "no_model", "No model available");
     for (const id of askingOrderFor(own, { standIns: standInsOf() }).ids) {
       if (isCancelled()) break;
@@ -504,7 +521,7 @@ export async function executeRun(runId: string): Promise<void> {
       }
       const started = Date.now();
       try {
-        return { ...(await invoke(model, messages, temperature)), model, started };
+        return { ...(await invoke(model, messages, temperature, isCancelled)), model, started };
       } catch (e) {
         last = e;
       }
@@ -1437,7 +1454,8 @@ export async function executeRun(runId: string): Promise<void> {
                   });
                   p = result.promptTokens;
                   c = result.completionTokens;
-                  content = result.content;
+                  // An answer that was cut went on (loop.ts); one that is still cut says so.
+                  content = result.cut ? `${result.content}\n\n${CUT_NOTE}` : result.content;
                   steps += result.steps;
                   toolCallCount += result.toolCalls;
                   taskTokens += p + c;
@@ -1465,7 +1483,7 @@ export async function executeRun(runId: string): Promise<void> {
                   }
                   db.insert(agentRuns).values({ projectId, taskId: row.id, agentId: agent?.id ?? null, modelRowId: resolved.model.id, status: "ok", attempt, promptTokens: p, completionTokens: c, latencyMs: Date.now() - started, steps: result.steps, toolCallCount: result.toolCalls }).run();
                 } else {
-                  const r = await invoke(resolved, messages, temperature);
+                  const r = await invoke(resolved, messages, temperature, isCancelled);
                   p = r.prompt;
                   c = r.completion;
                   steps += 1;
@@ -1476,7 +1494,9 @@ export async function executeRun(runId: string): Promise<void> {
                   spent = true;
                   content =
                     kind === "text"
-                      ? r.content
+                      ? r.cut
+                        ? `${r.content}\n\n${CUT_NOTE}`
+                        : r.content
                       : kind === "audio"
                         ? cleanSpeechText(r.content)
                         : cleanMediaPrompt(r.content);
@@ -1911,7 +1931,8 @@ export async function executeRun(runId: string): Promise<void> {
       try {
         const r = await askInTurn([manager.model.id], synthMessages, 0.3);
         recordManager(r, r.model, r.started);
-        deliverable = r.content;
+        // Still cut after it went on as often as it may: it says so itself.
+        deliverable = r.cut ? `${r.content}\n\n${CUT_NOTE}` : r.content;
       } catch (e) {
         deliverable = `(Synthesis step failed: ${e instanceof AppError ? e.message : "error"})`;
       }

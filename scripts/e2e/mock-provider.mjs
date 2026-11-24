@@ -233,7 +233,8 @@ function nextToolCalls(body) {
   const offered = new Set((body?.tools ?? []).map((t) => t?.function?.name));
   if (offered.size === 0 || body?.tool_choice === "none") return null;
   if (String(messages.find((m) => m.role === "system")?.content ?? "").startsWith(ASSISTANT)) {
-    const at = messages.map((m) => m.role).lastIndexOf("user");
+    // What the person said, not what the app told the model since (to go on, that a reply was empty).
+    const at = lastSaidAt(messages);
     const said = String(messages[at]?.content ?? "");
     const calls = [...said.matchAll(/^DO: (\{.*\})\s*$/gm)].map((m) => {
       try {
@@ -534,6 +535,68 @@ function chatAnswer(body) {
 }
 
 /**
+ * Replies that are no answer, for the checks of what the app does with them.
+ * Both are asked for in what the person (or the task) says, on a line each.
+ *
+ * "LONG-ANSWER: <n>": the answer is a document in <n> pieces. A reply is one
+ * piece and ends with the reason "length", as a model ends that reached the
+ * length limit of one reply. Asked to go on (the conversation then ends with
+ * the app's words for that), it writes the next piece from exactly where the
+ * one before ended; the last piece ends as an answer does.
+ *
+ * "EMPTY-REPLIES: <id> <times> <after>": once <after> tools were used, the
+ * next <times> requests are answered with nothing at all, no text and no
+ * call, as weak models do in the middle of their work. Counted by <id>.
+ */
+const WENT_ON = "Your reply was cut off";
+const APP_SAID = [WENT_ON, "Your last reply was empty", "You have no tool calls left"];
+const emptyReplies = new Map();
+
+/** The document of "LONG-ANSWER: <n>". The checks write the same one. */
+function longDocument(n) {
+  return Array.from({ length: n * 3 }, (_, i) => `Section ${i + 1}: the enchant shop sells sharpness, protection and unbreaking at level ${i + 1}.`).join("\n");
+}
+
+/** Where the person spoke last: the last message of theirs that is not the app's own word to the model. */
+function lastSaidAt(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === "user" && !APP_SAID.some((start) => String(m.content ?? "").startsWith(start))) return i;
+  }
+  return -1;
+}
+
+/** What the person said last, and everything after it. */
+function sinceLastSaid(body) {
+  const messages = Array.isArray(body?.messages) ? body.messages : [];
+  const at = lastSaidAt(messages);
+  return { said: at === -1 ? "" : String(messages[at].content ?? ""), after: at === -1 ? [] : messages.slice(at + 1) };
+}
+
+/** A reply of one of the two kinds, or null for an ordinary one. */
+function replyThatIsNoAnswer(body, calls) {
+  const { said, after } = sinceLastSaid(body);
+  const empty = said.match(/^EMPTY-REPLIES: (\S+) (\d+) (\d+)\s*$/m);
+  if (empty) {
+    const [, id, times, afterTools] = empty;
+    const used = emptyReplies.get(id) ?? 0;
+    if (after.filter((m) => m.role === "tool").length === Number(afterTools) && used < Number(times)) {
+      emptyReplies.set(id, used + 1);
+      return { content: "", finish: "stop", calls: null };
+    }
+  }
+  const long = said.match(/^LONG-ANSWER: (\d+)\s*$/m);
+  if (long && !calls) {
+    const n = Math.max(1, Number(long[1]));
+    const whole = longDocument(n);
+    const size = Math.ceil(whole.length / n);
+    const piece = after.filter((m) => m.role === "user" && String(m.content ?? "").startsWith(WENT_ON)).length;
+    return { content: whole.slice(piece * size, (piece + 1) * size), finish: piece < n - 1 ? "length" : "stop", calls: null };
+  }
+  return null;
+}
+
+/**
  * Models that the checks switch: /__force?model=<id>&status=<code> makes the
  * chat requests to that model fail with that status, &times=<n> only the next
  * n of them, &after=<m> only once m more have been answered; status=200 lets
@@ -566,8 +629,11 @@ function chat(req, res, body) {
   if (model === "chat-notools" && Array.isArray(body?.tools) && body.tools.length > 0) {
     return send(res, 400, { error: { message: "This model does not support tools.", type: "invalid_request_error", param: "tools" } });
   }
-  const calls = nextToolCalls(body);
-  const content = calls ? "" : (toolSummary(body) ?? chatAnswer(body));
+  const asked = nextToolCalls(body);
+  const special = replyThatIsNoAnswer(body, asked);
+  const calls = special ? special.calls : asked;
+  const content = special ? special.content : calls ? "" : (toolSummary(body) ?? chatAnswer(body));
+  const finish = special ? special.finish : calls ? "tool_calls" : "stop";
   const usage = { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 };
   const toolCalls = calls?.map((c, i) => ({
     id: `call_${++counter}_${i}`,
@@ -582,7 +648,7 @@ function chat(req, res, body) {
         {
           index: 0,
           message: { role: "assistant", content: content || null, ...(toolCalls ? { tool_calls: toolCalls } : {}) },
-          finish_reason: toolCalls ? "tool_calls" : "stop",
+          finish_reason: finish,
         },
       ],
       usage,
@@ -599,7 +665,7 @@ function chat(req, res, body) {
     res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index, id: call.id, type: "function", function: { name: call.function.name, arguments: args.slice(0, 5) } }] } }] })}\n\n`);
     res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: args.slice(5) } }] } }] })}\n\n`);
   }
-  res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: toolCalls ? "tool_calls" : "stop" }], usage })}\n\n`);
+  res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: finish }], usage })}\n\n`);
   res.end("data: [DONE]\n\n");
 }
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CHAT_MAX_STEPS, CHAT_TITLE_MAX, callLine, titleFrom, toolsForModel, type ToolNote } from "../src/lib/chat/rules";
+import { CHAT_MAX_MAX_STEPS, CHAT_MAX_STEPS, CHAT_MIN_MAX_STEPS, CHAT_TITLE_MAX, callLine, chatMaxSteps, titleFrom, toolsForModel, type ToolNote } from "../src/lib/chat/rules";
 
 test("a conversation is called after the start of its first message", () => {
   assert.equal(titleFrom("ini vps ku, tolong cek\nIP: 1.2.3.4"), "ini vps ku, tolong cek");
@@ -65,4 +65,12 @@ test("one line says what a tool was called with, and nothing that signs in", () 
 
 test("an answer takes a bounded number of steps", () => {
   assert.equal(CHAT_MAX_STEPS >= 8 && CHAT_MAX_STEPS <= 32, true);
+  // As the installation sets it, within what is sensible; anything else is what the app ships with.
+  assert.equal(chatMaxSteps(undefined), CHAT_MAX_STEPS);
+  assert.equal(chatMaxSteps(""), CHAT_MAX_STEPS);
+  assert.equal(chatMaxSteps("many"), CHAT_MAX_STEPS);
+  assert.equal(chatMaxSteps("60"), 60);
+  assert.equal(chatMaxSteps(" 12.4 "), 12);
+  assert.equal(chatMaxSteps("1"), CHAT_MIN_MAX_STEPS);
+  assert.equal(chatMaxSteps("100000"), CHAT_MAX_MAX_STEPS);
 });

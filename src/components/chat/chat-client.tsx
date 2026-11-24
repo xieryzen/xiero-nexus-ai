@@ -681,6 +681,7 @@ function Footnote({ details }: { details: MessageDetails }) {
   if (details.stopped === "time") parts.push("ended after half an hour of work, the longest one answer may take");
   if (details.stopped === "max_steps") parts.push("ended at the most steps one answer may take");
   if (details.stopped === "tokens") parts.push("ended because the tokens of the account are used up");
+  if (details.stopped === "length") parts.push("cut off at the length limit of the model: write “go on” for the rest");
   return (
     <>
       {(details.sources || details.knowledgeError) && <Sources sources={details.sources ?? []} error={details.knowledgeError ?? null} />}
