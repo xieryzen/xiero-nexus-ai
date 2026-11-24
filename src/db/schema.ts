@@ -684,10 +684,48 @@ export const execRuns = sqliteTable(
     stdout: text("stdout"),
     stderr: text("stderr"),
     durationMs: integer("duration_ms"),
+    // The files the program was run on, as one hash (v1.12): whether what it
+    // said still holds for the files as they are now.
+    sourceHash: text("source_hash"),
     createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => ({ byWorkspace: index("exec_runs_workspace_idx").on(t.workspaceId) }),
+);
+
+// ─── What a build made (v1.12.0) ─────────────────────────────────────────────
+
+/**
+ * A package a build left behind: the .jar of a plugin, an archive. The files
+ * of a workspace are text; this is not, so its bytes live on disk under the
+ * folder for built files (src/lib/result/built.ts), and this row says what it
+ * is. One per path of a project: a later build puts its package in its place.
+ */
+export const builtFiles = sqliteTable(
+  "built_files",
+  {
+    id: id(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    // Where the build left it, inside the workspace: build/libs/plugin-1.0.jar
+    path: text("path").notNull(),
+    // Its file on disk: "<id>.bin", never a name that came from outside.
+    fileName: text("file_name").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    // The command that made it.
+    command: text("command").notNull(),
+    // The files it was built from, as one hash: a package is of the files as
+    // they were then, and the page says so when they have changed since.
+    sourceHash: text("source_hash").notNull(),
+    // The task whose agent built it; none for a build a person asked for or
+    // the one a run makes at its end.
+    taskId: text("task_id"),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byPath: uniqueIndex("built_files_path_unique").on(t.projectId, t.path) }),
 );
 
 // ─── Creative media (v1.4.0) ──────────────────────────────────────────────────
@@ -1413,6 +1451,7 @@ export type AgentRun = typeof agentRuns.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type WorkspaceFile = typeof workspaceFiles.$inferSelect;
 export type ExecRun = typeof execRuns.$inferSelect;
+export type BuiltFile = typeof builtFiles.$inferSelect;
 export type WorkspaceSnapshot = typeof workspaceSnapshots.$inferSelect;
 export type Workflow = typeof workflows.$inferSelect;
 export type GitRemote = typeof gitRemotes.$inferSelect;

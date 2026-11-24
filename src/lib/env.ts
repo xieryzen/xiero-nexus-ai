@@ -52,6 +52,14 @@ export const env = {
     const raw = process.env.MEDIA_PATH?.trim();
     return raw ? raw : join(dirname(this.databasePath), "media");
   },
+  /**
+   * Folder for what builds made (the .jar of a plugin). By default a `built`
+   * folder next to the database file.
+   */
+  get builtPath(): string {
+    const raw = process.env.BUILT_PATH?.trim();
+    return raw ? raw : join(dirname(this.databasePath), "built");
+  },
   get appUrl(): string {
     return process.env.APP_URL ?? "http://localhost:3000";
   },

@@ -34,6 +34,18 @@ name: Deploy to a Pterodactyl node
 #                 outside; BROWSER_URL goes into the server's .env, and the
 #                 server is started again. "--remove" in "options" takes it
 #                 away, "--rebuild" gives its Chromium the newest updates.
+#   runner-plan   what setting up the runner programs and builds run in would
+#                 do; changes nothing
+#   runner        the runner next to the server: a container of its own on the
+#                 server's network, built on the node, with Node.js, Python,
+#                 JDK, Maven and Gradle. Its programs run without any right of
+#                 root and reach the internet but no private address;
+#                 SANDBOX_URL and SANDBOX_TOKEN go into the server's .env, and
+#                 the server is started again. With it, a project that is a
+#                 Gradle or a Maven project is built when its run ends, and
+#                 its package (a plugin's .jar) is on the project page.
+#                 "--remove" in "options" takes it away, "--rebuild" gives it
+#                 the newest packages.
 #   last-log      what the last run on the node said and how it ended; with
 #                 "--list" in options, the runs that are kept; with
 #                 "--back 1", the run before the last
@@ -75,7 +87,7 @@ on:
       action:
         description: What to do on the node
         type: choice
-        options: [check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key]
+        options: [check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, runner-plan, runner, last-log, input-key]
         default: plan
         required: true
       host:

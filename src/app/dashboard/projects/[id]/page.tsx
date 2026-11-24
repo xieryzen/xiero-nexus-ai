@@ -12,6 +12,7 @@ import { listRuns, serializeRun } from "@/lib/runs";
 import { listSchedules, serializeSchedule } from "@/lib/schedules";
 import { tokensLeftFor } from "@/lib/tokens";
 import { serializeProject } from "@/lib/workforce";
+import { projectResult } from "@/lib/result";
 import { ProjectRunner } from "@/components/projects/project-runner";
 import { isAdminRole, seesSetup } from "@/lib/roles";
 import { assetFor, projectFor } from "@/lib/for-viewer";
@@ -60,14 +61,17 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
 
   const canRun = usableModels && agentsWithModel > 0;
 
-  // The models its creative tasks generate with, by name. For a user: only
-  // that the project makes that kind, by what a run would work with.
-  const asRun = sees ? project : withRunModels(project);
-  const modelLabel = (id: string | null): string | null => {
+  // What its creative tasks are made with, as a run would work: the models
+  // the project names, and the app's choice for a kind it names none for
+  // (model-choice.ts). By name for those who are shown the setup; for a user
+  // only that the project makes that kind.
+  const asRun = withRunModels(project);
+  const modelLabel = (id: string | null, named: string | null): string | null => {
     if (!id) return null;
     if (!sees) return "yes";
     const m = db.select({ modelId: models.modelId, displayName: models.displayName }).from(models).where(eq(models.id, id)).get();
-    return m ? m.displayName || m.modelId : null;
+    if (!m) return null;
+    return `${m.displayName || m.modelId}${named ? "" : " (the app's choice)"}`;
   };
 
   // The servers the project may be given: the ones this account may use and
@@ -107,9 +111,10 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       canRun={canRun && mayOperate}
       canApprove={isAdminRole(user.role) && mayOperate}
       initialAssets={assetsForProject(project.id).map((a) => assetFor(user.role, serializeAsset(a)))}
-      imageModelLabel={modelLabel(asRun.imageModelRowId)}
-      videoModelLabel={modelLabel(asRun.videoModelRowId)}
-      speechModelLabel={modelLabel(asRun.speechModelRowId)}
+      initialResult={projectResult(project)}
+      imageModelLabel={modelLabel(asRun.imageModelRowId, project.imageModelRowId)}
+      videoModelLabel={modelLabel(asRun.videoModelRowId, project.videoModelRowId)}
+      speechModelLabel={modelLabel(asRun.speechModelRowId, project.speechModelRowId)}
       initialSchedules={listSchedules(project.id).map(serializeSchedule)}
       initialRuns={listRuns(project.id, 30).map((run) => serializeRun(run, user.role))}
     />

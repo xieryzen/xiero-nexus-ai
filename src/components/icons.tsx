@@ -48,7 +48,12 @@ type IconName =
   | "link"
   | "memory"
   | "skill"
-  | "api";
+  | "api"
+  | "file"
+  | "folder"
+  | "package"
+  | "open"
+  | "result";
 
 const paths: Record<IconName, React.ReactNode> = {
   overview: <path d="M4 13h7V4H4v9Zm0 7h7v-5H4v5Zm9 0h7v-9h-7v9Zm0-16v5h7V4h-7Z" />,
@@ -228,6 +233,26 @@ const paths: Record<IconName, React.ReactNode> = {
     <>
       <rect x="3" y="4.5" width="18" height="15" rx="2" />
       <path d="M3 9h18M6.5 6.75h.01M9.5 6.75h.01" />
+    </>
+  ),
+  file: (
+    <>
+      <path d="M6 3h8l4 4v14H6V3Z" />
+      <path d="M14 3v4h4" />
+    </>
+  ),
+  folder: <path d="M3 6h6l2 2h10v11H3V6Z" />,
+  package: (
+    <>
+      <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" />
+      <path d="m4 7.5 8 4.5 8-4.5M12 12v9" />
+    </>
+  ),
+  open: <path d="M14 4h6v6M20 4l-9 9M18 14v6H4V6h6" />,
+  result: (
+    <>
+      <rect x="3.5" y="4" width="17" height="16" rx="2" />
+      <path d="m8 12.5 2.5 2.5L16 9.5" />
     </>
   ),
 };

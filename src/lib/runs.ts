@@ -6,6 +6,7 @@ import { agentRuns, projectRuns, projects, projectTasks, toolCalls, type Project
 import { AppError } from "./errors";
 import { notify } from "./notifications";
 import { prepareRun } from "./orchestrator";
+import { buildPending } from "./result/build";
 import { publish } from "./run-bus";
 import { runtime } from "./runtime";
 import { assertTokensLeft } from "./tokens";
@@ -124,7 +125,10 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
       if (tasks.length === 0) {
         throw new AppError(409, "nothing_to_continue", "This project has no tasks from an earlier run to go on with. Run it.");
       }
-      if (project.status === "succeeded" && tasks.every((t) => t.status === "succeeded")) {
+      // Every task is done. There is still something to do when what they
+      // made is to be built into a package and does not build yet: the run
+      // then builds it and has what stops the build put right (v1.12).
+      if (project.status === "succeeded" && tasks.every((t) => t.status === "succeeded") && !buildPending(project.id)) {
         throw new AppError(409, "nothing_to_continue", "Every task of the last run succeeded: there is nothing left to do. Run the project again to start anew.");
       }
     }

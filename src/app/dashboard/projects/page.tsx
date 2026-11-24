@@ -5,7 +5,7 @@ import { projects, teams, workflows } from "@/db/schema";
 import { requirePageUser } from "@/lib/auth";
 import { ffmpegStatus } from "@/lib/media/ffmpeg";
 import { projectFor } from "@/lib/for-viewer";
-import { kindsAvailable } from "@/lib/model-choice";
+import { autoMedia, kindsAvailable } from "@/lib/model-choice";
 import { chatModels, mediaModelOptions, usableModels } from "@/lib/model-options";
 import { countMediaTasks } from "@/lib/orchestrator/plan";
 import { serializeProject, serializeWorkflow } from "@/lib/workforce";
@@ -71,6 +71,7 @@ export default async function ProjectsPage() {
       imageModels={imageModels}
       videoModels={videoModels}
       speechModels={speechModels}
+      autoMedia={autoMedia()}
       canRender={ffmpeg.available && ffmpeg.h264}
       teams={teamRows.map((t) => ({ id: t.id, label: t.name }))}
       workflows={workflowOptions}

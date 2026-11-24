@@ -8,6 +8,7 @@ import { isFailing, isResting } from "./model-health-rules";
 import {
   CHOICE_KINDS,
   askingOrder,
+  autoMedia,
   choicesFor,
   fitsKind,
   priceCeiling,
@@ -20,6 +21,8 @@ import {
 import { countMediaTasks } from "./orchestrator/plan";
 import { NOT_SET_UP } from "./public-text";
 import { seesSetup } from "./roles";
+
+export { autoMedia };
 
 /**
  * The model the app works with where a user would have chosen one: for a
@@ -271,22 +274,32 @@ export function workflowMediaNeeds(workflowId: string | null): { image: number; 
  *   without a manager (it was made by a user who is an administrator now)
  *   gets the app's choice for one.
  * - A user's project works with the app's choice, whatever it was set to: for
- *   its manager always, and for images, videos and voice-overs when it asks
- *   for them. It asks for a kind when its workflow has such steps, or when it
- *   was made with that kind ticked (which is kept as a model in that place).
+ *   its manager always, and for images, videos and voice-overs.
+ * - A kind of media a project names no model for is made with the app's
+ *   choice all the same (v1.12): whoever asks for a picture in the goal gets
+ *   a picture, without having ticked anything first. The one who plans is
+ *   told to make media only where the goal asks for it, and the project's
+ *   media limit holds; a limit of 0 means none.
  */
 export function withRunModels(project: Project): Project {
-  if (projectOwnerChooses(project)) {
-    return project.managerModelRowId ? project : { ...project, managerModelRowId: appChoice("chat") };
-  }
   const all = askable();
   const first = (kind: ChoiceKind) => choices(all, kind)[0] ?? null;
+  const auto = autoMedia() && project.maxMedia > 0;
+  if (projectOwnerChooses(project)) {
+    return {
+      ...project,
+      managerModelRowId: project.managerModelRowId ?? first("chat"),
+      imageModelRowId: project.imageModelRowId ?? (auto ? first("image") : null),
+      videoModelRowId: project.videoModelRowId ?? (auto ? first("video") : null),
+      speechModelRowId: project.speechModelRowId ?? (auto ? first("audio") : null),
+    };
+  }
   const needs = workflowMediaNeeds(project.workflowId);
   return {
     ...project,
     managerModelRowId: first("chat"),
-    imageModelRowId: project.imageModelRowId || needs.image > 0 ? first("image") : null,
-    videoModelRowId: project.videoModelRowId || needs.video > 0 ? first("video") : null,
-    speechModelRowId: project.speechModelRowId || needs.audio > 0 ? first("audio") : null,
+    imageModelRowId: auto || project.imageModelRowId || needs.image > 0 ? first("image") : null,
+    videoModelRowId: auto || project.videoModelRowId || needs.video > 0 ? first("video") : null,
+    speechModelRowId: auto || project.speechModelRowId || needs.audio > 0 ? first("audio") : null,
   };
 }

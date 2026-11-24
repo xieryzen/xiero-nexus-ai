@@ -1,0 +1,4 @@
+name: Warm
+version: "${version}"
+main: warm.WarmPlugin
+api-version: "1.20"

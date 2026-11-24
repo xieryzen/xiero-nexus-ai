@@ -111,13 +111,21 @@ export function mediaArtifact(input: {
   modelLabel: string;
   prompt: string;
   options?: MediaOptions;
+  /** The file it is kept as: "<asset id>.png". A page of the project shows it as media/<that>. */
+  fileName?: string | null;
 }): string {
   const by = input.modelLabel ? ` with ${input.modelLabel}` : "";
+  // Where the file is among the files of the project: a page an agent writes
+  // can show the picture, and it is in the preview and in the download.
+  const where = input.fileName
+    ? `In a page of this project it is the file media/${input.fileName} (from a page at the top: src="media/${input.fileName}").\n`
+    : "";
   if (input.kind === "audio") {
     return (
       `Generated voice-over${by}` +
       (input.options?.voice ? ` (voice ${input.options.voice})` : "") +
       `. Asset ${input.assetId}.\n` +
+      where +
       "The audio itself is not audible to other agents; this is the text that is spoken:\n" +
       input.prompt
     );
@@ -135,6 +143,7 @@ export function mediaArtifact(input: {
     `Generated ${input.kind}${by}` +
     (details.length ? ` (${details.join(", ")})` : "") +
     `. Asset ${input.assetId}.\n` +
+    where +
     `The ${input.kind} itself is not visible to other agents; this is the prompt it was generated from:\n` +
     input.prompt
   );

@@ -306,6 +306,11 @@ const appEnv = {
   // says so: the checks that fail a task by failing its models mean what they
   // say, and the ones about stand-ins switch them on for their projects.
   MODEL_STAND_INS: "0",
+  // A project makes media only for the kinds it names a model for: the
+  // checks that count what a run generated mean what they say. That a project
+  // which names none gets a picture where its goal asks for one is looked at
+  // after the last start, below, with this switched on.
+  AUTO_MEDIA: "0",
   NEXUS_WORKER: "",
   // The app would check its models by itself, at moments of its own choosing:
   // the checks ask for a round when they want one. That the server does it by

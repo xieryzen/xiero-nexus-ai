@@ -13,6 +13,7 @@ import { users } from "@/db/schema";
 import { projectUpdateSchema } from "@/lib/validation";
 import { serializeProject } from "@/lib/workforce";
 import { projectFor } from "@/lib/for-viewer";
+import { removeBuiltOf } from "@/lib/result/built";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +74,8 @@ export const DELETE = handle(async (req, { params }) => {
   const user = requireUser();
   const { ip, userAgent } = getClientMeta(req);
   const p = loadOwnedProject(params.id!, user);
+  // What its builds made is on disk: it goes with the project.
+  removeBuiltOf(p.id);
   db.delete(projects).where(eq(projects.id, p.id)).run();
   audit({ actorUserId: user.id, action: "project.delete", targetType: "project", targetId: p.id, ip, userAgent });
   return json({ ok: true });
