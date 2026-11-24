@@ -233,7 +233,7 @@ export function WorkspaceClient({
         {!execution.enabled ? (
           <Alert tone="warn">
             Execution is disabled. Code never runs on the app host — configure an isolated runner
-            (<span className="mono">SANDBOX_URL</span>) to enable it. See <span className="mono">sandbox-runner/README.md</span>.
+            (<span className="mono">SANDBOX_URL</span>) to enable it. See <span className="mono">scripts/host/runner/README.md</span>.
           </Alert>
         ) : (
           <>

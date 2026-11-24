@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover,result
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
 //                                                 to over SSH (4012, 4013)
@@ -306,6 +306,11 @@ const appEnv = {
   // says so: the checks that fail a task by failing its models mean what they
   // say, and the ones about stand-ins switch them on for their projects.
   MODEL_STAND_INS: "0",
+  // A project makes media only for the kinds it names a model for: the
+  // checks that count what a run generated mean what they say. That a project
+  // which names none gets a picture where its goal asks for one is looked at
+  // after the last start, below, with this switched on.
+  AUTO_MEDIA: "0",
   NEXUS_WORKER: "",
   // The app would check its models by itself, at moments of its own choosing:
   // the checks ask for a round when they want one. That the server does it by
@@ -539,6 +544,66 @@ async function stopAndStartAgain() {
   const hiddenBySystem = auditDb.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'model.health.hidden' AND actor_user_id IS NULL AND coalesce(metadata, '') NOT LIKE '%\"by\":\"use\"%'").get().n;
   auditDb.close();
   check("  the audit log says that the system took the model away", hiddenBySystem === 1, hiddenBySystem);
+
+  // ── Media without a model named ──
+  // The checks ran with AUTO_MEDIA=0: a project made media only for the kinds
+  // it names a model for. As an installation is set up by default, a project
+  // that names none is offered the app's choice, where its goal asks for it.
+  console.log("\n── Media: a project that names no model for it is offered the app's choice, unless that is switched off");
+  const beforeMedia = app;
+  const mediaEnded = new Promise((resolve) => beforeMedia.child.once("exit", resolve));
+  beforeMedia.child.kill("SIGTERM");
+  await Promise.race([mediaEnded, sleep(10_000)]);
+  if (!beforeMedia.exited) await stop(beforeMedia);
+  running.splice(running.indexOf(beforeMedia), 1);
+  appEnv.MODEL_HEALTH_INTERVAL_MINUTES = "0";
+  appEnv.AUTO_MEDIA = "";
+  app = startApp();
+  running.push(app);
+  if (!(await ready(app, `${appUrl}/login`))) {
+    check("the server starts as it is set up by default", false, app.output.slice(-600));
+    return 1;
+  }
+  /**
+   * Start a run of a project and read up to its plan: the kind of each task
+   * that was planned. The run is stopped then: what its tasks make is not
+   * what is looked at here.
+   */
+  const planOf = async (projectId) => {
+    const res = await fetch(`${appUrl}/api/projects/${projectId}/run`, { method: "POST", headers: { ...json, cookie }, body: "{}" });
+    if (!res.ok || !res.body) return {};
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let plan = null;
+    while (!plan) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const event = JSON.parse(line.slice(5).trim());
+        if (event.type === "plan") plan = event;
+      }
+    }
+    await fetch(`${appUrl}/api/projects/${projectId}/cancel`, { method: "POST", headers: { ...json, cookie }, body: "{}" }).catch(() => undefined);
+    await reader.cancel().catch(() => undefined);
+    // The run ends before the next thing is asked of the project.
+    for (let i = 0; i < 40 && ["queued", "running"].includes(lastRun(projectId)?.status); i++) await sleep(250);
+    return Object.fromEntries((plan?.tasks ?? []).map((t) => [t.title, t.kind]));
+  };
+  const makeProject = async (body) =>
+    (await (await fetch(`${appUrl}/api/projects`, { method: "POST", headers: { ...json, cookie }, body: JSON.stringify({ goal: "A poster for the lighthouse.", managerModelRowId: project.managerModelRowId, ...body }) })).json().catch(() => null))?.project;
+  const plain = await makeProject({ title: "Media by itself" });
+  check("a project is made that names no model for images, videos or voice-overs", Boolean(plain?.id) && plain.imageModelRowId === null && plain.videoModelRowId === null && plain.speechModelRowId === null, plain);
+  const planned = await planOf(plain?.id);
+  check("the one who plans is offered media all the same: the picture the plan asks for is a picture", planned.Poster === "image" && planned["Write the brief"] === "text", planned);
+  const none = await makeProject({ title: "No media at all", maxMedia: 0 });
+  const plannedNone = await planOf(none?.id);
+  check("  a project whose media limit is 0 makes none: the picture becomes a text task", none?.maxMedia === 0 && plannedNone.Poster === "text" && plannedNone.Teaser === undefined, plannedNone);
+  for (const made of [plain, none]) if (made?.id) await fetch(`${appUrl}/api/projects/${made.id}`, { method: "DELETE", headers: { cookie } }).catch(() => undefined);
 
   console.log(`\n${passed} passed, ${failed} failed (stopping and starting again)`);
   if (process.env.GITHUB_ACTIONS === "true") {

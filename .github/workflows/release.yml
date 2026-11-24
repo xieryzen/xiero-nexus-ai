@@ -55,6 +55,10 @@ jobs:
       # built and run in the end-to-end job.
       - name: The browser service on a made-up host
         run: bash scripts/host/test/browser.sh
+      # The same for the script that sets up the runner programs and builds
+      # run in. Its image is built and run in a job of its own.
+      - name: The runner on a made-up host
+        run: bash scripts/host/test/runner.sh
       # The scripts that run the host scripts from somewhere else sign in to
       # an SSH server on this runner: with a key as a plain user, and as root
       # also with a password and through sudo, the way the Deploy workflow does.
@@ -107,6 +111,22 @@ jobs:
         env:
           E2E_REQUIRE_FFMPEG: "1"
 
+  # The runner programs and builds run in, as a node runs it: the image is
+  # built here, started by scripts/host/runner-service.sh with its limits on
+  # a network made for the test, and asked what the app asks of it. A Paper
+  # plugin is built in it with Gradle, which fetches from Maven Central and
+  # the package server of Paper: this job needs the outside.
+  runner:
+    name: The runner in its container
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: bash scripts/host/test/runner-container.sh
+
   bundle:
     name: Bundle for Node ${{ matrix.node }}
     runs-on: ubuntu-latest
@@ -150,7 +170,7 @@ jobs:
 
   release:
     name: Publish releases
-    needs: [check, e2e, bundle]
+    needs: [check, e2e, runner, bundle]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

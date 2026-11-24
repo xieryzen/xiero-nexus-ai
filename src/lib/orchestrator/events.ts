@@ -57,6 +57,10 @@ export type RunEvent =
   | { type: "progress"; seq: number; message: string; full?: string; link?: string; waiting?: boolean }
   // A tool call an agent made in a running task.
   | { type: "tool"; seq: number; call: ToolCallNote }
+  // The run builds what the project made into a package (v1.12): it has
+  // started, or it has ended one way or the other. `message` says what is
+  // going on, for the page.
+  | { type: "build"; state: "started" | "ok" | "failed"; message: string }
   | { type: "final"; deliverable: string }
   | { type: "review"; notes: string }
   // What the run's tasks used so far, and what the account the project belongs

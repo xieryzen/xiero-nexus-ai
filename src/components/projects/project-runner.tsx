@@ -1,22 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectDTO } from "@/lib/workforce";
 import type { MediaAssetDTO } from "@/lib/media/dto";
 import type { TaskKind } from "@/lib/creative/prompt";
 import type { RunEvent, ToolCallNote } from "@/lib/orchestrator/events";
 import type { RunDTO } from "@/lib/runs";
+import type { ProjectResult } from "@/lib/result";
+import { looksLikeMarkdown } from "@/lib/result/markdown";
 import type { ScheduleDTO } from "@/lib/schedules";
 import { apiFetch, ApiError } from "@/lib/client";
 import { KEPT_HEADER, keptFromHeader, keptLine, type Kept } from "@/lib/access/rules";
 import { formatNumber } from "@/lib/format";
 import { Alert, Badge, Button, Card, Input, PageHeader, cn } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { Markdown } from "@/components/markdown";
 import { MediaView } from "@/components/media/media-view";
 import { useMediaPolling } from "@/components/media/use-media-polling";
 import { ProjectAutomation } from "./project-automation";
 import { ProjectAccounts, type AccountOption } from "./project-accounts";
+import { ProjectResultCard, type OpenFile } from "./project-result";
 import { ProjectServers, type ServerOption } from "./project-servers";
 import { StateBadge } from "./status-badge";
 
@@ -58,6 +62,8 @@ interface TraceCall {
 }
 
 const RUNNING_STATES = new Set(["queued", "planning", "running"]);
+/** The tools that change what the project made: after one, the result is read again. */
+const FILE_TOOLS = new Set(["write_file", "edit_file", "delete_file", "run_command"]);
 
 const KIND_LABEL: Record<TaskKind, string> = {
   text: "text",
@@ -88,6 +94,7 @@ export function ProjectRunner({
   canRun,
   canApprove,
   initialAssets,
+  initialResult,
   imageModelLabel,
   videoModelLabel,
   speechModelLabel,
@@ -110,6 +117,8 @@ export function ProjectRunner({
   canApprove: boolean;
   /** Everything this project's runs generated, oldest first. */
   initialAssets: MediaAssetDTO[];
+  /** What the project made: its files, its site, what was built from them. */
+  initialResult: ProjectResult;
   /** The model each kind is made with, by name. For someone who is not shown the setup: any text when the project makes that kind. */
   imageModelLabel: string | null;
   videoModelLabel: string | null;
@@ -195,6 +204,39 @@ export function ProjectRunner({
   // One stream at a time, also when React runs an effect twice.
   const following = useRef(false);
 
+  // What the project made. Read again when a run writes a file, builds, or ends.
+  const [result, setResult] = useState<ProjectResult>(initialResult);
+  const [openFile, setOpenFile] = useState<OpenFile | null>(null);
+  // What the run's own build is doing, while it does.
+  const [buildNote, setBuildNote] = useState<string | null>(null);
+  const resultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshResult = useCallback(
+    (soon = false) => {
+      if (resultTimer.current) {
+        if (!soon) return;
+        clearTimeout(resultTimer.current);
+      }
+      // Tool calls come in bursts: one read after a moment, not one for each.
+      resultTimer.current = setTimeout(
+        () => {
+          resultTimer.current = null;
+          apiFetch<{ result: ProjectResult }>(`/api/projects/${project.id}/result`)
+            .then((res) => setResult(res.result))
+            .catch(() => undefined);
+        },
+        soon ? 300 : 2500,
+      );
+    },
+    [project.id],
+  );
+  useEffect(
+    () => () => {
+      if (resultTimer.current) clearTimeout(resultTimer.current);
+    },
+    [],
+  );
+  const showFile = useCallback((path: string) => setOpenFile((prev) => ({ path, n: (prev?.n ?? 0) + 1 })), []);
+
   const upsert = useCallback((t: Partial<TaskLive> & { seq: number }) => {
     setTasks((prev) => {
       const i = prev.findIndex((x) => x.seq === t.seq);
@@ -262,6 +304,8 @@ export function ProjectRunner({
           ...(evt.steps ? { steps: evt.steps } : {}),
           ...(evt.toolCalls ? { toolCalls: evt.toolCalls } : {}),
         });
+        // A task that has ended may have left files.
+        if (evt.status !== "running" && evt.status !== "queued") refreshResult();
         break;
       case "progress":
         upsert({ seq: evt.seq, progress: evt.message, progressLink: evt.link ?? null, waiting: evt.waiting === true });
@@ -270,6 +314,11 @@ export function ProjectRunner({
         setTasks((prev) =>
           prev.map((t) => (t.seq === evt.seq ? { ...t, calls: [...(t.calls ?? []), evt.call].slice(-40) } : t)),
         );
+        if (!evt.call.isError && FILE_TOOLS.has(evt.call.name)) refreshResult();
+        break;
+      case "build":
+        setBuildNote(evt.state === "started" ? evt.message : null);
+        if (evt.state !== "started") refreshResult(true);
         break;
       case "final":
         setDeliverable(evt.deliverable);
@@ -287,9 +336,11 @@ export function ProjectRunner({
       case "done":
         setStatus(evt.status);
         setFinishedRuns((n) => n + 1);
+        setBuildNote(null);
+        refreshResult(true);
         break;
     }
-  }, [upsert]);
+  }, [upsert, refreshResult]);
 
   /** Read a stream of run events until the server ends it. */
   const consume = useCallback(
@@ -486,8 +537,11 @@ export function ProjectRunner({
   const tasksDone = tasks.filter((t) => t.status === "succeeded").length;
   const tasksLeft = tasks.length - tasksDone;
   const canContinue = !isRunning && tasks.length > 0 && tasksLeft > 0;
-  const hasMediaModels = Boolean(imageModelLabel || videoModelLabel || speechModelLabel);
+  const hasMediaModels = Boolean(imageModelLabel || videoModelLabel || speechModelLabel) && project.maxMedia > 0;
   const readyMedia = countAssets(tasks, "ready");
+  // The files each task wrote, and every path: where a text names a file, it opens it.
+  const filesOf = (seq: number) => result.files.filter((f) => f.task === seq);
+  const resultPaths = useMemo(() => new Set(result.files.map((f) => f.path)), [result.files]);
   const pendingMedia = countAssets(tasks, "pending");
 
   return (
@@ -588,7 +642,7 @@ export function ProjectRunner({
                   .join(" · ")
               : `makes ${[imageModelLabel ? "images" : "", videoModelLabel ? "videos" : "", speechModelLabel ? "voice-overs" : ""]
                   .filter(Boolean)
-                  .join(", ")}`}{" "}
+                  .join(", ")} where the goal asks for them`}{" "}
             · up to {project.maxMedia} per run
           </span>
         )}
@@ -644,8 +698,22 @@ export function ProjectRunner({
         </div>
       )}
 
+      <ProjectResultCard
+        projectId={project.id}
+        result={result}
+        onResult={setResult}
+        assets={tasks.flatMap((t) => t.assets ?? [])}
+        running={isRunning}
+        mayOperate={mayOperate}
+        canFix={canRun && !isRunning}
+        onFix={() => void run(true)}
+        open={openFile}
+        buildNote={buildNote}
+        showSetup={chooses}
+      />
+
       <Card title="Goal" className="mb-6">
-        <p className="whitespace-pre-wrap text-sm text-ink-2">{project.goal}</p>
+        <p className="whitespace-pre-wrap break-words text-sm text-ink-2">{project.goal}</p>
         {handed.length > 0 && (
           <p className="mt-3 border-t border-line pt-3 text-xs text-ink-3" data-testid="handed">
             A run works with what you handed over yourself and this goal is about, whatever tools its agents have:{" "}
@@ -713,7 +781,7 @@ export function ProjectRunner({
                         <Link href={t.progressLink} className="btn btn-primary shrink-0 px-2.5 py-1 text-xs">Open the page</Link>
                       </div>
                     )}
-                    {t.error && <p className="mt-2 whitespace-pre-wrap rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{t.error}</p>}
+                    {t.error && <p className="mt-2 whitespace-pre-wrap break-words rounded border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger">{t.error}</p>}
                   </div>
                   <StateBadge state={t.status} />
                 </div>
@@ -795,6 +863,25 @@ export function ProjectRunner({
                     )}
                   </div>
                 )}
+                {filesOf(t.seq).length > 0 && (
+                  <p className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-ink-3" data-testid="task-files">
+                    <Icon name="file" size={13} /> {filesOf(t.seq).length === 1 ? "File:" : `${filesOf(t.seq).length} files:`}
+                    {filesOf(t.seq)
+                      .slice(0, 8)
+                      .map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => showFile(f.path)}
+                          title={`Open ${f.path}`}
+                          className="mono max-w-[16rem] truncate rounded border border-line px-1.5 py-0.5 text-[11px] text-ink-2 hover:border-signal/50 hover:text-ink"
+                        >
+                          {f.path}
+                        </button>
+                      ))}
+                    {filesOf(t.seq).length > 8 && <span>and {filesOf(t.seq).length - 8} more, in the result above</span>}
+                  </p>
+                )}
                 {t.artifact && (
                   <div className="mt-3">
                     <button
@@ -812,7 +899,7 @@ export function ProjectRunner({
                       {t.kind === "text" ? "output" : t.kind === "audio" ? "spoken text" : t.kind === "render" ? "details" : "prompt"}
                     </button>
                     {expanded.has(t.seq) && (
-                      <pre className={cn("mt-2 max-h-80 overflow-auto rounded-md border border-line bg-surface-2 p-3 text-xs text-ink-2", "whitespace-pre-wrap")}>
+                      <pre className={cn("mt-2 max-h-80 overflow-auto rounded-md border border-line bg-surface-2 p-3 text-xs text-ink-2", "whitespace-pre-wrap break-words")}>
                         {t.artifact}
                       </pre>
                     )}
@@ -840,7 +927,13 @@ export function ProjectRunner({
       {deliverable && (
         <div className="mt-6">
           <Card title="Final deliverable" description="Consolidated by the AI Manager (LLM synthesis, not automated verification).">
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink">{deliverable}</pre>
+            <div data-testid="final-deliverable">
+              {looksLikeMarkdown(deliverable) ? (
+                <Markdown source={deliverable} files={resultPaths} onFile={showFile} className="text-ink" />
+              ) : (
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-ink">{deliverable}</pre>
+              )}
+            </div>
           </Card>
         </div>
       )}
@@ -848,7 +941,11 @@ export function ProjectRunner({
       {review && (
         <div className="mt-6">
           <Card title="QA / Security review" description="Advisory reviewer assessment — grounded in sandbox test output when available, not a substitute for automated verification.">
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-ink-2">{review}</pre>
+            {looksLikeMarkdown(review) ? (
+              <Markdown source={review} files={resultPaths} onFile={showFile} />
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-ink-2">{review}</pre>
+            )}
           </Card>
         </div>
       )}

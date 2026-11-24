@@ -206,6 +206,13 @@ function embedding(text, dimensions = 24) {
  *   "Tool: skill"     read a file of a skill, the skill itself, and a file it does not have
  *   "Tool: output"    save the task's output file with write_file, then say what was done
  *   "Tool: silent"    save the task's output file with write_file, then say nothing
+ *   "Tool: site"      write a small web site: two pages, a style sheet, a script, a README
+ *   "Tool: plugin"    write a Gradle project whose build fails as it is written
+ *                     ("Tool: plugin stuck": one that nobody gets to build;
+ *                     "Tool: plugin good": one that builds at once)
+ *   "Tool: pack"      make a package with a program and ask for it to be kept
+ *   "Make the project build" (the task the app adds when a build fails): read
+ *                     the file the build names, correct it, build again
  *   "Tool: ssh"       run on a server what the task's objective lists, a line each:
  *                     SSH: {"command": "uname -a", "server": "vps-1", "timeout_seconds": 5}
  *   "Tool: browser"   do in the browser what the task's objective lists, a line each:
@@ -302,6 +309,42 @@ function nextToolCalls(body) {
     const system = String(messages.find((m) => m.role === "system")?.content ?? "");
     const target = (system.match(/Your deliverable is the file (\S+): save it with write_file/) ?? [])[1];
     if (done === 0 && target) return call("write_file", { path: target, content: "# Written with the tool\n\nBy the agent, in the file.\n" });
+    return null;
+  }
+  if (title.startsWith("Tool: site")) {
+    const pages = [
+      ["index.html", '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>Lighthouse Tours</title>\n<link rel="stylesheet" href="css/style.css">\n</head>\n<body>\n<h1 id="title">Lighthouse Tours</h1>\n<p><a href="about.html">About us</a> <a id="root-link" href="/about.html">from the root</a></p>\n<p id="by-script">not yet</p>\n<script src="js/app.js"></script>\n</body>\n</html>\n'],
+      ["about.html", '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>About</title>\n<link rel="stylesheet" href="css/style.css">\n</head>\n<body>\n<h1>About the keepers</h1>\n<p><a href="index.html">Home</a></p>\n</body>\n</html>\n'],
+      ["css/style.css", "body { font-family: sans-serif; background: rgb(250, 240, 200); }\nh1 { color: rgb(20, 60, 120); }\n"],
+      ["js/app.js", 'document.getElementById("by-script").textContent = "set by the script";\n'],
+      ["README.md", "# Lighthouse Tours\n\nA site of **two pages**.\n\n- `index.html`: the home page\n- `about.html`: about the keepers\n\n| File | What |\n| --- | --- |\n| css/style.css | the look |\n"],
+    ];
+    if (done < pages.length) return call("write_file", { path: pages[done][0], content: pages[done][1] });
+    return null;
+  }
+  if (title.startsWith("Tool: plugin")) {
+    // What stops the build stands in the source: the sandbox of the checks
+    // fails a build whose files hold one of these words.
+    const flaw = title.startsWith("Tool: plugin stuck") ? "NEVER-BUILDS" : title.startsWith("Tool: plugin good") ? "" : "BROKEN-BUILD";
+    const files = [
+      ["settings.gradle.kts", 'rootProject.name = "shop"\n'],
+      ["build.gradle.kts", 'plugins {\n    java\n}\n\ngroup = "demo"\nversion = "1.0.0"\n'],
+      ["src/main/java/demo/Shop.java", `package demo;\n\npublic final class Shop {\n    public String name() {\n        return "shop"${flaw ? ` ${flaw}` : ";"}\n    }\n}\n`],
+      ["src/main/resources/plugin.yml", "name: Shop\nversion: 1.0.0\nmain: demo.Shop\n"],
+    ];
+    if (done < files.length) return call("write_file", { path: files[done][0], content: files[done][1] });
+    return null;
+  }
+  if (title.startsWith("Make the project build")) {
+    // As an agent goes about it: the file the build names, the correction, the build.
+    if (done === 0) return call("read_file", { path: "src/main/java/demo/Shop.java" });
+    if (done === 1) return call("edit_file", { path: "src/main/java/demo/Shop.java", old_text: " BROKEN-BUILD", new_text: ";" });
+    if (done === 2) return call("run_command", { command: "gradle build -x test --console=plain -q" });
+    return null;
+  }
+  if (title.startsWith("Tool: pack")) {
+    if (done === 0) return call("write_file", { path: "pack.js", content: "// makes out/site.zip\n" });
+    if (done === 1) return call("run_command", { command: "node pack.js", keep: ["out/*.zip", "../../etc/*", "out/**"] });
     return null;
   }
   if (title.startsWith("Tool: ssh")) {
@@ -1065,9 +1108,72 @@ function sandbox(req, res, body) {
   if (req.headers.authorization !== "Bearer sandbox-mock-token") return send(res, 401, { error: "unauthorized" });
   const command = String(body?.command ?? "");
   const files = Array.isArray(body?.files) ? body.files : [];
+  const keep = Array.isArray(body?.keep) ? body.keep : [];
+  const b64 = (text) => Buffer.from(text).toString("base64");
   if (command === "node check.js") {
     const script = files.find((f) => f.path === "check.js");
     return send(res, 200, { exitCode: script ? 0 : 1, stdout: script ? "42\n" : "", stderr: script ? "" : "check.js not found", durationMs: 12 });
+  }
+  // A build, as the app asks for one of a Gradle or a Maven project. It fails
+  // while a file holds one of the words the checks put there, and says where,
+  // the way a compiler does; else it leaves a package behind, with what a
+  // build leaves besides it and what a runner that is not to be trusted might
+  // hand back.
+  if (/^(gradle|mvn)\b/.test(command)) {
+    const flawed = files.find((f) => /BROKEN-BUILD|NEVER-BUILDS/.test(String(f.content)));
+    if (flawed) {
+      return send(res, 200, {
+        exitCode: 1,
+        stdout: "",
+        stderr: `> Task :compileJava FAILED\n/work/run/${flawed.path}:5: error: ';' expected\n        return "shop" ${/NEVER-BUILDS/.test(String(flawed.content)) ? "NEVER-BUILDS" : "BROKEN-BUILD"}\n                     ^\n1 error\n\nFAILURE: Build failed with an exception.\n`,
+        durationMs: 2100,
+        timedOut: false,
+      });
+    }
+    const maven = command.startsWith("mvn");
+    // Where the build leaves its package: under the folder the build file is in.
+    const folder = (command.match(/ -f (\S+)\/pom\.xml/) ?? command.match(/ -p (\S+)/) ?? [])[1];
+    const out = `${folder ? `${folder}/` : ""}${maven ? "target" : "build/libs"}`;
+    const answer = {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      durationMs: 3400,
+      timedOut: false,
+      kept:
+        keep.length > 0
+          ? [
+              { path: `${out}/shop-1.0.0.jar`, base64: b64(`PK\u0003\u0004 a jar of ${files.length} files`) },
+              { path: `${out}/shop-1.0.0-sources.jar`, base64: b64("PK the sources") },
+              { path: "../outside.jar", base64: b64("PK outside the folder") },
+              { path: "notes/not-asked-for.txt", base64: b64("nobody asked for this") },
+            ]
+          : [],
+      notKept: keep.length > 0 ? [{ path: `${out}/shop-1.0.0-all.jar`, reason: "larger than 48 MB" }] : [],
+    };
+    // The way a runner answers a request with "stream": spaces while the build runs, then the result.
+    if (body?.stream === true) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("  ");
+      return setTimeout(() => res.end(` ${JSON.stringify(answer)}`), 150);
+    }
+    return send(res, 200, answer);
+  }
+  if (command === "node pack.js") {
+    return send(res, 200, {
+      exitCode: 0,
+      stdout: "packed\n",
+      stderr: "",
+      durationMs: 40,
+      kept:
+        keep.length > 0
+          ? [
+              { path: "out/site.zip", base64: b64("PK\u0003\u0004 the packed site") },
+              { path: "out/notes.txt", base64: b64("fits out/** and is kept too") },
+              { path: "dist/site.zip", base64: b64("PK\u0003\u0004 the site for distribution") },
+            ]
+          : [],
+    });
   }
   return send(res, 200, { exitCode: 0, stdout: `ran: ${command} (${files.length} files)\n`, stderr: "", durationMs: 5 });
 }

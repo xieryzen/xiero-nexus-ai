@@ -27,6 +27,13 @@ export const DEFAULT_ALLOWED_COMMANDS = [
   "go",
   "cargo",
   "make",
+  // What a Java project is built with (v1.12): the runner that has them is
+  // the one of scripts/host/runner.
+  "java",
+  "javac",
+  "jar",
+  "mvn",
+  "gradle",
   "ls",
   "cat",
   "echo",

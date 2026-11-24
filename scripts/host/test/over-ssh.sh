@@ -175,6 +175,11 @@ cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/workforce.sh"
 cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/browser-service.sh"
 mkdir -p "${WORK}/scripts/browser"
 echo "# a stand-in" > "${WORK}/scripts/browser/Dockerfile"
+# The script that sets up the runner, with what its image is built from.
+cp "${WORK}/scripts/pterodactyl-upgrade.sh" "${WORK}/scripts/runner-service.sh"
+mkdir -p "${WORK}/scripts/runner/warm"
+echo "# a stand-in" > "${WORK}/scripts/runner/Dockerfile"
+echo "// a stand-in" > "${WORK}/scripts/runner/warm/file.txt"
 # What workforce.sh works with travels with it: its program, its file, and the skills the file names.
 echo "# a stand-in" > "${WORK}/scripts/workforce.py"
 echo "{}" > "${WORK}/scripts/workforce.json"
@@ -336,6 +341,12 @@ DEPLOY_SERVER=0a11ce00 remote browser-plan || true
 check "browser-plan: runs browser-service.sh" said "ran=browser-service.sh"
 check "  with the server and --dry-run" args_are --server 0a11ce00 --dry-run
 check "  what its image is built from is next to it on the node" said "beside=browser browser-service.sh "
+DEPLOY_SERVER=0a11ce00 remote runner-plan || true
+check "runner-plan: runs runner-service.sh" said "ran=runner-service.sh"
+check "  with the server and --dry-run" args_are --server 0a11ce00 --dry-run
+check "  what its image is built from is next to it on the node" said " runner runner-service.sh sealed-output.sh "
+DEPLOY_SERVER=0a11ce00 DEPLOY_VERSION=v1.12.0 remote runner -- --max-seconds 600 || true
+check "runner: --yes, the version of the app, and what came after \"--\"" args_are --server 0a11ce00 --version 1.12.0 --yes --max-seconds 600
 DEPLOY_SERVER=0a11ce00 DEPLOY_VERSION=v1.8.0 remote browser -- --rebuild || true
 check "browser: --yes, the version of the app, and what came after \"--\"" args_are --server 0a11ce00 --version 1.8.0 --yes --rebuild
 check "  a node without a key for sealed input is not told of one" said "input_key=[]"

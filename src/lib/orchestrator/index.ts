@@ -76,6 +76,10 @@ import { limitOf } from "@/lib/upstream";
 import { waitWords } from "@/lib/provider-limits";
 import { computeCost, countTokens, estimateTokens, recordUsage } from "@/lib/usage";
 import { allFiles, ensureWorkspace, latestExecSummary, listFiles, upsertFile } from "@/lib/workspace";
+import { getExecutor } from "@/lib/workspace/executor";
+import { buildProject, buildStateOf } from "@/lib/result/build";
+import { listBuilt } from "@/lib/result/built";
+import { buildOf } from "@/lib/result/kinds";
 import { validateWorkspacePath } from "@/lib/workspace/paths";
 import { pickCheapestModel, type RoutableModel } from "@/lib/router";
 import type { ProjectState, RunEvent, TaskState, ToolCallNote } from "./events";
@@ -87,6 +91,7 @@ import {
   pathsWritten,
   reviewMaterial,
 } from "./deliverable";
+import { BUILD_FIX_ROUNDS, FIX_ACCEPTANCE, buildNote, fixObjective, fixTitle, grantedTools, isFixTask, pickFixer, type BuildReport } from "./build-phase";
 import { failureText, limitWaitMs, limitWaitNote, nextLimitWait, type LimitedModel, type ModelFailure } from "./limit-wait";
 import {
   countMediaTasks,
@@ -380,6 +385,8 @@ interface RunTask {
   dependsOn: number[];
   options: MediaOptions;
   agent: Agent | undefined;
+  /** Tools the task is handed whatever its agent has ticked: for the task that makes a failing build work. */
+  grant: string[];
 }
 
 function parseDependsOn(raw: string | null): number[] {
@@ -702,7 +709,8 @@ export async function executeRun(runId: string): Promise<void> {
                   ' ("media":{"subtitles":true} burns the spoken text in). It needs no prompt.'
                 : "") +
               " Nobody on the team can see or hear the generated media, only its prompt, so put everything a later " +
-              "task needs to know into text tasks. " +
+              "task needs to know into text tasks. What is generated is also a file of the project, and the output of its task " +
+              "names the path (media/…): a task that writes a page and depends on that task can show the picture or play the voice there. " +
               `Use at most ${mediaLimit} such tasks, and only where the goal asks for them.`
             : "";
         // The machines the project names, for the one who plans: by name, never where they are.
@@ -728,6 +736,12 @@ export async function executeRun(runId: string): Promise<void> {
               '(code/config), add an "outputFile" relative path and the agent should return ONLY that file\'s contents; ' +
               "its artifact is saved to the project workspace. Keep it minimal and ordered." +
               creative +
+              (getExecutor().enabled
+                ? "\n\nBuilding: when the files the team writes are a Gradle or a Maven project, the app builds them itself once the tasks " +
+                  "are done, and the person downloads the package (the .jar) from the project page. So plan the files of a project that " +
+                  "builds: its build file, its sources and its resources, complete. An agent that has the tool run_command builds and " +
+                  "tests its own work. Do not plan a task that only explains to the person how to build it."
+                : "") +
               serversForPlan(planServers, workforce) +
               browserForPlan(planBrowser, planAccounts, workforce) +
               ownForPlan(planOwn, browserConfigured()) +
@@ -839,6 +853,7 @@ export async function executeRun(runId: string): Promise<void> {
       dependsOn: parseDependsOn(row.dependsOn),
       options: parseMediaOptions(row.mediaOptions),
       agent: row.agentId ? agentById.get(row.agentId) : undefined,
+      grant: grantedTools(row.mediaOptions),
     }));
     const bySeq = new Map(tasks.map((t) => [t.seq, t] as const));
 
@@ -1154,6 +1169,7 @@ export async function executeRun(runId: string): Promise<void> {
                 workspaceId: workspace.id,
                 userId: project.createdBy,
                 agent,
+                extra: task.grant,
                 collectionIds: collectionIdsForAgent(agent.id),
                 skills: workSkills,
                 // The machines the project names, as they are now. The run's
@@ -1579,7 +1595,7 @@ export async function executeRun(runId: string): Promise<void> {
         logGeneration("ok");
         attempt++;
         return succeed(
-          mediaArtifact({ kind: generated, assetId: asset.id, modelLabel: namesModels ? label : "", prompt, options: used }),
+          mediaArtifact({ kind: generated, assetId: asset.id, modelLabel: namesModels ? label : "", prompt, options: used, fileName: asset.fileName }),
           [serializeAsset(asset)],
         );
       };
@@ -1722,6 +1738,103 @@ export async function executeRun(runId: string): Promise<void> {
 
     db.update(projects).set({ tokensUsed: usedTokens, updatedAt: new Date() }).where(eq(projects.id, projectId)).run();
 
+    // ── Build ───────────────────────────────────────────────────────────────
+    // What the tasks wrote is built into its package, when it is something
+    // that is built and this server has a runner to build with: a plugin is
+    // its .jar, not its sources. A build that fails goes back to the agent
+    // that wrote the project, as one more task with what the build said, and
+    // is built again.
+    let buildReport: BuildReport | null = null;
+    if (!isCancelled() && getExecutor().enabled && [...statusBySeq.values()].includes("succeeded")) {
+      const planNow = () => buildOf(listFiles(workspace.id).map((f) => f.path));
+      // The tasks of this run that were already there to make the build work
+      // (it was picked up after a restart) count against how often that is tried.
+      let fixRounds = tasks.filter((t) => isFixTask(t.row.title) && t.row.status === "queued").length;
+      const build = async (): Promise<BuildReport | null> => {
+        const plan = planNow();
+        if (!plan) return null;
+        // Built already from the files as they are, by an agent with the same command: not again.
+        const state = buildStateOf(projectId, workspace.id, allFiles(workspace.id));
+        if (state?.last?.ok && state.last.current) {
+          const made = listBuilt(projectId).filter((b) => b.command === plan.command && b.createdAt.getTime() >= state.last!.at - 60_000);
+          emit({ type: "build", state: "ok", message: `Built with ${plan.label}.` });
+          return { plan, ok: true, exitCode: 0, timedOut: false, log: state.last.log, kept: made, fixRounds };
+        }
+        emit({ type: "build", state: "started", message: `Building the project with ${plan.label}. The first build fetches what it is built with, which can take some minutes.` });
+        try {
+          const outcome = await buildProject({ projectId, workspaceId: workspace.id, userId: project.createdBy });
+          emit({
+            type: "build",
+            state: outcome.ok ? "ok" : "failed",
+            message: outcome.ok ? `Built with ${plan.label}.` : `The build with ${plan.label} failed.`,
+          });
+          return { plan, ok: outcome.ok, exitCode: outcome.exitCode, timedOut: outcome.timedOut, log: outcome.log, kept: outcome.kept, fixRounds };
+        } catch (e) {
+          const why = e instanceof AppError ? e.message : "the runner did not answer";
+          emit({ type: "build", state: "failed", message: `The project was not built: ${why}` });
+          return { plan, ok: false, exitCode: null, timedOut: false, log: "", kept: [], fixRounds, notBuilt: why };
+        }
+      };
+      buildReport = await build();
+      while (buildReport && !buildReport.ok && !buildReport.notBuilt && fixRounds < BUILD_FIX_ROUNDS && !isCancelled() && !accountSpent()) {
+        const fixerId = pickFixer(
+          tasks.map((t) => ({
+            agentId: t.agent?.id ?? null,
+            seq: t.seq,
+            wrote: [...filesWrittenBy(t.row.id), ...(t.row.outputFile ? [t.row.outputFile] : [])],
+            canWrite: Boolean(t.agent) && parseToolNames(t.agent!.tools).some((name) => name === "write_file" || name === "edit_file"),
+          })),
+          buildReport.plan.file,
+        );
+        const fixer = fixerId ? agentById.get(fixerId) : undefined;
+        // Nobody on the team can write a file: the build stays as it is, and the run says so.
+        if (!fixer) break;
+        fixRounds++;
+        const seq = Math.max(0, ...tasks.map((t) => t.seq)) + 1;
+        const row = db
+          .insert(projectTasks)
+          .values({
+            projectId,
+            seq,
+            title: fixTitle(tasks.filter((t) => isFixTask(t.row.title)).length + 1),
+            objective: fixObjective(buildReport.plan, buildReport.log, true),
+            acceptanceCriteria: FIX_ACCEPTANCE,
+            agentId: fixer.id,
+            dependsOn: "[]",
+            kind: "text",
+            // The task is handed the tool to build with, whatever its agent has ticked.
+            mediaOptions: JSON.stringify({ tools: ["run_command"] }),
+            status: "queued",
+          })
+          .returning()
+          .get();
+        const task: RunTask = { row, seq, kind: "text", dependsOn: [], options: {}, agent: fixer, grant: ["run_command"] };
+        tasks.push(task);
+        bySeq.set(seq, task);
+        emit({
+          type: "plan",
+          tasks: tasks.map((t) => ({ id: t.row.id, seq: t.seq, title: t.row.title, agent: t.agent?.name ?? "", dependsOn: t.dependsOn, kind: t.kind })),
+        });
+        const res = await runTask(task).catch((err): { status: TaskState; tokens: number } => {
+          // eslint-disable-next-line no-console
+          console.error("[xiero-nexus] task failed unexpectedly:", err);
+          const error = "The task failed unexpectedly. Check the server log.";
+          db.update(projectTasks).set({ status: "failed", error, updatedAt: new Date() }).where(eq(projectTasks.id, row.id)).run();
+          emit({ type: "task", seq, title: row.title, status: "failed", agent: fixer.name, error });
+          return { status: "failed", tokens: 0 };
+        });
+        statusBySeq.set(seq, res.status);
+        usedTokens += res.tokens;
+        db.update(projects).set({ tokensUsed: usedTokens, updatedAt: new Date() }).where(eq(projects.id, projectId)).run();
+        db.update(projectRuns).set({ tokensUsed: runTokens() }).where(eq(projectRuns.id, runId)).run();
+        emit({ type: "tokens", used: usedTokens, left: tokensLeftFor(project.createdBy) });
+        if (isCancelled()) break;
+        buildReport = await build();
+      }
+    }
+    const buildFailed = buildReport !== null && !buildReport.ok;
+    const aboutBuild = buildReport ? buildNote(buildReport) : "";
+
     if (isCancelled()) {
       setStatus("cancelled", { finishedAt: new Date() });
       endRun("cancelled", { tokensUsed: runTokens() });
@@ -1775,6 +1888,10 @@ export async function executeRun(runId: string): Promise<void> {
             "automated verification. You work from the task outputs alone. The names of the files in the " +
             "project's workspace follow them only so that you can say where a deliverable is: you cannot " +
             "open a file and need not, and you never make up what one contains." +
+            (aboutBuild
+              ? " The app built the project itself when the tasks were done; how that went stands after the task outputs. " +
+                "Say it plainly, near the top: that the package was built and what it is called, or that the build failed and there is no package."
+              : "") +
             (mediaTasks.length > 0
               ? " Some tasks generated an image, a video or a voice-over, or joined clips into one " +
                 "video. You cannot see or hear those: list each one by its task title, say what it " +
@@ -1787,7 +1904,8 @@ export async function executeRun(runId: string): Promise<void> {
           content:
             `Goal:\n${goal}\n\nTask outputs:\n` +
             succeededTasks.map((t) => `## ${t.seq}. ${t.title}\n${t.artifact ?? ""}`).join("\n\n") +
-            (workspaceList ? `\n\nFiles in the project workspace:\n${workspaceList}` : ""),
+            (workspaceList ? `\n\nFiles in the project workspace:\n${workspaceList}` : "") +
+            (aboutBuild ? `\n\nBuild of the project:\n${aboutBuild}` : ""),
         },
       ];
       try {
@@ -1831,6 +1949,9 @@ export async function executeRun(runId: string): Promise<void> {
               "says that it wrote a file, judge the file. A deliverable that is marked as holding a file is that " +
               "file: you have seen it. Text marked as cut, and files listed as not shown, you have not seen: " +
               "say so, and do not count what you have not seen against a task. " +
+              (aboutBuild
+                ? "The app built the project itself; how that went stands at the end. A build that failed means the package was not made: count that against what was to be delivered. "
+                : "") +
               (mediaTasks.length > 0
                 ? "A deliverable that starts with 'Generated image', 'Generated video', 'Generated voice-over' " +
                   "or 'Joined video' is media you cannot see or hear: review its prompt against the criteria, " +
@@ -1856,7 +1977,9 @@ export async function executeRun(runId: string): Promise<void> {
                   wrote: filesWrittenBy(t.id),
                 })),
                 allFiles(workspace.id),
-              ) + (execSummary ? `\n\n### Sandbox execution results\n${execSummary}` : ""),
+              ) +
+              (execSummary ? `\n\n### Sandbox execution results\n${execSummary}` : "") +
+              (aboutBuild ? `\n\n### Build of the project\n${aboutBuild}` : ""),
           },
         ];
         // The reviewer's models that can be used now, then others that work, then its failing ones.
@@ -1885,7 +2008,7 @@ export async function executeRun(runId: string): Promise<void> {
     const finalStatus: "failed" | "review" | "succeeded" =
       succeededTasks.length === 0
         ? "failed"
-        : incomplete.length > 0 || gateFailed || spent || unreviewed
+        : incomplete.length > 0 || gateFailed || spent || unreviewed || buildFailed
           ? "review"
           : "succeeded";
 
@@ -1917,7 +2040,9 @@ export async function executeRun(runId: string): Promise<void> {
             ? "Its result was not put together."
             : unreviewed
               ? "It was not reviewed."
-              : "") + tokenNote;
+              : buildFailed
+                ? "What it made does not build: there is no package yet."
+                : "") + tokenNote;
     endRun(
       finalStatus,
       { deliverable: deliverable || null, reviewNotes: reviewNotes || null, tokensUsed: runTokens() },

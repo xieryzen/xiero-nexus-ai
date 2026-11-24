@@ -11,6 +11,7 @@ not part of a release bundle and the app never runs them.
 | [`nginx-site.sh`](nginx-site.sh) | Give the app its public address: a site in the node's nginx with a certificate from Let's Encrypt, without touching the other sites. |
 | [`workforce.sh`](workforce.sh), [`workforce.py`](workforce.py) | Put the workforce of [`workforce.json`](workforce.json) into the running app: providers that take no key, models, agents, teams and workflows. |
 | [`browser-service.sh`](browser-service.sh), [`browser/`](browser) | The browser agents work in: a Chromium in a container of its own next to the server, behind a token, and `BROWSER_URL` in the server's `.env`. |
+| [`runner-service.sh`](runner-service.sh), [`runner/`](runner) | The runner programs and builds run in: a container of its own next to the server, where a project's plugin is built into its `.jar`, and `SANDBOX_URL` in the server's `.env`. |
 | [`disk-report.sh`](disk-report.sh) | A read-only report of what fills the machine's disk, to decide what to tidy up. |
 | [`models-report.sh`](models-report.sh) | A read-only report of what the app knows about its models: every provider and model with its last check, the models of the agents and projects, and what the providers answered in the last runs. |
 | [`node-check.sh`](node-check.sh) | A read-only look at the node before an upgrade: Wings, Docker, which servers hold the app, what is in one server's files. |
@@ -41,7 +42,16 @@ mkdir -p browser
 for name in Dockerfile gate.mjs policy.json; do
   curl -fsSL -o "browser/${name}" "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/browser/${name}"
 done
+# The runner: its script, and what its image is built from.
+curl -fsSLO "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/runner-service.sh"
+mkdir -p runner/warm/paper/src/main/java/warm runner/warm/paper/src/main/resources runner/warm/maven/src/main/java/warm
+git_files="Dockerfile server.mjs gradle.sh init.sh selftest.mjs warm/paper/build.gradle.kts warm/paper/settings.gradle.kts warm/paper/src/main/java/warm/WarmPlugin.java warm/paper/src/main/resources/plugin.yml warm/maven/pom.xml warm/maven/src/main/java/warm/Warm.java"
+for name in ${git_files}; do
+  curl -fsSL -o "runner/${name}" "https://raw.githubusercontent.com/xieryzen/xiero-nexus-ai/main/scripts/host/runner/${name}"
+done
 ```
+
+`over-ssh.sh` and the Deploy workflow send all of these along themselves.
 
 ## Installing: `pterodactyl-install.sh`
 
@@ -164,7 +174,7 @@ it.
 | `--app-url https://nexus.example.com` | Set `APP_URL` in the server's `.env`: the public address of the site, used in webhook links and in the links the API returns. |
 | `--set KEY=VALUE` | Set any other line of `.env`. Can be repeated. `SECRET_ENCRYPTION_KEY` cannot be changed this way. |
 | `--ffmpeg <file>` | Copy this ffmpeg program into the server's files and point `FFMPEG_PATH` at it, for a server image without ffmpeg. See below. |
-| `--with-media` | Also copy the generated images and videos to the backup. An upgrade does not change them, and copying can take long. |
+| `--with-media` | Also copy the generated images and videos to the backup. An upgrade does not change them, and copying can take long. What builds made (`data/built`, from 1.12) is not copied: an upgrade does not change it either, and a project is built again from its files. |
 | `--backup-dir <dir>` | Keep backups somewhere else. |
 | `--restore <folder>` | Do not upgrade: put the program files and the database of that backup folder back. |
 | `--start` | Do not upgrade: start the server through Wings and wait until the app answers; show its console when it does not. |
@@ -483,6 +493,24 @@ runs**, which a container behind a firewall may not. Nothing is signed in to
 and nothing is kept; it needs an owner. Both go with `--inventory-only`, and
 then the workforce is not looked at.
 
+`--give-tools` is for agents that are in the app already. The file's agents
+are made once and then left as they are, so that what somebody changed on
+the Agents page stays; a tool the file names later (`run_command`, once the
+runner is there) does not reach them. With `--give-tools` every agent that is
+in the app under a name of the file is given the tools the file names for it
+and that it does not have. No tool is taken away, and nothing else of the
+agent is changed.
+
+`--try-results`, from 1.12 of the app, says what the projects of the account
+that signed in made, as their pages show it: the files and their kinds, the
+web site among them and **whether it is shown** to a visitor in its sandbox
+(the address of the preview is asked without a session, as the frame of the
+project page asks it), what was built, and how each project is built.
+`--try-build` also builds every project that is built (a Gradle or a Maven
+project) and has no package of its files as they are: in the runner, with
+the package kept as on the project page. A build that fails is said with the
+end of what it printed. Both go with `--inventory-only`.
+
 From 1.8 the app itself leaves a chat model that fails its check out of its
 lists, and takes it back when it answers again. `--only-usable` goes further
 and switches models off, also the ones a provider without a key would bill
@@ -779,6 +807,66 @@ are tested now: Docker's default network did not reach the package servers
 Chromium says more about itself than the check of the token read. Another
 node can differ in other ways: do the dry run first.
 
+## The runner: `runner-service.sh`
+
+From version 1.12 a project that is a Gradle or a Maven project (a Minecraft
+plugin) is **built** when its run ends, and its package is downloaded from
+the project page (the README of the app, "What a project made"). The app
+never runs code itself: builds, the agent tool *Run commands* and the
+**Execute** box of a workspace all run in a runner that is apart from the
+app. This script sets one up next to a Pterodactyl server.
+
+```bash
+sudo bash runner-service.sh --server 0a11ce00 --dry-run   # the plan; changes nothing
+sudo bash runner-service.sh --server 0a11ce00
+```
+
+What it does, in this order:
+
+1. finds the server, and the Docker network its container is on;
+2. shows the plan and asks;
+3. builds the image on this machine ([`runner/`](runner): Node.js, Python,
+   JDK 17, 21 and 25, Maven, Gradle 8 and 9, and the Paper API of three
+   versions fetched ahead). That takes some minutes the first time and about
+   1 GB of disk;
+4. starts the container on the server's network, at an address of its own
+   that stays the same, with limits (3 GB of memory, 2 processors), a
+   read-only file system, and nothing published to the outside;
+5. checks it: that it runs and takes its token, that a program runs in it as
+   a user without rights, that private addresses and this machine are
+   refused and the internet is reached, that a Paper plugin builds, and that
+   the server's container reaches it;
+6. writes `SANDBOX_URL`, `SANDBOX_TOKEN` and `SANDBOX_MAX_SECONDS` into the
+   server's `.env` and starts the server again, through
+   `pterodactyl-upgrade.sh`: with a backup, and back to how it was when the
+   app does not come up.
+
+The token is made on the node, kept in `/root/xiero-nexus-runner/<server>/`
+and never printed. Run the script again after a change of the limits, or with
+`--rebuild` for the newest packages; `--remove` takes the runner away and
+`SANDBOX_URL` out of `.env`. [`runner/README.md`](runner/README.md) says what
+the boundary is and what it is not.
+
+| Option | |
+|---|---|
+| `--server <id>` | The server: its UUID or the first 8 characters. |
+| `--memory <size>`, `--cpus <n>` | What the runner may use of the machine (`3g`, `2`). A Gradle build wants 2 GB or more. |
+| `--max-seconds <n>` | The longest a program or a build may run (900). |
+| `--concurrency <n>` | How many run at once (1): the others wait their turn. |
+| `--rebuild` | Build the image anew from the newest packages. |
+| `--skip-build-test` | Do not build a Paper plugin as a check. |
+| `--container-only` | Start the container and leave the server alone; the lines for its `.env` are written to a file only root reads. |
+| `--remove` | Take the runner away again. |
+| `--dry-run`, `--yes` | Show the plan and stop; do not ask. |
+
+The agents of the app are handed the tool *Run commands* by their owner, one
+by one, or all at once: `workforce.sh --give-tools` ticks for every agent
+that is in the app the tools `workforce.json` names for it and that the agent
+does not have, and takes none away.
+
+It was tested against a stand-in for Docker ([Tests](#tests)); the image is
+built and run for real in the release workflow, on GitHub's machines.
+
 ## What the app knows about its models: `models-report.sh`
 
 ```bash
@@ -901,6 +989,13 @@ bash scripts/host/over-ssh.sh workforce -- --as-owner --inventory-only --try-ass
 bash scripts/host/over-ssh.sh browser-plan              # changes nothing
 bash scripts/host/over-ssh.sh browser
 bash scripts/host/over-ssh.sh browser -- --rebuild      # a newer Chromium
+
+# The runner programs and builds run in:
+bash scripts/host/over-ssh.sh runner-plan               # changes nothing
+bash scripts/host/over-ssh.sh runner
+# The tool "Run commands" for the agents the file names it for, then what the projects made, built where they are built:
+bash scripts/host/over-ssh.sh workforce -- --as-owner --give-tools
+bash scripts/host/over-ssh.sh workforce -- --as-owner --inventory-only --try-build
 ```
 
 `check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
@@ -1067,6 +1162,17 @@ bash scripts/host/test/browser.sh
 # build"; needs Docker): builds the image, starts it with its limits, and
 # runs the end-to-end checks of the browser against it.
 bash scripts/host/test/browser-container.sh
+
+# The runner on a made-up host (a few seconds): stand-ins for docker and for
+# pterodactyl-upgrade.sh.
+bash scripts/host/test/runner.sh
+
+# The runner in its container (some minutes; needs Docker and the internet):
+# builds the image, starts it the way runner-service.sh does, and in it:
+# who a program runs as, what its network reaches and what it refuses, one
+# run after another, and real builds of a Paper plugin with Gradle 8 and 9
+# and of a Maven project.
+bash scripts/host/test/runner-container.sh
 ```
 
 `test/fake-wings.mjs` stands in for Wings and for the server's container: it

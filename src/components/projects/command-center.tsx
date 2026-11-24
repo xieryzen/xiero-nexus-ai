@@ -37,6 +37,7 @@ export function CommandCenter({
   imageModels,
   videoModels,
   speechModels,
+  autoMedia = false,
   canRender,
   teams,
   workflows,
@@ -51,6 +52,8 @@ export function CommandCenter({
   imageModels: Option[];
   videoModels: Option[];
   speechModels: Option[];
+  /** Whether a project makes media where its goal asks for it without anything being chosen (AUTO_MEDIA). */
+  autoMedia?: boolean;
   /**
    * Whether the project's models are chosen here. For a user they are not:
    * the app chooses, the lists hold one entry each ("yes") for what the
@@ -247,25 +250,37 @@ export function CommandCenter({
               {showMedia && (
                 <div className="space-y-3">
                   <div className="grid gap-4 sm:grid-cols-3">
-                    <Field label={chooses ? "Image model" : "Images"} htmlFor="p-img" hint={chooses ? "Generates the images of image tasks." : "Whether the project may make images."}>
+                    <Field
+                      label={chooses ? "Image model" : "Images"}
+                      htmlFor="p-img"
+                      hint={autoMedia ? "Made where the goal asks for a picture." : chooses ? "Generates the images of image tasks." : "Whether the project may make images."}
+                    >
                       <Select id="p-img" value={imageModelRowId} onChange={(e) => setImageModel(e.target.value)}>
-                        <option value="">No images</option>
+                        <option value="">{autoMedia ? "Automatic" : "No images"}</option>
                         {imageModels.map((m) => (
                           <option key={m.id} value={m.id}>{m.label}</option>
                         ))}
                       </Select>
                     </Field>
-                    <Field label={chooses ? "Video model" : "Videos"} htmlFor="p-vid" hint={chooses ? "Generates the clips of video tasks." : "Whether the project may make videos."}>
+                    <Field
+                      label={chooses ? "Video model" : "Videos"}
+                      htmlFor="p-vid"
+                      hint={autoMedia ? "Made where the goal asks for a video." : chooses ? "Generates the clips of video tasks." : "Whether the project may make videos."}
+                    >
                       <Select id="p-vid" value={videoModelRowId} onChange={(e) => setVideoModel(e.target.value)}>
-                        <option value="">No videos</option>
+                        <option value="">{autoMedia ? "Automatic" : "No videos"}</option>
                         {videoModels.map((m) => (
                           <option key={m.id} value={m.id}>{m.label}</option>
                         ))}
                       </Select>
                     </Field>
-                    <Field label={chooses ? "Speech model" : "Voice-overs"} htmlFor="p-tts" hint={chooses ? "Speaks the voice-overs." : "Whether the project may make voice-overs."}>
+                    <Field
+                      label={chooses ? "Speech model" : "Voice-overs"}
+                      htmlFor="p-tts"
+                      hint={autoMedia ? "Made where the goal asks for a voice." : chooses ? "Speaks the voice-overs." : "Whether the project may make voice-overs."}
+                    >
                       <Select id="p-tts" value={speechModelRowId} onChange={(e) => setSpeechModel(e.target.value)}>
-                        <option value="">No voice-overs</option>
+                        <option value="">{autoMedia ? "Automatic" : "No voice-overs"}</option>
                         {speechModels.map((m) => (
                           <option key={m.id} value={m.id}>{m.label}</option>
                         ))}
@@ -284,6 +299,12 @@ export function CommandCenter({
                         .join(", ")}{" "}
                       per run.{chooses && " Each one is billed by the provider."}
                       {needRender && chooses && " Joining the clips is done on this server and costs nothing at a provider."}
+                    </p>
+                  )}
+                  {autoMedia && needMedia === 0 && (
+                    <p className="text-xs text-ink-3" data-testid="auto-media-note">
+                      Nothing has to be chosen here: a goal that asks for a picture, a video or a voice-over gets one
+                      {chooses ? ", made with the app's own choice where none is named" : ""}. A media limit of 0 (advanced settings) means none.
                     </p>
                   )}
                   {mediaProblem && <Alert tone="warn">{mediaProblem}</Alert>}

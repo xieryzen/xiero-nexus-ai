@@ -179,3 +179,14 @@ export function askingOrder(own: readonly string[], usable: ReadonlySet<string>,
   const set = [...new Set(own)];
   return [...set.filter((id) => usable.has(id)), ...standIns.filter((id) => !set.includes(id)), ...set.filter((id) => !usable.has(id))];
 }
+
+/**
+ * Whether a project makes a picture, a video or a voice-over where its goal
+ * asks for one although it names no model for that: with the app's choice.
+ * On unless AUTO_MEDIA is switched off; a project whose media limit is 0
+ * makes none either way.
+ */
+export function autoMedia(setting: string | undefined = process.env.AUTO_MEDIA): boolean {
+  const raw = (setting ?? "").trim().toLowerCase();
+  return !(raw === "0" || raw === "false" || raw === "off" || raw === "no");
+}

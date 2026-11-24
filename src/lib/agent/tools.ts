@@ -17,7 +17,8 @@ import { serverTool, type ServerToolContext } from "../ssh/tool";
 import { readSkillFile, type WorkSkill } from "../skills/service";
 import { htmlToText } from "../text/html";
 import { fetchWeb, isTextContentType } from "../web-fetch";
-import { FILE_MAX_BYTES, allFiles, listFiles, recordExec, upsertFile } from "../workspace";
+import { runAndKeep } from "../result/build";
+import { FILE_MAX_BYTES, allFiles, listFiles, upsertFile } from "../workspace";
 import { getExecutor } from "../workspace/executor";
 import { validateWorkspacePath } from "../workspace/paths";
 import { parseToolNames, type ToolName } from "./catalog";
@@ -44,7 +45,6 @@ import {
 /** Files a project workspace may hold when agents write to it. */
 const MAX_WORKSPACE_FILES = 400;
 const PAGE_MAX_BYTES = 2 * 1024 * 1024;
-const COMMAND_TIMEOUT_MS = 120_000;
 
 export interface ToolContext {
   projectId: string;
@@ -53,6 +53,8 @@ export interface ToolContext {
   /** The project's owner: the user the agent works for. */
   userId: string | null;
   agent: Agent;
+  /** Tools this task is handed whatever its agent has ticked (the task that makes a failing build work: run_command). */
+  extra?: string[];
   /** Shared knowledge collections the agent was given. */
   collectionIds: string[];
   /** The skills the agent has for this task: its own and its team's. */
@@ -311,8 +313,12 @@ function tail(text: string, max: number): string {
   return text.length > max ? `[… ${text.length - max} characters before this were cut]\n${text.slice(-max)}` : text;
 }
 
+/** Programs that fetch what they build with: they are given more time when none is named. */
+const SLOW_PROGRAMS = new Set(["mvn", "gradle", "npm", "npx", "pnpm", "yarn", "pip", "pip3", "cargo", "go"]);
+
 function commandTool(ctx: ToolContext): LoopTool {
   const executor = getExecutor();
+  const maxSeconds = Math.round(executor.maxTimeoutMs / 1000);
   return {
     definition: {
       name: "run_command",
@@ -320,35 +326,43 @@ function commandTool(ctx: ToolContext): LoopTool {
         "Run one program on a copy of the workspace files, in an isolated sandbox, and get its exit code and output. " +
         "For running tests, a build or a script. One program per call: no pipes, redirection or '&&'. " +
         `Allowed programs: ${executor.allowedCommands.join(", ")}. ` +
-        "Files the program creates are not kept: write files with write_file.",
+        "Files the program creates are not kept, with one exception: the packages a build leaves behind " +
+        "(build/libs/*.jar, target/*.jar, dist/*.zip, *.mcaddon, *.mcpack, and what you name in \"keep\") are kept as the " +
+        "project's built files, which the person downloads. Everything else you write with write_file.",
       parameters: object(
         {
-          command: { type: "string", description: "The command line, such as: node --test" },
-          timeout_seconds: { type: "integer", description: "Seconds to allow. Default 60, at most 120." },
+          command: { type: "string", description: "The command line, such as: node --test, or: gradle build -x test" },
+          timeout_seconds: { type: "integer", description: `Seconds to allow. Default 60 (a build: ${Math.min(maxSeconds, 600)}), at most ${maxSeconds}.` },
+          keep: {
+            type: "array",
+            items: { type: "string" },
+            description: "Paths of packages the program makes that are to be kept, such as out/plugin.zip. '*' stands for any name.",
+          },
         },
         ["command"],
       ),
     },
     async run(args) {
       const command = str(args, "command", { max: 2000 }).trim();
-      const timeoutMs = int(args, "timeout_seconds", 60, 1, COMMAND_TIMEOUT_MS / 1000) * 1000;
-      const files = allFiles(ctx.workspaceId).map((f) => ({ path: f.path, content: f.content }));
+      const program = command.split(/\s+/)[0] ?? "";
+      const usual = SLOW_PROGRAMS.has(program) ? Math.min(maxSeconds, 600) : Math.min(maxSeconds, 60);
+      const timeoutMs = int(args, "timeout_seconds", usual, 1, maxSeconds) * 1000;
+      const keep = Array.isArray(args.keep) ? args.keep.filter((k): k is string => typeof k === "string").slice(0, 12) : [];
       try {
-        const result = await executor.run({ files, command, timeoutMs });
-        recordExec({
-          workspaceId: ctx.workspaceId,
+        const { result, kept, refused } = await runAndKeep(
+          { projectId: ctx.projectId, workspaceId: ctx.workspaceId, userId: ctx.userId, taskId: ctx.taskId },
           command,
-          status: result.exitCode === 0 ? "ok" : "error",
-          exitCode: result.exitCode,
-          stdout: result.stdout,
-          stderr: result.stderr,
-          durationMs: result.durationMs,
-          createdBy: ctx.userId,
-        });
+          timeoutMs,
+          keep,
+        );
         return (
-          `exit code: ${result.exitCode ?? "none (the program was stopped)"}\n` +
+          `exit code: ${result.exitCode ?? "none (the program was stopped)"}` +
+          (result.timedOut ? ` (its ${Math.round(timeoutMs / 1000)} seconds were up)` : "") +
+          "\n" +
           (result.stdout ? `stdout:\n${tail(result.stdout, 6000)}\n` : "stdout: (empty)\n") +
-          (result.stderr ? `stderr:\n${tail(result.stderr, 4000)}` : "stderr: (empty)")
+          (result.stderr ? `stderr:\n${tail(result.stderr, 4000)}` : "stderr: (empty)") +
+          (kept.length > 0 ? `\nKept as built files of the project: ${kept.map((k) => `${k.path} (${k.sizeBytes} bytes)`).join(", ")}.` : "") +
+          (refused.length > 0 ? `\nNot kept: ${refused.map((r) => `${r.path} (${r.reason})`).join(", ")}.` : "")
         );
       } catch (err) {
         throw new ToolError(safe(err));
@@ -636,7 +650,7 @@ function skillTool(skills: WorkSkill[]): LoopTool {
  * when its memory is on.
  */
 export function buildTools(ctx: ToolContext): LoopTool[] {
-  const chosen = new Set(parseToolNames(ctx.agent.tools));
+  const chosen = new Set<ToolName>([...parseToolNames(ctx.agent.tools), ...parseToolNames(JSON.stringify(ctx.extra ?? []))]);
   const status = toolStatus();
   const tools: LoopTool[] = [];
   const workspace = workspaceTools(ctx);

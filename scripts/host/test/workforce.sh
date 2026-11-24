@@ -391,6 +391,17 @@ run -- --user boss --file "${FILE}" --yes
 is "it ends well" "0" "${CODE}"
 check "an agent that was changed by hand is reported" line 'Agent "QA" is in the app and differs from the file \(.*instructions.*\)'
 is "and left as it is" "Changed by hand. 3" "$(ask "/api/agents" '[a["instructions"] + " " + str(a["maxSteps"]) for a in d["agents"] if a["name"] == "QA"][0]')"
+# A tool the file names for an agent, which the server can do and the agent
+# lacks (a runner or a search service came later, or it was taken away by
+# hand): given with --give-tools, and nothing else of the agent is touched.
+QA_FEWER="$(ask /api/agents 'json.dumps([t for t in [a["tools"] for a in d["agents"] if a["name"] == "QA"][0] if t != "fetch_url"])')"
+api PATCH "/api/agents/${QA_ID}" "{\"tools\":${QA_FEWER}}" > /dev/null
+run -- --user boss --file "${FILE}" --yes --give-tools
+is "with --give-tools it ends well" "0" "${CODE}"
+check "it says which tool it gives, and that nothing else is changed" line 'done +Agent "QA": give it fetch_url, which the file names for it and this server can do now\. Nothing else of it is changed\.'
+check "  and what else differs, which is left" line 'Agent "QA" also differs from the file in other things \(.*instructions.*\)\. They are left as they are'
+is "  the agent has the tool, and is otherwise as it was changed by hand" "True Changed by hand. 3" "$(ask "/api/agents" '[str("fetch_url" in a["tools"]) + " " + a["instructions"] + " " + str(a["maxSteps"]) for a in d["agents"] if a["name"] == "QA"][0]')"
+check_not "  a tool this server cannot run is still not given" line 'give it .*run_command'
 # The tools an agent works on servers and in a browser with are given by hand, to the agents that are to have them.
 QA_TOOLS="$(ask /api/agents 'json.dumps([a["tools"] for a in d["agents"] if a["name"] == "QA"][0] + ["run_on_server", "use_browser"])')"
 api PATCH "/api/agents/${QA_ID}" "{\"tools\":${QA_TOOLS}}" > /dev/null
@@ -897,6 +908,14 @@ run -- --user boss --file "${FILE}" --yes --try-run --keep-try-run
 is "with --keep-try-run it ends well" "0" "${CODE}"
 check "and says where they are" line 'Kept +the project "Workforce check: every agent" is on the Projects page, and its workflow on the Workflows page'
 is "they are kept" "$((${before%% *} + 2)) projects, $((WORKFLOWS + 1)) workflows" "$(left)"
+# What the projects made, as their pages show it (from 1.12): asked without a file.
+run -- --user boss --inventory-only --try-results
+is "what the projects made is said, and it ends well" "0" "${CODE}"
+check "  under its own heading" line '^What the projects made$'
+check "  each project is named, with its files and what kind they are, or that it has none" line '^  (ok|nothing) +"Workforce check: every agent" \((succeeded|review)\): ([0-9]+ files? \([0-9]+ [a-z]+|no files yet)'
+check_not "  nothing is built: none of them is something that is built" line 'built with|could not be built'
+run -- --user boss --inventory-only --try-results --dry-run
+check "a dry run says that no project was looked at" line 'Dry run: no project was looked at or built\.'
 python3 - "${FILE}" "${WORK}/no-try.json" << 'PYTHON_END'
 import json, sys
 d = json.load(open(sys.argv[1]))

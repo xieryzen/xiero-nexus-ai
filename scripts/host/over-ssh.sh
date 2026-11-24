@@ -31,6 +31,14 @@
 #                 container of its own on the server's network, and
 #                 BROWSER_URL in the server's .env (browser-service.sh --yes).
 #                 With "-- --remove" it is taken away again.
+#   runner-plan   what setting up the runner programs and builds run in would
+#                 do (runner-service.sh --dry-run). Changes nothing.
+#   runner        the runner next to the server: a container of its own on the
+#                 server's network with Node.js, Python, JDK, Maven and Gradle,
+#                 whose programs reach the internet and no private address;
+#                 SANDBOX_URL and SANDBOX_TOKEN in the server's .env
+#                 (runner-service.sh --yes). With "-- --remove" it is taken
+#                 away again.
 #   last-log      what the last run on the node said and how it ended. With
 #                 "-- --list": the runs that are kept, and how each ended.
 #                 With "-- --back 1": the run before the last (2: the one
@@ -93,6 +101,8 @@ if [ -f "${SCRIPTS}/models-report.sh" ]; then SENT+=(models-report.sh); fi
 if [ -d "${SCRIPTS}/skills" ]; then SENT+=(skills); fi
 # The browser service: the script that sets it up, and what its image is built from.
 if [ -f "${SCRIPTS}/browser-service.sh" ] && [ -d "${SCRIPTS}/browser" ]; then SENT+=(browser-service.sh browser); fi
+# The runner: the script that sets it up, and what its image is built from.
+if [ -f "${SCRIPTS}/runner-service.sh" ] && [ -d "${SCRIPTS}/runner" ]; then SENT+=(runner-service.sh runner); fi
 # What opens a password or a skill that was sealed for the node.
 if [ -f "${SCRIPTS}/sealed-output.sh" ]; then SENT+=(sealed-output.sh); fi
 REMOTE_DIR="${DEPLOY_REMOTE_DIR:-}"
@@ -135,12 +145,13 @@ case "${ACTION}" in
   site-plan | site) REMOTE_SCRIPT="nginx-site.sh" ;;
   workforce-plan | workforce) REMOTE_SCRIPT="workforce.sh" ;;
   browser-plan | browser) REMOTE_SCRIPT="browser-service.sh" ;;
+  runner-plan | runner) REMOTE_SCRIPT="runner-service.sh" ;;
   last-log | input-key) REMOTE_SCRIPT="" ;;
   "" | -h | --help | help)
     usage
     exit 0
     ;;
-  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, last-log, input-key." ;;
+  *) die 90 "\"${ACTION}\" is not an action. There are: check, plan, upgrade, install-plan, install, disk-report, models-report, site-plan, site, workforce-plan, workforce, browser-plan, browser, runner-plan, runner, last-log, input-key." ;;
 esac
 
 SERVER="$(trimmed "${DEPLOY_SERVER:-}")"
@@ -183,6 +194,12 @@ case "${ACTION}" in
     # The version of the app that is put in place while the server is restarted: without one, the installed one again.
     if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
     if [ "${ACTION}" = "browser-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
+    ;;
+  runner-plan | runner)
+    [ -z "${SERVER}" ] || ARGS+=(--server "${SERVER}")
+    # The version of the app that is put in place while the server is restarted: without one, the installed one again.
+    if [ -n "${VERSION}" ] && [ "${VERSION}" != "latest" ]; then ARGS+=(--version "${VERSION}"); fi
+    if [ "${ACTION}" = "runner-plan" ]; then ARGS+=(--dry-run); else ARGS+=(--yes); fi
     ;;
 esac
 ARGS+=(${EXTRA[@]+"${EXTRA[@]}"})

@@ -7,6 +7,95 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-24
+
+A project that ended said "succeeded" and showed text: what each agent wrote
+about its work. The site it made, the plugin, the pictures were files in the
+workspace behind a button, and a plugin was source code that nobody had
+built. Now the project page starts with what was made, and a project that is
+built is built.
+
+### Added
+
+- **The result, on top of the project page.** A web site is shown as a
+  browser shows it, with its style sheets and scripts, at full width or as
+  wide as a phone, and opens in a tab of its own. Every file is listed by
+  folder and looked at in place: a document as a document, a page as the
+  page or as its source, pictures, sound and video as themselves. Each file
+  is downloaded by itself, and **Download all (.zip)** hands over
+  everything, the project's media under `media/` included. A task's card
+  says which files it wrote; the final deliverable and the review are
+  rendered, not shown as the marks they are written with.
+  `GET /api/projects/{id}/result`, `…/download`, `…/file?path=`.
+- **The preview of a site runs apart from the dashboard**: under
+  `/site/<token>/…`, with a token that names the project, is signed by the
+  server and ends after 24 hours; sent with `Content-Security-Policy:
+  sandbox`, so that its scripts run without the origin of the app, its
+  cookies or its storage; framed by the app's own pages only. Addresses that
+  start at `/` in its pages and style sheets stay inside the project.
+- **A project that is built is built**, in the runner, when the tasks of
+  its run are done: a Gradle or a Maven project (a Minecraft plugin) with
+  `gradle build -x test` or `mvn package`. The package (`build/libs/*.jar`,
+  `target/*.jar`, `.mcaddon`, `.mcpack`, a `.zip` under `dist/` or
+  `build/distributions/`) is kept (`BUILT_PATH`) and downloaded from the
+  project page, which says whether it is from the files as they are now.
+  **Build** builds again. `POST /api/projects/{id}/build`, `GET` / `DELETE
+  …/built/{fileId}`; the event `build` in a run.
+- **A build that fails goes back to the agent that wrote the build file**:
+  a task "Make the project build", with what the build printed and the tool
+  to run commands for that task; then it is built again, twice at most. The
+  manager and the reviewer are told how the build ended. A project that
+  still does not build ends in `review`, says why, and offers **Let the AI
+  fix it**.
+- **Pictures, voice-overs and videos without a model being named**
+  (`AUTO_MEDIA`, on by default): a goal that asks for them gets them from a
+  model the app chooses, where the project names none. A piece is planned
+  with the file name it is kept under (`media/hero.png`), so that a page can
+  refer to it.
+- **The runner**, in place of the reference runner of v1.2
+  ([`scripts/host/runner/`](scripts/host/runner)): JDK 17, 21 and 25,
+  Gradle 8 and 9, Maven, Node.js and Python; every program runs as a user
+  without rights; files a build made are handed back (`keep`); the answer of
+  a long build stays open; one run cannot leave anything behind for the
+  next. The Paper API of three versions is fetched when the image is built.
+- **On a Pterodactyl node: `runner-service.sh`** builds the image, starts
+  the runner next to the server with limits and a network that reaches the
+  internet and no private address, checks all of it with a real build of a
+  Paper plugin, and writes `SANDBOX_URL` into the server's `.env`. The
+  actions `runner-plan` and `runner` of `over-ssh.sh` and of the Deploy
+  workflow.
+- `workforce.sh --give-tools`: the tools `workforce.json` names for an agent
+  that is in the app already and does not have them (`run_command`, once
+  there is a runner). `--try-results` says what the projects made as their
+  pages show it, and whether a site is shown in its sandbox; `--try-build`
+  also builds what is built.
+- `SANDBOX_MAX_SECONDS`: the longest a program or a build may run in the
+  runner (120; `runner-service.sh` sets 900).
+
+### Changed
+
+- **The reference runner moved** from `sandbox-runner/` to
+  `scripts/host/runner/` and speaks protocol 2. A runner of before still
+  runs commands; it hands no files back, so a build with it leaves no
+  package.
+- A command may be given files to keep: the answer of
+  `POST /api/workspaces/{id}/exec` has `kept` and `notKept`, and the agent
+  tool *Run commands* says what was kept.
+- A run that continues is allowed while the build of the one before it is
+  still to be made to work.
+- The pages of a project's site under `/site/` are the only ones of the app
+  that may be framed, and only by the app itself.
+
+### Fixed
+
+- On a phone the project page was wider than the screen when a review or a
+  deliverable held a long word without spaces.
+
+What was tested is said in the README ("What a project made"): the pages in
+a real browser against the runner of the tests, and the runner's image built
+and run in the release workflow, with real builds of a Paper plugin and a
+Maven project in it.
+
 ## [1.11.0] - 2026-11-23
 
 Until now an agent worked on a server only after an owner had registered it

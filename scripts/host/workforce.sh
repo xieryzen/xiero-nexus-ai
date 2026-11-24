@@ -36,6 +36,10 @@
 #   --dry-run            Say what would be done, and do nothing.
 #   --yes                Do not ask before doing it.
 #   --update             Also change what is there under the same name but differs.
+#   --give-tools         Give the agents that are there the tools the file names
+#                        for them that this server can do now and they lack:
+#                        after a runner or a search service was set up. Nothing
+#                        else of an agent is changed.
 #   --only <parts>       accounts, providers, models, skills, agents, teams,
 #                        workflows (separated by commas).
 #   --account <name>     An account the app is to have, with --account-email
@@ -78,6 +82,10 @@
 #                        it over SSH from where it runs, as it has to for a
 #                        server that is handed over in a conversation. Nothing
 #                        is signed in to. Needs an owner (--as-owner).
+#   --try-results        Afterwards, say what the projects made: their files, the
+#                        web site among them and whether it is shown, what was
+#                        built. With --try-build, the projects that are built
+#                        (Gradle, Maven) are built now, in the runner.
 #   --inventory-only     Say what the app has, and stop. With --try-assistant,
 #                        --try-assistant-all or --try-ssh: say it, do those,
 #                        and stop.
@@ -123,10 +131,10 @@ while [ "$#" -gt 0 ]; do
     --skill-url-sealed) need_value "$@"; SEALED_URLS+=("$2"); shift 2 ;;
     --account-password-sealed) need_value "$@"; SEALED_PASSWORD="$2"; shift 2 ;;
     --skill-sealed) need_value "$@"; SEALED_SKILLS+=("$2"); shift 2 ;;
-    --dry-run | --yes | --update | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --try-assistant | --try-assistant-all | --mark-tools | --inventory-only) PASS_ON+=("$1"); shift ;;
+    --dry-run | --yes | --update | --give-tools | --test | --test-all | --only-usable | --test-media | --keep-test-media | --try-run | --keep-try-run | --try-assistant | --try-assistant-all | --mark-tools | --try-results | --try-build | --inventory-only) PASS_ON+=("$1"); shift ;;
     --as-owner) AS_OWNER="1"; shift ;;
     -h | --help)
-      sed -n '2,94p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,102p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "unknown option \"$1\". See --help." ;;

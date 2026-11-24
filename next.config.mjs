@@ -28,7 +28,10 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/:path*",
+        // Everything but /site: the files of a project shown as a web site
+        // are framed by the project page, in a sandbox. They say themselves
+        // who may frame them (src/app/site).
+        source: "/((?!site/).*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
