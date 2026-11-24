@@ -10,6 +10,7 @@ import { buildPending } from "./result/build";
 import { publish } from "./run-bus";
 import { runtime } from "./runtime";
 import { assertTokensLeft } from "./tokens";
+import { assertFeatureFor } from "./plans";
 import { kickWorker } from "./worker";
 
 /**
@@ -85,6 +86,8 @@ export function startRun(project: Project, opts: StartRunOptions): StartRunResul
   // A run spends the tokens of the account the project belongs to: with none
   // left it is refused (402), and nothing about the project changes.
   assertTokensLeft(project.createdBy, opts.requestedBy === project.createdBy ? "yours" : "project");
+  // And it is a feature of that account's plan (v2.0).
+  assertFeatureFor(project.createdBy, "projects");
   const continues = opts.continueLast === true;
   let input = opts.input?.trim() ? opts.input.trim().slice(0, MAX_RUN_INPUT_CHARS) : null;
   if (continues && input === null) {

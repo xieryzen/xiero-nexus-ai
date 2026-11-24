@@ -5,6 +5,7 @@ import { projects, schedules, users, type Project, type Schedule } from "@/db/sc
 import { describeCron, isValidTimeZone, nextRun, nextRuns, scheduleProblem } from "./cron";
 import { AppError, Errors } from "./errors";
 import { MAX_RUN_INPUT_CHARS, startRun } from "./runs";
+import { hasFeatureFor } from "./plans";
 
 /**
  * Schedules: a project that runs by itself, at the times a cron expression
@@ -195,6 +196,11 @@ export function runDueSchedules(now: Date = new Date()): number {
       : undefined;
     if (!owner || owner.status !== "active") {
       set({ lastStatus: "error", lastError: "The project's owner cannot sign in, so it is not run." });
+      continue;
+    }
+    // The plan of the account may have changed since the schedule was made.
+    if (!hasFeatureFor(project.createdBy, "automation")) {
+      set({ lastStatus: "skipped", lastError: "Schedules are not part of the plan of the project's account any more." });
       continue;
     }
 

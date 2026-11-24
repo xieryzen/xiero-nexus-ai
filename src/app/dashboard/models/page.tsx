@@ -8,7 +8,7 @@ import { whatUsersGet } from "@/lib/model-choice";
 import { healthStatus } from "@/lib/model-health";
 import { adapterAbilities, adapterIsImplemented, adapterSupportsMedia } from "@/lib/adapters";
 import { ModelsManager } from "@/components/models/models-manager";
-import { isAdminRole, seesSetup } from "@/lib/roles";
+import { isOwnerRole, seesSetup } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Models" };
@@ -21,7 +21,7 @@ export default function ModelsPage() {
   const providerRows = db
     .select()
     .from(providers)
-    .orderBy(asc(providers.name))
+    .orderBy(asc(providers.priority), asc(providers.name))
     .all();
 
   return (
@@ -34,8 +34,10 @@ export default function ModelsPage() {
         supportsMedia: adapterSupportsMedia(p.adapter),
         abilities: adapterAbilities(p.adapter),
         status: p.status,
+        priority: p.priority,
       }))}
-      isAdmin={isAdminRole(user?.role)}
+      // An owner changes the models (v2.0); an admin is shown them.
+      isAdmin={isOwnerRole(user?.role)}
       initialHealth={healthStatus()}
       initialUsers={whatUsersGet()}
     />

@@ -99,6 +99,7 @@ export function ProjectRunner({
   videoModelLabel,
   speechModelLabel,
   initialSchedules,
+  schedulesNotInPlan = null,
   initialRuns,
   chooses = true,
   serverOptions = [],
@@ -124,6 +125,8 @@ export function ProjectRunner({
   videoModelLabel: string | null;
   speechModelLabel: string | null;
   initialSchedules: ScheduleDTO[];
+  /** Why this project gets no schedule: the plan of its account has none. Null: it has. */
+  schedulesNotInPlan?: string | null;
   initialRuns: RunDTO[];
   /** Whether the viewer is shown the setup: the models by name, and what a provider does. */
   chooses?: boolean;
@@ -724,7 +727,7 @@ export function ProjectRunner({
               </span>
             ))}
             . It is listed on the{" "}
-            <Link href="/dashboard/memory" className="text-signal hover:underline">
+            <Link href="/dashboard/memory" className="text-accent-ink hover:underline">
               Memory
             </Link>{" "}
             page.
@@ -874,7 +877,7 @@ export function ProjectRunner({
                           type="button"
                           onClick={() => showFile(f.path)}
                           title={`Open ${f.path}`}
-                          className="mono max-w-[16rem] truncate rounded border border-line px-1.5 py-0.5 text-[11px] text-ink-2 hover:border-signal/50 hover:text-ink"
+                          className="mono max-w-[16rem] truncate rounded border border-line px-1.5 py-0.5 text-[11px] text-ink-2 hover:border-accent/60 hover:text-ink"
                         >
                           {f.path}
                         </button>
@@ -893,7 +896,7 @@ export function ProjectRunner({
                           return n;
                         })
                       }
-                      className="text-xs font-medium text-signal hover:underline"
+                      className="text-xs font-medium text-accent-ink hover:underline"
                     >
                       {expanded.has(t.seq) ? "Hide" : "View"}{" "}
                       {t.kind === "text" ? "output" : t.kind === "audio" ? "spoken text" : t.kind === "render" ? "details" : "prompt"}
@@ -918,7 +921,7 @@ export function ProjectRunner({
             `${pendingMedia} ${pendingMedia === 1 ? "video is" : "videos are"} still in progress. `}
           {earlierMedia > 0 &&
             `${earlierMedia} ${earlierMedia === 1 ? "file" : "files"} from earlier runs ${earlierMedia === 1 ? "is" : "are"} kept too. `}
-          <Link href={`/dashboard/studio?project=${project.id}`} className="font-medium text-signal hover:underline">
+          <Link href={`/dashboard/studio?project=${project.id}`} className="font-medium text-accent-ink hover:underline">
             Open this project&apos;s media in Creative Studio
           </Link>
         </p>
@@ -958,6 +961,7 @@ export function ProjectRunner({
         initialStandIns={project.standIns}
         showStandIns={chooses}
         refreshKey={finishedRuns}
+        schedulesNotInPlan={schedulesNotInPlan}
       />
     </div>
   );

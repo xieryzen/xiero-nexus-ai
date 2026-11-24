@@ -5,6 +5,7 @@ import { assetFor } from "@/lib/for-viewer";
 import { serializeAsset } from "@/lib/media/dto";
 import { generateImages } from "@/lib/media/service";
 import { modelFor } from "@/lib/model-choice";
+import { assertFeature } from "@/lib/plans";
 import { seesSetup } from "@/lib/roles";
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
 import { imageGenerateSchema } from "@/lib/validation";
@@ -16,6 +17,7 @@ export const maxDuration = 300;
 /** Generate images. Answers when they are stored, with the new assets. */
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "studio_image");
   maybeSweep();
   const limit = rateLimit(`media:image:${user.id}`, 20, 60_000);
   if (!limit.ok) {
@@ -25,7 +27,7 @@ export const POST = handle(async (req) => {
 
   const assets = await generateImages({
     userId: user.id,
-    modelRowId: modelFor(user.role, body.modelRowId, "image"),
+    modelRowId: modelFor(user, body.modelRowId, "image"),
     prompt: body.prompt,
     n: body.n,
     aspectRatio: body.aspectRatio,

@@ -71,8 +71,7 @@ import { accountsForRun, roleOfUser } from "@/lib/browser/accounts";
 import { BROWSER_TOOL, accountsLine, callSummary, mayUseBrowser, type AccountForAgent } from "@/lib/browser/rules";
 import { browserConfigured } from "@/lib/browser/service";
 import { closeRunBrowser, closeTaskPages } from "@/lib/browser/sessions";
-import { usedUpMessage } from "@/lib/token-rules";
-import { hasTokensLeft, tokenAccount, tokensLeftFor } from "@/lib/tokens";
+import { hasTokensLeft, tokensLeftFor, usedUpText } from "@/lib/tokens";
 import { limitOf } from "@/lib/upstream";
 import { waitWords } from "@/lib/provider-limits";
 import { computeCost, countTokens, estimateTokens, recordUsage } from "@/lib/usage";
@@ -554,10 +553,7 @@ export async function executeRun(runId: string): Promise<void> {
     }
     // A run is refused at its start when the account has no tokens left. This
     // is for one whose last tokens went between the start and now.
-    {
-      const account = tokenAccount(project.createdBy);
-      if (account && !hasTokensLeft(project.createdBy)) return fail(usedUpMessage(account, "project"));
-    }
+    if (!hasTokensLeft(project.createdBy)) return fail(usedUpText(project.createdBy, "project"));
     const { manager, routable, workforce } = setup;
 
     // The models creative tasks generate with, when the project has them.
@@ -924,10 +920,7 @@ export async function executeRun(runId: string): Promise<void> {
     // not started, and nothing more is asked of a model for this run, but
     // for a task in progress to hand over what it has.
     const accountSpent = (): boolean => !hasTokensLeft(project.createdBy);
-    const accountSpentMessage = (): string => {
-      const account = tokenAccount(project.createdBy);
-      return account ? usedUpMessage(account, "project") : "The token balance of the project's account is used up.";
-    };
+    const accountSpentMessage = (): string => usedUpText(project.createdBy, "project");
     const maxParallel = Math.max(1, project.maxParallel);
 
     // How long a task of this run waits for the limits of its models, and
@@ -1439,7 +1432,7 @@ export async function executeRun(runId: string): Promise<void> {
                     onUsage: (prompt, completion) => {
                       loopPrompt += prompt;
                       loopCompletion += completion;
-                      countTokens(project.createdBy, prompt + completion);
+                      countTokens(project.createdBy, prompt, completion);
                     },
                     estimateTokens,
                     isCancelled,

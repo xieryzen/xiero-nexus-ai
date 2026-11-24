@@ -46,7 +46,7 @@ function FileLink({ path, ctx, children, mono }: { path: string; ctx: Ctx; child
       type="button"
       onClick={() => ctx.onFile?.(path)}
       title={`Open ${path}`}
-      className={cn("rounded text-signal underline decoration-signal/40 underline-offset-2 hover:decoration-signal", mono && "mono bg-surface-2 px-1 py-0.5 text-[0.85em]")}
+      className={cn("rounded text-accent-ink underline decoration-accent-ink/40 underline-offset-2 hover:decoration-accent-ink", mono && "mono bg-surface-2 px-1 py-0.5 text-[0.85em]")}
     >
       {children}
     </button>
@@ -98,7 +98,7 @@ function renderInline(nodes: readonly Inline[], key: string, ctx: Ctx): ReactNod
         // A path that is no file of the project leads nowhere from this page: it is shown as text.
         if (!/^(https?:|mailto:)/i.test(node.href)) return <span key={k}>{renderInline(node.children, k, ctx)}</span>;
         return (
-          <a key={k} href={node.href} target="_blank" rel="noreferrer noopener" className="break-words text-signal underline decoration-signal/40 underline-offset-2 hover:decoration-signal">
+          <a key={k} href={node.href} target="_blank" rel="noreferrer noopener" className="break-words text-accent-ink underline decoration-accent-ink/40 underline-offset-2 hover:decoration-accent-ink">
             {renderInline(node.children, k, ctx)}
           </a>
         );

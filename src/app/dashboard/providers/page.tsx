@@ -5,7 +5,7 @@ import { models, providers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { serializeProvider } from "@/lib/providers";
 import { ProvidersManager } from "@/components/providers/providers-manager";
-import { isAdminRole, seesSetup } from "@/lib/roles";
+import { isOwnerRole, seesSetup } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Providers" };
@@ -32,7 +32,8 @@ export default function ProvidersPage() {
     <ProvidersManager
       initialProviders={rows.map(serializeProvider)}
       modelCounts={modelCounts}
-      isAdmin={isAdminRole(user?.role)}
+      // An owner changes the providers and holds their keys (v2.0); an admin is shown them.
+      isAdmin={isOwnerRole(user?.role)}
     />
   );
 }

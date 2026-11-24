@@ -223,7 +223,7 @@ export function MemoryManager({
                     {note.chatId && (
                       <>
                         {" · "}
-                        <Link href={`/dashboard/chat?c=${note.chatId}`} className="text-signal hover:underline">
+                        <Link href={`/dashboard/chat?c=${note.chatId}`} className="text-accent-ink hover:underline">
                           the conversation
                         </Link>
                       </>

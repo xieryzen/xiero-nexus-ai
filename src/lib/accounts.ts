@@ -7,8 +7,9 @@ import { audit } from "./audit";
 import { hashPassword, verifyPassword } from "./crypto";
 import { Errors } from "./errors";
 import { rateLimit } from "./ratelimit";
-import { ROLES, isOwnerRole, whyNot } from "./roles";
-import { MAX_TOKEN_LIMIT, defaultTokenLimit } from "./token-rules";
+import { PLANS, ROLES, accountOfTier, isOwnerRole, tierOf, tierOfInput, whyNot } from "./roles";
+import { defaultPlan } from "./plan-rules";
+import { MAX_TOKEN_LIMIT } from "./token-rules";
 import { destroyAllSessions } from "./session";
 import { emailSchema, passwordSchema, usernameSchema } from "./validation";
 
@@ -25,21 +26,30 @@ export interface RequestMeta {
 
 // ─── What may be sent ────────────────────────────────────────────────────────
 
-/** The most tokens an account may use in all: a whole number from 0. */
+/** The tokens an account may use in a month, as its own allowance: a whole number from 0. */
 export const tokenLimitSchema = z
   .number({ invalid_type_error: "The token limit is a whole number" })
   .int("The token limit is a whole number")
   .min(0, "The token limit cannot be below 0")
   .max(MAX_TOKEN_LIMIT, `The token limit can be at most ${MAX_TOKEN_LIMIT}`);
 
+/**
+ * The role of an account: one of the six of the pages (free, pro, plus,
+ * ultra, admin, owner), or "user" as before 2.0, which is the plan the
+ * request names beside it, or FREE.
+ */
+export const roleSchema = z.enum([...ROLES, ...PLANS]);
+
 export const createAccountSchema = z.object({
   username: usernameSchema,
   email: emailSchema,
   password: passwordSchema,
-  /** Without one, an ordinary user. */
-  role: z.enum(ROLES).optional(),
-  /** Without one, what every new account gets (DEFAULT_TOKEN_LIMIT). */
-  tokenLimit: tokenLimitSchema.optional(),
+  /** Without one, FREE. */
+  role: roleSchema.optional(),
+  /** The plan of a user, where the role is given as "user" or not at all. */
+  plan: z.enum(PLANS).optional(),
+  /** Its own allowance for a month. Without one, the allowance of its role. */
+  tokenLimit: tokenLimitSchema.nullable().optional(),
 });
 
 export const updateAccountSchema = z
@@ -47,10 +57,11 @@ export const updateAccountSchema = z
     username: usernameSchema.optional(),
     email: emailSchema.optional(),
     password: passwordSchema.optional(),
-    role: z.enum(ROLES).optional(),
+    role: roleSchema.optional(),
+    plan: z.enum(PLANS).optional(),
     status: z.enum(["active", "disabled"]).optional(),
-    /** The most tokens the account may use in all. What it has used stays counted. */
-    tokenLimit: tokenLimitSchema.optional(),
+    /** Its own allowance for a month; null: the allowance of its role again. What it has used stays counted. */
+    tokenLimit: tokenLimitSchema.nullable().optional(),
     /** Switch two-factor sign-in off for someone who lost their authenticator. */
     resetTwoFactor: z.literal(true).optional(),
     /** End every session of the account. */
@@ -115,15 +126,22 @@ function load(id: string): User {
 
 export function createAccount(actor: User, input: CreateAccountInput, meta: RequestMeta = {}): User {
   assertFree(input.username, input.email);
+  // "user", or no role at all: a user with the plan new accounts have (DEFAULT_PLAN), unless one is named.
+  const unnamed = (input.role === undefined || input.role === "user") && input.plan === undefined;
+  const kept = accountOfTier(unnamed ? defaultPlan() : (tierOfInput(input.role, input.plan) ?? defaultPlan()));
+  if (input.tokenLimit !== undefined && input.tokenLimit !== null && isOwnerRole(kept.role)) {
+    throw Errors.badRequest("An owner is not held to a token limit: there is none to set");
+  }
   const created = db
     .insert(users)
     .values({
       username: input.username,
       email: input.email,
       passwordHash: hashPassword(input.password),
-      role: input.role ?? "user",
+      role: kept.role,
+      plan: kept.plan ?? "free",
       status: "active",
-      tokenLimit: input.tokenLimit ?? defaultTokenLimit(),
+      tokenAllowance: input.tokenLimit ?? null,
     })
     .returning()
     .get();
@@ -132,7 +150,7 @@ export function createAccount(actor: User, input: CreateAccountInput, meta: Requ
     action: "admin.user.create",
     targetType: "user",
     targetId: created.id,
-    metadata: { username: created.username, role: created.role, tokenLimit: created.tokenLimit },
+    metadata: { username: created.username, role: tierOf(created), ...(created.tokenAllowance !== null ? { tokenLimit: created.tokenAllowance } : {}) },
     ...meta,
   });
   return created;
@@ -148,9 +166,24 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
         : "Change your own account under Settings",
     );
   }
-  const refused = whyNot(actor, target, { role: input.role, status: input.status }, otherActiveOwners(target.id));
+  // The role as the request names it: one of the six, or "user" with a plan.
+  // A plan alone changes the plan of a user, and nothing of an admin or an owner.
+  const named =
+    input.role === undefined && input.plan !== undefined && target.role !== "user"
+      ? undefined
+      : input.role === "user" && input.plan === undefined
+        ? // "user" as before 2.0: a user it stays, with the plan it has; an admin or an owner becomes a user with the plan new accounts have.
+          target.role === "user"
+          ? tierOf(target)
+          : defaultPlan()
+        : tierOfInput(input.role, input.plan);
+  if (input.role === undefined && input.plan !== undefined && named === undefined) {
+    throw Errors.badRequest("A plan is what a user has. Give the account a role of a user first: free, pro, plus or ultra.");
+  }
+  const kept = named === undefined ? undefined : accountOfTier(named);
+  const refused = whyNot(actor, target, { role: kept?.role, status: input.status }, otherActiveOwners(target.id));
   if (refused) throw Errors.badRequest(refused);
-  if (input.tokenLimit !== undefined && isOwnerRole(input.role ?? target.role)) {
+  if (input.tokenLimit !== undefined && input.tokenLimit !== null && isOwnerRole(kept?.role ?? target.role)) {
     throw Errors.badRequest("An owner is not held to a token limit: there is none to set");
   }
 
@@ -168,8 +201,9 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
     patch.email = email;
     changed.push("email");
   }
-  if (input.role !== undefined && input.role !== target.role) {
-    patch.role = input.role;
+  if (kept !== undefined && named !== tierOf(target)) {
+    patch.role = kept.role;
+    if (kept.plan !== undefined) patch.plan = kept.plan;
     changed.push("role");
   }
   if (input.status !== undefined && input.status !== target.status) {
@@ -180,9 +214,13 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
     patch.passwordHash = hashPassword(input.password);
     changed.push("password");
   }
-  if (input.tokenLimit !== undefined && input.tokenLimit !== target.tokenLimit) {
-    patch.tokenLimit = input.tokenLimit;
+  if (input.tokenLimit !== undefined && input.tokenLimit !== target.tokenAllowance) {
+    patch.tokenAllowance = input.tokenLimit;
     changed.push("tokenLimit");
+  }
+  // An owner has no allowance: one that was the account's own goes with the role.
+  if (kept !== undefined && isOwnerRole(kept.role) && target.tokenAllowance !== null && input.tokenLimit === undefined) {
+    patch.tokenAllowance = null;
   }
   const resetTwoFactor = input.resetTwoFactor === true && (target.twoFactorEnabled || target.twoFactorSecret !== null);
   if (resetTwoFactor) {
@@ -213,11 +251,11 @@ export function updateAccount(actor: User, id: string, input: UpdateAccountInput
       changed,
       ...(patch.username !== undefined ? { username: patch.username } : {}),
       ...(patch.email !== undefined ? { email: patch.email } : {}),
-      ...(patch.role !== undefined ? { role: patch.role } : {}),
+      ...(patch.role !== undefined ? { role: named, roleBefore: tierOf(target) } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
-      // The limit before and after, and what the account had used by then.
-      ...(patch.tokenLimit !== undefined
-        ? { tokenLimit: patch.tokenLimit, tokenLimitBefore: target.tokenLimit, tokensUsed: target.tokensUsed }
+      // The account's own allowance before and after (null: the one of its role), and what it had used by then.
+      ...(changed.includes("tokenLimit")
+        ? { tokenLimit: patch.tokenAllowance ?? null, tokenLimitBefore: target.tokenAllowance, tokensUsed: target.periodTokens }
         : {}),
       ...(signedOut ? { signedOut: true } : {}),
     },
@@ -238,7 +276,7 @@ export function deleteAccount(actor: User, id: string, meta: RequestMeta = {}): 
     action: "admin.user.delete",
     targetType: "user",
     targetId: target.id,
-    metadata: { username: target.username, email: target.email, role: target.role },
+    metadata: { username: target.username, email: target.email, role: tierOf(target) },
     ...meta,
   });
 }

@@ -124,7 +124,7 @@ export function DiscoverPanel({
                     >
                       <input
                         type="checkbox"
-                        className="accent-signal"
+                        className="accent-accent"
                         disabled={already}
                         checked={already || selected.has(m)}
                         onChange={() => toggle(m)}

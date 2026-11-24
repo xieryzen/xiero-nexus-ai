@@ -168,3 +168,51 @@ test("an upgrade from 1.10.0 keeps the servers, their log and the site accounts,
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+test("an upgrade from 1.12.1 to 2.0: every account keeps its role, a limit an owner had set stays the account's own, and nothing else changes", () => {
+  const work = mkdtempSync(join(tmpdir(), "xn-migrations-"));
+  const sqlite = new Database(join(work, "nexus.db"));
+  try {
+    sqlite.pragma("foreign_keys = ON");
+    const db = drizzle(sqlite);
+    // The database as 1.12.1 leaves it: accounts with the limit every account got and with limits an owner had set, a provider with a model, a conversation.
+    migrate(db, { migrationsFolder: migrationsUpTo(work, 18) });
+    const account = sqlite.prepare("INSERT INTO users (id, username, email, password_hash, role, status, token_limit, tokens_used, created_at, updated_at) VALUES (?, ?, ?, 'hash', ?, 'active', ?, ?, 1795080000, 1795080000)");
+    account.run("u-owner", "xieryzen", "owner@example.com", "owner", 10_000_000, 44_000_000);
+    account.run("u-admin", "ximond", "admin@example.com", "admin", 10_000_000, 900_000);
+    account.run("u-admin-own", "urlovebii", "admin2@example.com", "admin", 30_000_000, 0);
+    account.run("u-user", "haruto", "user@example.com", "user", 10_000_000, 9_999_000);
+    account.run("u-user-own", "sari", "user2@example.com", "user", 2_000_000, 1_500_000);
+    account.run("u-user-none", "budi", "user3@example.com", "user", 0, 0);
+    sqlite.prepare("INSERT INTO providers (id, name, adapter, base_url, created_at, updated_at) VALUES ('p1', 'Gemini', 'gemini', 'https://example.com/v1', 1795080000, 1795080000)").run();
+    sqlite.prepare("INSERT INTO models (id, provider_id, model_id, display_name, enabled, for_users, source, created_at, updated_at) VALUES ('m1', 'p1', 'gemini-4-argon', 'Gemini 4 Argon', 1, 1, 'manual', 1795080000, 1795080000)").run();
+    sqlite.prepare("INSERT INTO chats (id, user_id, title, created_at, updated_at) VALUES ('c1', 'u-user', 'Plugin CPet', 1795080000, 1795080100)").run();
+    const before = sqlite.prepare("SELECT id, username, email, role, status, token_limit, tokens_used FROM users ORDER BY id").all();
+
+    migrate(db, { migrationsFolder: MIGRATIONS });
+
+    // What was there is as it was.
+    assert.deepEqual(sqlite.prepare("SELECT id, username, email, role, status, token_limit, tokens_used FROM users ORDER BY id").all(), before);
+    // A user is on the Free plan; the ten million every account got is no limit of its own: the account follows its role.
+    // A number an owner had set is the account's own allowance for a month, also when it is nothing at all. An owner has none.
+    assert.deepEqual(
+      sqlite.prepare("SELECT username, role, plan, token_allowance AS own, tokens_period AS period, period_tokens AS used FROM users ORDER BY username").all(),
+      [
+        { username: "budi", role: "user", plan: "free", own: 0, period: "", used: 0 },
+        { username: "haruto", role: "user", plan: "free", own: null, period: "", used: 0 },
+        { username: "sari", role: "user", plan: "free", own: 2_000_000, period: "", used: 0 },
+        { username: "urlovebii", role: "admin", plan: "free", own: 30_000_000, period: "", used: 0 },
+        { username: "xieryzen", role: "owner", plan: "free", own: null, period: "", used: 0 },
+        { username: "ximond", role: "admin", plan: "free", own: null, period: "", used: 0 },
+      ],
+    );
+    // A model is for every role until an owner says otherwise, and has no place of its own; a conversation is not pinned.
+    assert.deepEqual(sqlite.prepare("SELECT model_id, min_tier, position, for_users FROM models").all(), [{ model_id: "gemini-4-argon", min_tier: "free", position: null, for_users: 1 }]);
+    assert.deepEqual(sqlite.prepare("SELECT title, pinned_at FROM chats").all(), [{ title: "Plugin CPet", pinned_at: null }]);
+    // The plans are what the app ships with: nothing is kept of them yet.
+    assert.deepEqual(sqlite.prepare("SELECT count(*) AS n FROM app_settings").get(), { n: 0 });
+  } finally {
+    sqlite.close();
+    rmSync(work, { recursive: true, force: true });
+  }
+});

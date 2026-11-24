@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireSetupOwner } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { AppError, Errors, sanitizeUpstreamError } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -20,7 +20,7 @@ const schema = z.object({
 
 /** Discover upstream models; optionally import a selected subset. */
 export const POST = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const provider = db
     .select()

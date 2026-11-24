@@ -443,7 +443,9 @@ NEXUS_ACCOUNT_PASSWORD=... sudo -E bash workforce.sh --server 1a2b3c4d --yes --o
 ```
 
 It is made when no account has that username or that email, with the role
-given (`owner`, `admin` or `user`). One that is there is left as it is and
+given (`owner`, `admin` or `user`; from version 2.0 of the app also the plan
+of a user: `free`, `pro`, `plus` or `ultra`, where `user` leaves the plan of
+an account as it is). One that is there is left as it is and
 what differs is said; with `--update` its role, name and email are made as
 asked, and its password too when one is given, which signs it out
 everywhere. The password comes in the environment, never on the command

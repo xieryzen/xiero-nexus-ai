@@ -222,7 +222,7 @@ function AgentForm({
               <div key={group}>
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-ink-3">{TOOL_GROUP_LABELS[group]}</p>
-                  <button type="button" className="text-xs text-signal hover:underline" onClick={() => toggleGroup(group, !all)}>
+                  <button type="button" className="text-xs text-accent-ink hover:underline" onClick={() => toggleGroup(group, !all)}>
                     {all ? "None" : "All"}
                   </button>
                 </div>
@@ -234,7 +234,7 @@ function AgentForm({
                         <label
                           className={cn(
                             "flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2 text-sm transition",
-                            tools.has(tool.name) ? "border-signal/50 bg-signal/10" : "border-line hover:border-ink-3",
+                            tools.has(tool.name) ? "border-accent/60 bg-accent-soft" : "border-line hover:border-ink-3",
                           )}
                         >
                           <input
@@ -294,7 +294,7 @@ function AgentForm({
                     }
                     className={cn(
                       "rounded-full border px-3 py-1 text-xs font-medium transition",
-                      skillIds.has(s.id) ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                      skillIds.has(s.id) ? "border-accent/60 bg-accent-soft text-accent-ink" : "border-line text-ink-2 hover:text-ink",
                       !s.enabled && "opacity-60",
                     )}
                   >
@@ -587,7 +587,7 @@ export function AgentsManager({
           {!toolSetup.sandbox && "Running commands needs a sandbox runner (SANDBOX_URL). "}
           {toolSetup.search === null && "Searching the web needs a search service (SEARCH_PROVIDER). "}
           {!toolSetup.browser && "Working in a browser needs a browser service (BROWSER_URL). "}
-          Agents get the other tools they were given. See the <Link href="/dashboard/observability" className="text-signal hover:underline">server status</Link>.
+          Agents get the other tools they were given. See the <Link href="/dashboard/observability" className="text-accent-ink hover:underline">server status</Link>.
         </p>
       )}
       {list.length === 0 ? (
@@ -632,7 +632,7 @@ export function AgentsManager({
                   {/* What an agent works with is shown to those who are shown the setup. */}
                   {isAdmin && <p className="mt-1 text-xs text-ink-3">
                     {a.routingMode === "auto" ? (
-                      <span className="text-signal">auto-routed{a.requiredCapability ? ` · needs ${a.requiredCapability}` : ""}</span>
+                      <span className="text-accent-ink">auto-routed{a.requiredCapability ? ` · needs ${a.requiredCapability}` : ""}</span>
                     ) : a.primaryModelLabel ? (
                       <span className="mono">{a.primaryModelLabel}</span>
                     ) : (

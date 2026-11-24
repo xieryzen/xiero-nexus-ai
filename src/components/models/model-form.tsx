@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { SerializedModel } from "@/lib/models";
 import { CAPABILITIES, CAPABILITY_LABELS, type Capability } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
+import { TIERS, tierLabel, type Tier } from "@/lib/roles";
 import { Alert, Button, Field, Input, Select, cn } from "@/components/ui";
 
 type ModelType = "chat" | "image" | "video" | "speech" | "embedding" | "custom";
@@ -77,6 +78,8 @@ export function ModelForm({
     new Set(initial?.capabilities.map((c) => c.capability) ?? ["text", "streaming"]),
   );
   const [notes, setNotes] = useState(initial?.notes ?? "");
+  const [minTier, setMinTier] = useState<Tier>(initial?.minTier ?? "free");
+  const [position, setPosition] = useState(initial?.position != null ? String(initial.position) : "");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -130,6 +133,9 @@ export function ModelForm({
       pricePerMChars: caps.has("speech_generation") ? num(charsPrice) : empty,
       capabilities: [...caps],
       notes: notes.trim() || empty,
+      minTier,
+      // Empty: by its name, the highest version first.
+      position: position.trim() ? Math.max(0, Math.round(Number(position))) : empty,
     };
     try {
       const res = editing
@@ -258,7 +264,7 @@ export function ModelForm({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium transition",
                 caps.has(c)
-                  ? "border-signal/50 bg-signal/15 text-signal"
+                  ? "border-accent/60 bg-accent-soft text-accent-ink"
                   : "border-line text-ink-2 hover:text-ink",
               )}
             >
@@ -267,6 +273,29 @@ export function ModelForm({
           ))}
         </div>
       </Field>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field
+          label="Lowest role"
+          htmlFor="m-min-tier"
+          hint="Who may choose it in a conversation: this role and the ones above it. An account below it is shown the model, and cannot choose it."
+        >
+          <Select id="m-min-tier" value={minTier} onChange={(e) => setMinTier(e.target.value as Tier)}>
+            {TIERS.map((tier) => (
+              <option key={tier} value={tier}>
+                {tierLabel(tier)}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field
+          label="Place in the list"
+          htmlFor="m-position"
+          hint="Empty: by its name, the highest version first. A number puts it there among the models of its provider, the lowest number on top."
+        >
+          <Input id="m-position" inputMode="numeric" value={position} onChange={(e) => setPosition(e.target.value.replace(/[^\d]/g, ""))} placeholder="by its name" />
+        </Field>
+      </div>
 
       <Field label="Notes" htmlFor="m-notes">
         <Input id="m-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" />

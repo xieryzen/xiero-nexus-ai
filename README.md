@@ -470,6 +470,9 @@ mock. **How well a given model follows a skill was not measured.**
 
 ## Accounts and roles (v1.7.0)
 
+> Since 2.0 there are six roles, and an administrator changes less than this
+> section says: see [Roles, plans and the new look](#roles-plans-and-the-new-look-v200).
+
 | Role | What it does |
 |---|---|
 | **Owner** | Everything an administrator does, the accounts, how many tokens each account may use, the [servers](#servers-over-ssh-v180) agents work on, and the [site accounts](#the-browser-v180) they sign in with. |
@@ -601,6 +604,11 @@ delivers. Where that matters, switch them off for the project, or mark the
 models the app may choose.
 
 ## Tokens of an account (v1.8.0)
+
+> Since 2.0 an allowance is for a calendar month, comes with the role, and
+> what is sent to a model counts a quarter: see
+> [Roles, plans and the new look](#roles-plans-and-the-new-look-v200). What this
+> section says about what is counted, and for whom, still holds.
 
 Every account has a number of tokens it may use, and an owner sets it.
 
@@ -1295,6 +1303,110 @@ What this cannot do: a provider that cuts a reply and calls it finished
 cannot be told from a model that was done; and going on costs tokens, since
 the conversation is sent again each time.
 
+## Roles, plans and the new look (v2.0.0)
+
+Version 2 is the same app with another face and another way to share it. The
+page you land on is a conversation. Who may do what is one of six roles, and
+what a role has is a plan an owner sets.
+
+### The look
+
+- **The home page is a new conversation**: the mark, a greeting, and the field
+  to write in. On a phone the field is at the bottom edge, under the thumb.
+  The **+** next to it adds what the answer may use (your documents, your own
+  instructions, what is remembered); the pill names the model.
+- **The sidebar** (a drawer on a phone) has the pages one works on, then the
+  conversations: the pinned ones, then the recent ones. At its foot is the
+  account, with its role, and the button that starts a conversation.
+- **A conversation** has its name in the bar at the top. The menu behind it
+  pins, renames, shows an outline of what was said (with a search), and
+  deletes. An answer is set as a text to read, in a serif.
+- **Lists to choose from are sheets** that come up from the bottom edge on a
+  phone, and boxes in the middle of a wider screen.
+- **Light, dark, or as the device is set** (Settings → Appearance; also in
+  the account menu). Kept in the browser, and applied before the first paint.
+- **Two typefaces are bundled** (Figtree and Source Serif 4, SIL Open Font
+  License, `src/app/fonts/`): the app asks no font service for anything.
+
+### Roles
+
+| Role | Tokens a month | What it has |
+|---|---|---|
+| **Free** | 10,000,000 | Chat, projects, images |
+| **Pro** | 25,000,000 | + voice-overs, the knowledge base |
+| **Plus** | 50,000,000 | + videos, schedules |
+| **Ultra** | 100,000,000 | + API keys |
+| **Admin** | 250,000,000 | Every feature. Manages agents, teams, workflows and skills. Looks at providers, models, plans, accounts, usage and the audit log, and changes none of them |
+| **Owner** | no limit | Everything |
+
+- These are what the app ships with. **An owner changes them on the Plans
+  page**: the tokens of each role, which features a plan has, and what a
+  token of input counts. A plan has at least what the plan below it has: a
+  feature given to a plan is given to the plans above it.
+- An owner gives an account its role under **Users & roles**, and may give
+  one account an allowance of its own. Someone who registers is Free
+  (`DEFAULT_PLAN` names another plan for new accounts).
+- What a plan does not have is said where it would be: the page names the
+  plan that has it, and the request is refused with `403 not_in_plan`.
+- **The admin console** is behind the profile, for an owner and an admin
+  (who is shown "limited"). Nobody else is shown it, and its pages and
+  requests are refused to them.
+
+### Tokens
+
+- **An allowance is for a calendar month** (UTC). On the first of the month
+  the count starts again; nothing has to be raised by hand.
+- **What is counted is weighted**: a token the assistant writes counts as
+  one, a token it is sent counts a quarter (`TOKEN_INPUT_WEIGHT`, or the
+  Plans page). Work with tools sends the same conversation again with every
+  step, so most of what a long piece of work uses is input that was sent
+  before; counted in full, an allowance was gone half way through one
+  document. A long run lasts about three times as long as before.
+- Every token an account ever used is still kept, uncounted, for information.
+- The bar at the top, the account menu, Settings and the Usage page say what
+  is left and when the count starts again. Used up: `402 token_limit_reached`.
+
+### Models in a conversation
+
+- The pill in the field opens the list: **Auto** (the app chooses, and asks
+  the next model when one does not answer), then the **providers as
+  categories**.
+- **In a category the newest model of each class comes first, the highest
+  class first; then the older ones, the oldest last**: "Fable 5.2, Opus 5.5,
+  Sonnet 5.5, Haiku 5.5", then "Fable 5.1, Opus 5, Sonnet 5, Opus 4.8, …".
+  The order is read from the names of the models; where it is wrong, an
+  owner gives a model a place of its own (Models → Edit).
+- **A model has a lowest role** (Models page). An account below it is shown
+  the model with the role it takes, and cannot choose it; naming it in a
+  request is refused. A user is offered the models marked "for users" (all
+  of them while none is marked); an admin and an owner every model.
+- Each model says whether it is marked as working with tools (its capability
+  "Tool calling", on the Models page): one that only answers cannot act on a
+  server or keep a note.
+
+| API | What |
+|---|---|
+| `GET /api/chat/models` | The models the account is offered, in categories: `{ tier, groups: [{ id, name, models: [{ id, name, minTier, locked, tools }] }] }` |
+| `GET /api/plans` | What each role has, for everyone |
+| `GET` / `PUT` / `DELETE /api/admin/plans` | The plans as they are set (an admin reads; an owner changes, and resets to what the app ships with) |
+| `PATCH /api/models/{id}` | Also `minTier` and `position` |
+| `PATCH /api/chats/{id}` | `title`, and `pinned` |
+| `POST` / `PATCH /api/admin/users…` | `role` is one of `free`, `pro`, `plus`, `ultra`, `admin`, `owner` (`user` with `plan` still works); `tokenLimit` is a number for an allowance of its own, or `null` for the one of the role |
+
+### Coming from 1.x
+
+- Every account keeps its role: a user becomes **Free**, an administrator
+  **Admin**, an owner **Owner**.
+- An account whose token limit an owner had changed keeps that number, as
+  its own allowance for a month. An account that had the 10,000,000 of
+  before follows its role from now on.
+- What an account used before 2.0 counts for no month: every account starts
+  the month of the upgrade with its whole allowance.
+- **An administrator no longer changes providers, models or their keys**:
+  that is the owner's. Give the role Owner to whoever is to do it.
+- `DEFAULT_TOKEN_LIMIT` is now what the Free plan has a month, until an
+  owner sets the plans.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -1620,7 +1732,9 @@ account you register through the UI becomes the owner.
 | `NEXUS_WORKER` | no | `0` switches the background worker off, for a second server process on the same database. |
 | `MODEL_HEALTH_INTERVAL_MINUTES` | no | How often the app checks that a chat model still answers, in minutes: default 360, between 5 and 10080; `0` = no automatic check. A model that fails is left out of the model lists until a check passes. |
 | `MODEL_HEALTH_RETRY_SECONDS` | no | Before a model that worked is left out for "too many requests", "busy" or no answer, it is asked once more after this many seconds: default 20, at most 300. |
-| `DEFAULT_TOKEN_LIMIT` | no | How many tokens a new account may use in all: default 10000000. An owner changes the limit of an account under Users & Roles; an owner is not limited. |
+| `DEFAULT_TOKEN_LIMIT` | no | How many tokens the Free plan has a month, until an owner sets the plans on the Plans page: default 10000000. |
+| `DEFAULT_PLAN` | no | The plan of an account that is made without one being named (someone who registers, or an account made as a "user"): `free` unless this says `pro`, `plus` or `ultra`. |
+| `TOKEN_INPUT_WEIGHT` | no | What a token that is sent to a model counts against an allowance, where a token it writes counts 1: a number from 0 to 1, default 0.25. The Plans page overrides it. |
 | `SSH_KEEPALIVE_SECONDS` | no | How often an open connection to a server says that it is still there: default 15, between 1 and 300. Lower it for a network that forgets a quiet connection sooner. |
 | `BROWSER_URL` | no | Where the browser service is, with its token: `http://host:9223/?token=…`. **Unset = no browser** (agents are not handed the tool "Work in a browser"). See `scripts/host/browser/`. |
 | `BROWSER_WAIT_MINUTES` | no | How long a page waits for a person who has to pass a CAPTCHA or enter a code: default 15, between 1 and 240. |

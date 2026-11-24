@@ -10,6 +10,7 @@ import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
 import { apiKeyCreateSchema } from "@/lib/validation";
+import { assertFeature } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export const GET = handle(async () => {
 /** Make a key. The answer carries the key itself, this once. */
 export const POST = handle(async (req) => {
   const user = requireUser();
+  assertFeature(user, "api_keys");
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, apiKeyCreateSchema);
   // A key of an account that chooses no model is limited to none, and has no

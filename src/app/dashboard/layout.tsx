@@ -1,6 +1,8 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { getSessionState } from "@/lib/auth";
-import { tokensLeft } from "@/lib/token-rules";
+import { tierOf } from "@/lib/roles";
+import { tokensOf } from "@/lib/tokens";
 import { AppShell } from "@/components/shell/app-shell";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +17,19 @@ export default function DashboardLayout({
   if (state.status === "pending") redirect("/login/2fa");
 
   const { user } = state;
+  const tokens = tokensOf(user);
   return (
-    <AppShell user={{ username: user.username, email: user.email, role: user.role, tokensLeft: tokensLeft(user) }}>
+    <AppShell
+      user={{
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        tier: tierOf(user),
+        tokens: { limit: tokens.limit, used: tokens.used, left: tokens.left, renewsAt: tokens.renewsAt },
+      }}
+      // The sidebar as the reader left it: folded away or open.
+      collapsed={cookies().get("nexus-sidebar")?.value === "closed"}
+    >
       {children}
     </AppShell>
   );

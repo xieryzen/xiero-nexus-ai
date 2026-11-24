@@ -42,7 +42,7 @@ export function AccountClient({ username, email }: { username: string; email: st
 
   return (
     <div className="mt-6 grid gap-6 lg:grid-cols-2">
-      <Card title="Username and email" description="What you sign in with. Either of the two works.">
+      <Card id="profile" title="Username and email" description="What you sign in with. Either of the two works.">
         <form
           className="space-y-4"
           onSubmit={async (e) => {

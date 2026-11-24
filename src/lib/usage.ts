@@ -58,9 +58,9 @@ export interface RecordUsageInput {
  * same balance, and what was used is counted when a later call fails. The
  * record of the work is written at its end, with `counted`.
  */
-export function countTokens(userId: string | null | undefined, tokens: number): void {
+export function countTokens(userId: string | null | undefined, promptTokens: number, completionTokens: number): void {
   try {
-    chargeTokens(userId, tokens);
+    chargeTokens(userId, promptTokens, completionTokens);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[xiero-nexus] token count failed:", err);
@@ -96,6 +96,6 @@ export function recordUsage(input: RecordUsageInput): void {
   // installation's own, and a request that failed delivered nothing.
   const kind = input.kind ?? "chat";
   if (input.userId && kind !== "test" && (input.status ?? "ok") === "ok" && !input.counted) {
-    countTokens(input.userId, prompt + completion);
+    countTokens(input.userId, prompt, completion);
   }
 }

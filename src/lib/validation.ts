@@ -12,6 +12,7 @@ import { MAX_CUSTOM_CONFIG_CHARS } from "@/lib/adapters/custom-http-protocol";
 import { SPEECH_FORMATS } from "@/lib/adapters/types";
 import { MAX_MAX_STEPS, MIN_MAX_STEPS, TOOL_NAMES } from "@/lib/agent/catalog";
 import { CAPABILITIES } from "@/lib/capabilities";
+import { TIERS } from "@/lib/roles";
 import {
   MAX_MEDIA_PER_RUN,
   MAX_SPEECH_CHARS,
@@ -126,6 +127,10 @@ export const modelCreateSchema = z.object({
   notes: z.string().trim().max(1000).optional(),
   // Marked for the work of users, who choose no model (model-choice.ts).
   forUsers: z.boolean().optional(),
+  // The lowest role that may choose it in a conversation (roles.ts). Left out: every role.
+  minTier: z.enum(TIERS).optional(),
+  // Where it stands among the models of its provider, the lowest first. Left out: by its name (model-rank.ts).
+  position: z.number().int().min(0).max(100_000).optional(),
 });
 
 export const modelUpdateSchema = z.object({
@@ -140,11 +145,15 @@ export const modelUpdateSchema = z.object({
   pricePerMChars: z.number().nonnegative().max(100_000).nullable().optional(),
   capabilities: z.array(z.enum(CAPABILITIES)).optional(),
   notes: z.string().trim().max(1000).nullable().optional(),
+  minTier: z.enum(TIERS).optional(),
+  // Null: by its name again.
+  position: z.number().int().min(0).max(100_000).nullable().optional(),
 });
 
 export const chatRequestSchema = z
   .object({
-    // Left out, the app chooses the model; it always does for a user (model-choice.ts).
+    // Left out, the app chooses the model. One that is named has to be one
+    // the account is offered and its role may choose (chat-models.ts).
     modelRowId: z.string().min(1).nullable().optional(),
     systemPrompt: z.string().max(8000).optional(),
     // A conversation that is kept (v1.11): the message to answer, and the
@@ -173,7 +182,10 @@ export const chatRequestSchema = z
     path: ["messages"],
   });
 
-export const chatRenameSchema = z.object({ title: z.string().trim().min(1).max(80) });
+/** What can be changed of a conversation: its name, and whether it is pinned. One of the two at least. */
+export const chatRenameSchema = z
+  .object({ title: z.string().trim().min(1).max(80).optional(), pinned: z.boolean().optional() })
+  .refine((body) => body.title !== undefined || body.pinned !== undefined, { message: "Name what to change: title or pinned" });
 
 export const accountNoteSchema = z.object({ content: z.string().trim().min(1).max(2000) });
 

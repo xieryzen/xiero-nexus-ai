@@ -7,7 +7,7 @@
 // first account it registers has to become the administrator.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover,result
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover,result,plans
 import { readdir } from "node:fs/promises";
 import { reelWorkflowTemplate } from "../../src/lib/creative/templates.ts";
 import { AUTOMATION_PARTS, automation } from "./checks-automation.mjs";
@@ -80,6 +80,7 @@ function client() {
     get: (path) => call("GET", path),
     post: (path, body = {}) => call("POST", path, body),
     patch: (path, body) => call("PATCH", path, body),
+    put: (path, body) => call("PUT", path, body),
     del: (path) => call("DELETE", path),
     hasSession: () => Boolean(cookie),
   };
@@ -155,11 +156,30 @@ const anon = client();
 
 const ids = { providers: {}, models: {}, agents: {} };
 
+/** The plans the checks from before 2.0 were written for: see setup(). */
+const ALL_FEATURES = ["projects", "studio_image", "studio_voice", "studio_video", "knowledge", "automation", "api_keys"];
+const EVERYTHING_FOR_EVERYONE = {
+  inputWeight: 1,
+  plans: Object.fromEntries(["free", "pro", "plus", "ultra", "admin"].map((tier) => [tier, tier === "admin" ? { monthlyTokens: 10_000_000 } : { monthlyTokens: 10_000_000, features: ALL_FEATURES }])),
+};
+
+/** "1 December": the day the tokens of a month are there again, as the app says it. */
+function renewalDay(now = new Date()) {
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return `1 ${months[(now.getUTCMonth() + 1) % 12]}`;
+}
+
 async function setup() {
   begin("Setup: accounts, providers, models");
   const a = await admin.post("/api/auth/register", { username: "admin", email: "admin@example.com", password: "correct-horse-battery" });
   eq("first account registers", a.status, 201);
   eq("first account is the owner", a.data?.user?.role, "owner");
+  // The checks from before 2.0 take for granted that every account can do
+  // everything, with ten million tokens, each of them counted in full. The
+  // owner sets the plans so (an installation may): the part "plans" checks
+  // what the app ships with, and puts these back.
+  const before2 = await admin.put("/api/admin/plans", EVERYTHING_FOR_EVERYONE);
+  eq("the owner sets the plans: every feature for every plan, ten million tokens a month, each counted in full", [before2.status, before2.data?.changed, before2.data?.inputWeight], [200, true, 1]);
   const b = await bob.post("/api/auth/register", { username: "bob", email: "bob@example.com", password: "correct-horse-battery" });
   eq("second account is an ordinary user", b.data?.user?.role, "user");
   const c = await carol.post("/api/auth/register", { username: "carol", email: "carol@example.com", password: "correct-horse-battery" });
@@ -901,6 +921,7 @@ try {
       mediaFiles,
       settle,
       runProject,
+      everythingForEveryone: EVERYTHING_FOR_EVERYONE,
     });
   }
 } catch (err) {

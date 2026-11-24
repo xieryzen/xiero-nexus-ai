@@ -6,6 +6,7 @@ import { randomToken, sha256 } from "./crypto";
 import { AppError, Errors } from "./errors";
 import { rateLimit } from "./ratelimit";
 import { API_SCOPES, type ApiScope } from "./validation";
+import { assertFeature } from "./plans";
 
 /**
  * API keys for the public API (/api/v1). A key acts as the user who made it,
@@ -178,6 +179,9 @@ export function authenticateApiKey(req: Request): ApiCaller {
   if (key.expiresAt && key.expiresAt.getTime() <= Date.now()) throw unauthorized("This API key has expired");
   const user = db.select().from(users).where(eq(users.id, key.userId)).get();
   if (!user || user.status !== "active") throw unauthorized("The account of this API key is disabled");
+  // API keys are a feature of a plan (v2.0): a key made before the plan of
+  // its account changed is kept, and answers again when the plan has it.
+  assertFeature(user, "api_keys");
 
   // Written at most once a minute: it is for the key list, not for accounting.
   if (!key.lastUsedAt || Date.now() - key.lastUsedAt.getTime() > 60_000) {

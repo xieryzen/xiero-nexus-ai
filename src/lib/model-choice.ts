@@ -19,8 +19,10 @@ import {
   type ChoiceModel,
 } from "./model-choice-rules";
 import { countMediaTasks } from "./orchestrator/plan";
+import { hasFeature, type Feature } from "./plan-rules";
+import { getPlanSettings } from "./plans";
 import { NOT_SET_UP } from "./public-text";
-import { seesSetup } from "./roles";
+import { seesSetup, tierOf, type Tier } from "./roles";
 
 export { autoMedia };
 
@@ -58,6 +60,7 @@ function askable(): Askable[] {
       modelId: models.modelId,
       displayName: models.displayName,
       forUsers: models.forUsers,
+      minTier: models.minTier,
       lastTestStatus: models.lastTestStatus,
       retryAt: models.retryAt,
       inputPricePerMTok: models.inputPricePerMTok,
@@ -86,6 +89,7 @@ function askable(): Askable[] {
     name: m.displayName || m.modelId,
     capabilities: caps.get(m.id) ?? [],
     forUsers: m.forUsers,
+    minTier: m.minTier,
     failing: isFailing(m),
     price: null,
     providerId: m.providerId,
@@ -139,26 +143,31 @@ export function askingOrderFor(own: readonly string[], opts: { wantsTools?: bool
   return { ids: askingOrder(own, usable, standIns), standIns: new Set(standIns) };
 }
 
-function choices(all: Askable[], kind: ChoiceKind): string[] {
+function choices(all: Askable[], kind: ChoiceKind, tier?: string | null): string[] {
   return choicesFor(
     all.filter((m) => adapterDoes(m.adapter, kind)).map((m) => ({ ...m, price: priceFor(m.prices, kind) })),
     kind,
+    tier,
   );
 }
 
-/** The models the app works with for this kind of work, the first choice first. */
-export function appChoices(kind: ChoiceKind): string[] {
-  return choices(askable(), kind);
+/**
+ * The models the app works with for this kind of work, the first choice
+ * first. `tier`: the role of the account the work is for (roles.ts); a model
+ * whose lowest role is above it is left out.
+ */
+export function appChoices(kind: ChoiceKind, tier?: string | null): string[] {
+  return choices(askable(), kind, tier);
 }
 
 /** The app's first choice for this kind of work, or null when nothing can do it. */
-export function appChoice(kind: ChoiceKind): string | null {
-  return appChoices(kind)[0] ?? null;
+export function appChoice(kind: ChoiceKind, tier?: string | null): string | null {
+  return appChoices(kind, tier)[0] ?? null;
 }
 
 /** As appChoices, or an error that says the installation cannot do this yet. */
-export function requireAppChoices(kind: ChoiceKind): string[] {
-  const ids = appChoices(kind);
+export function requireAppChoices(kind: ChoiceKind, tier?: string | null): string[] {
+  const ids = appChoices(kind, tier);
   if (ids.length === 0) throw new PlainError(503, "not_set_up", NOT_SET_UP);
   return ids;
 }
@@ -170,9 +179,9 @@ export function requireAppChoices(kind: ChoiceKind): string[] {
  * calling, on an adapter that does it, first. A model without tools can
  * answer, and cannot act.
  */
-export function requireChatChoices(): string[] {
+export function requireChatChoices(tier?: string | null): string[] {
   const all = askable();
-  const ids = choices(all, "chat");
+  const ids = choices(all, "chat", tier);
   if (ids.length === 0) throw new PlainError(503, "not_set_up", NOT_SET_UP);
   const now = Date.now();
   const byId = new Map(all.map((m) => [m.id, m] as const));
@@ -189,25 +198,25 @@ export function requireChatChoices(): string[] {
     .map((m) => m.id);
 }
 
-export function requireAppChoice(kind: ChoiceKind): string {
-  return requireAppChoices(kind)[0]!;
+export function requireAppChoice(kind: ChoiceKind, tier?: string | null): string {
+  return requireAppChoices(kind, tier)[0]!;
 }
 
 /**
  * The model a request is done with: the one it names, for someone who is
- * shown the setup and names one; the app's choice for anyone else, whatever
- * the request names.
+ * shown the setup and names one; the app's choice among the models of the
+ * account's role for anyone else, whatever the request names.
  */
-export function modelFor(role: string | null | undefined, named: string | null | undefined, kind: ChoiceKind): string {
-  if (seesSetup(role) && named) return named;
-  return requireAppChoice(kind);
+export function modelFor(account: { role: string; plan?: string | null }, named: string | null | undefined, kind: ChoiceKind): string {
+  if (seesSetup(account.role) && named) return named;
+  return requireAppChoice(kind, tierOf(account));
 }
 
 /** Which kinds of work the installation can do for someone who chooses no model. */
-export function kindsAvailable(): Record<ChoiceKind, boolean> {
+export function kindsAvailable(tier: Tier | null = null): Record<ChoiceKind, boolean> {
   const all = askable();
   const out = {} as Record<ChoiceKind, boolean>;
-  for (const kind of CHOICE_KINDS) out[kind] = choices(all, kind).length > 0;
+  for (const kind of CHOICE_KINDS) out[kind] = choices(all, kind, tier).length > 0;
   return out;
 }
 
@@ -283,9 +292,9 @@ export function workflowMediaNeeds(workflowId: string | null): { image: number; 
  */
 export function withRunModels(project: Project): Project {
   const all = askable();
-  const first = (kind: ChoiceKind) => choices(all, kind)[0] ?? null;
   const auto = autoMedia() && project.maxMedia > 0;
   if (projectOwnerChooses(project)) {
+    const first = (kind: ChoiceKind) => choices(all, kind)[0] ?? null;
     return {
       ...project,
       managerModelRowId: project.managerModelRowId ?? first("chat"),
@@ -294,12 +303,20 @@ export function withRunModels(project: Project): Project {
       speechModelRowId: project.speechModelRowId ?? (auto ? first("audio") : null),
     };
   }
+  // A user's project: the app's choice among the models of the account's
+  // role (v2.0), and media of the kinds its plan has. A kind the workflow
+  // has a step for keeps its model, so that the step says why it is not made.
+  const account = project.createdBy ? db.select({ role: users.role, plan: users.plan }).from(users).where(eq(users.id, project.createdBy)).get() : undefined;
+  const tier = account ? tierOf(account) : null;
+  const first = (kind: ChoiceKind) => choices(all, kind, tier)[0] ?? null;
+  const settings = getPlanSettings();
+  const has = (feature: Feature) => !tier || hasFeature(settings, tier, feature);
   const needs = workflowMediaNeeds(project.workflowId);
   return {
     ...project,
     managerModelRowId: first("chat"),
-    imageModelRowId: auto || project.imageModelRowId || needs.image > 0 ? first("image") : null,
-    videoModelRowId: auto || project.videoModelRowId || needs.video > 0 ? first("video") : null,
-    speechModelRowId: auto || project.speechModelRowId || needs.audio > 0 ? first("audio") : null,
+    imageModelRowId: (auto && has("studio_image")) || ((project.imageModelRowId || needs.image > 0) && (has("studio_image") || needs.image > 0)) ? first("image") : null,
+    videoModelRowId: (auto && has("studio_video")) || ((project.videoModelRowId || needs.video > 0) && (has("studio_video") || needs.video > 0)) ? first("video") : null,
+    speechModelRowId: (auto && has("studio_voice")) || ((project.speechModelRowId || needs.audio > 0) && (has("studio_voice") || needs.audio > 0)) ? first("audio") : null,
   };
 }

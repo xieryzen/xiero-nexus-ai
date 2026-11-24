@@ -164,7 +164,7 @@ function SkillDetail({ skill, isAdmin, onEdit }: { skill: SkillDTO; isAdmin: boo
                   aria-expanded={file?.path === f.path}
                   className={cn(
                     "mono rounded border px-2 py-1 text-xs transition",
-                    file?.path === f.path ? "border-signal/50 bg-signal/15 text-signal" : "border-line text-ink-2 hover:text-ink",
+                    file?.path === f.path ? "border-accent/60 bg-accent-soft text-accent-ink" : "border-line text-ink-2 hover:text-ink",
                   )}
                 >
                   {f.path} · {kb(f.sizeBytes)}
@@ -329,7 +329,7 @@ export function SkillsManager({
             }}
             className={cn(
               "flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-8 text-center transition",
-              dragging ? "border-signal bg-signal/10" : "border-line",
+              dragging ? "border-accent bg-accent-soft" : "border-line",
             )}
           >
             <p className="text-sm text-ink-2">

@@ -3,7 +3,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { handle, json, parseBody } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, requireSetupOwner } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -29,7 +29,7 @@ export const GET = handle(async (req) => {
 });
 
 export const POST = handle(async (req) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const body = await parseBody(req, modelCreateSchema);
 
@@ -62,6 +62,8 @@ export const POST = handle(async (req) => {
         pricePerMChars: body.pricePerMChars,
         notes: body.notes,
         forUsers: body.forUsers ?? false,
+        minTier: body.minTier ?? "free",
+        position: body.position ?? null,
         source: "manual",
       })
       .returning()

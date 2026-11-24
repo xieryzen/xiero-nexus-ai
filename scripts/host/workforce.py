@@ -43,7 +43,9 @@
 #                        skills, agents, teams, workflows (separated by commas).
 #   --account <name>     An account the app is to have, with --account-email
 #                        and --account-role (owner, admin or user; user when
-#                        it is not said). Its password comes in the
+#                        it is not said; from version 2.0 of the app also the
+#                        plan of a user: free, pro, plus or ultra, where
+#                        "user" leaves the plan as it is). Its password comes in the
 #                        environment, as NEXUS_ACCOUNT_PASSWORD, and is needed
 #                        for a new account. One that is there under that name
 #                        or that email is left as it is; with --update its
@@ -173,6 +175,8 @@ import zipfile
 AGENT = "xiero-nexus-workforce/1"
 PARTS = ["accounts", "providers", "models", "skills", "agents", "teams", "workflows"]
 ROLES = ["owner", "admin", "user"]
+# From version 2.0 of the app a user has a plan, and an account can be asked for by it.
+PLAN_ROLES = ["free", "pro", "plus", "ultra"]
 SKILL_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
 # Sites that hand out files to people turn away a program that says it is one.
 BROWSER = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
@@ -1245,12 +1249,14 @@ def plan_accounts(state, options, plan, me):
 
         plan.changes.append(Change("accounts", "%s <%s>: add it, as %s." % (where, wanted["email"], role_word(wanted["role"])), create))
         return
-    differs = [key for key in ("username", "email", "role") if (found.get(key) or "") != wanted[key]]
+    differs = [key for key in ("username", "email") if (found.get(key) or "") != wanted[key]]
+    if role_as_asked(found, wanted["role"]) != wanted["role"]:
+        differs.append("role")
     if found.get("status") != "active":
         plan.notes.append("%s is switched off in the app. That is left as it is." % where)
     sets_password = bool(password) and options.update and not PASSWORD_SET
     if not differs and not sets_password:
-        plan.same.append('account "%s" (%s)' % (wanted["username"], role_word(found.get("role"))))
+        plan.same.append('account "%s" (%s)' % (wanted["username"], role_word(role_as_asked(found, wanted["role"]))))
         if password and not options.update:
             plan.notes.append("%s is in the app: its password is left as it is; --update sets the one that was given." % where)
         return
@@ -1279,7 +1285,20 @@ def plan_accounts(state, options, plan, me):
 
 
 def role_word(role):
+    if role in PLAN_ROLES:
+        return "a user with the plan %s" % role.capitalize()
     return {"owner": "an owner", "admin": "an administrator", "user": "a user"}.get(role, "a user")
+
+
+def role_as_asked(found, wanted_role):
+    """
+    The role of an account in the words it was asked for with. A plan is
+    asked for: what the app calls the account since 2.0 (its plan, for a
+    user). Otherwise owner, admin or user, as ever.
+    """
+    if wanted_role in PLAN_ROLES:
+        return found.get("tier") or found.get("role") or ""
+    return found.get("role") or ""
 
 
 def check_account(url, wanted):
@@ -2829,8 +2848,8 @@ def options_from(argv):
         if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email) or len(email) > 254:
             raise Wrong("--account needs --account-email, the address of the account.")
         role = (options.account_role or "user").strip().lower()
-        if role not in ROLES:
-            raise Wrong("--account-role is one of: %s." % ", ".join(ROLES))
+        if role not in ROLES + PLAN_ROLES:
+            raise Wrong("--account-role is one of: %s." % ", ".join(ROLES + PLAN_ROLES))
         options.account = {"username": name, "email": email, "role": role}
     else:
         options.account = None

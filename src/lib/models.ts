@@ -8,6 +8,7 @@ import {
   type Model,
 } from "@/db/schema";
 import { isFailing } from "./model-health-rules";
+import type { Tier } from "./roles";
 
 export interface SerializedModel {
   id: string;
@@ -37,6 +38,10 @@ export interface SerializedModel {
   hidden: boolean;
   /** Marked for the work of users, who choose no model (model-choice.ts). */
   forUsers: boolean;
+  /** The lowest role that may choose it in a conversation (roles.ts). */
+  minTier: Tier;
+  /** Where an owner put it among the models of its provider, the lowest first. Null: by its name. */
+  position: number | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -97,6 +102,8 @@ export function serializeModels(rows: Model[]): SerializedModel[] {
     retryAt: m.retryAt,
     hidden: m.enabled && isFailing(m),
     forUsers: m.forUsers,
+    minTier: m.minTier,
+    position: m.position,
     notes: m.notes,
     createdAt: m.createdAt,
     updatedAt: m.updatedAt,

@@ -7,6 +7,7 @@ import { loadManagedCollection, serializeDocument } from "@/lib/knowledge/servic
 import { readBodyCapped } from "@/lib/media/http";
 import { maybeSweep, rateLimit } from "@/lib/ratelimit";
 import { kickWorker } from "@/lib/worker";
+import { assertFeature } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
  */
 export const POST = handle(async (req, { params }) => {
   const user = requireUser();
+  assertFeature(user, "knowledge");
   const collection = loadManagedCollection(params.id!, user);
   maybeSweep();
   const limit = rateLimit(`knowledge:add:${user.id}`, 60, 60_000);

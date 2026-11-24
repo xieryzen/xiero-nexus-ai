@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "standins", "visibility", "servers", "browser", "handover", "result"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "standins", "visibility", "servers", "browser", "handover", "plans", "result"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -58,7 +58,7 @@ function makePdf(pages) {
 }
 
 export async function automation(ctx) {
-  const { APP, MOCK, KEY, only, admin, bob, carol, ids, begin, check, eq, sleep, mockLog, mockReset, mediaFiles, settle, runProject, client } = ctx;
+  const { APP, MOCK, KEY, only, admin, bob, carol, ids, begin, check, eq, sleep, mockLog, mockReset, mediaFiles, settle, runProject, client, everythingForEveryone } = ctx;
   const wants = (part) => !only || only.has(part);
   const state = { models: {}, agents: {} };
 
@@ -1687,9 +1687,12 @@ export async function automation(ctx) {
 
   async function tokens() {
     const PASS = "tokens-first-password-1";
-    const yours = (used, limit) => `Your token balance is used up: ${used} of ${limit} tokens used. An owner of this installation can raise your limit.`;
+    // An allowance is for a calendar month (v2.0): what is said names the day it is there again.
+    const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const thereAgain = `1 ${MONTHS[(new Date().getUTCMonth() + 1) % 12]}`;
+    const yours = (used, limit) => `Your tokens for this month are used up: ${used} of ${limit} tokens used. They are there again on ${thereAgain}; an owner of this installation can give you more.`;
     const ofProject = (used, limit) =>
-      `The token balance of the account this project belongs to is used up: ${used} of ${limit} tokens used. An owner of this installation can raise its limit.`;
+      `The tokens for this month of the account this project belongs to are used up: ${used} of ${limit} tokens used. They are there again on ${thereAgain}; an owner of this installation can give it more.`;
     /** What the account used, may use, and has left. */
     const balance = async (who) => {
       const u = (await who.get("/api/account/me")).data?.user;
@@ -1776,13 +1779,13 @@ export async function automation(ctx) {
     const found = await vera.post("/api/knowledge/search", { query: "wick", collectionIds: [col] });
     check(
       "a document is kept and found by its words; it is not embedded, and says why",
-      doc.status === 201 && kept?.documents?.[0]?.embeddingStatus === "failed" && (kept.documents[0].error ?? "").includes("Your token balance is used up") && found.data?.hits?.[0]?.documentTitle === "Lamps",
+      doc.status === 201 && kept?.documents?.[0]?.embeddingStatus === "failed" && (kept.documents[0].error ?? "").includes("Your tokens for this month are used up") && found.data?.hits?.[0]?.documentTitle === "Lamps",
       [doc.status, kept?.documents?.[0]?.embeddingStatus, kept?.documents?.[0]?.error, found.data?.hits?.[0]?.documentTitle],
     );
     eq("nothing of all this was asked of a provider", await asked(), []);
     eq("what the account used is what it was", await balance(vera), [120, 100, 0]);
     const bell = (await vera.get("/api/notifications")).data?.notifications ?? [];
-    const told = bell.filter((n) => n.title === "Your token balance is used up");
+    const told = bell.filter((n) => n.title === "Your tokens for this month are used up");
     check("the account was told once, when its last tokens went", told.length === 1 && told[0].level === "warning" && told[0].body.startsWith("120 of 100 tokens used."), told);
 
     begin("Tokens: an owner sets the limit, and nobody else");
@@ -1806,16 +1809,23 @@ export async function automation(ctx) {
     const none = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: 0 });
     eq("  a limit of 0 is a limit", [none.status, none.data?.user?.tokenLimit, none.data?.user?.tokensLeft], [200, 0, 0]);
     const wrongChange = [];
-    for (const tokenLimit of [-1, 1.5, "many", null, 10_000_000_000_000]) wrongChange.push((await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit })).status);
-    eq("a limit that is no whole number of tokens, or too large, is refused", [wrongChange, (await balance(vera))[1]], [[400, 400, 400, 400, 400], 0]);
+    for (const tokenLimit of [-1, 1.5, "many", 10_000_000_000_000]) wrongChange.push((await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit })).status);
+    eq("a limit that is no whole number of tokens, or too large, is refused", [wrongChange, (await balance(vera))[1]], [[400, 400, 400, 400], 0]);
+    // A limit of its own is taken away again with null: the account has what its role has (v2.0).
+    const asRole = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: null });
+    eq("  null takes the account's own limit away: it has the allowance of its role again", [asRole.status, asRole.data?.user?.tokenLimit, asRole.data?.user?.tokenLimitIsOwn, asRole.data?.user?.tokensLeft], [200, 10_000_000, false, 10_000_000 - 150]);
+    const ownAgain = await admin.patch(`/api/admin/users/${veraId}`, { tokenLimit: 0 });
+    eq("  (and it is given its own again)", [ownAgain.status, ownAgain.data?.user?.tokenLimit, ownAgain.data?.user?.tokenLimitIsOwn], [200, 0, true]);
     eq("the limit of an account there is not: 404", (await admin.patch("/api/admin/users/no-such-account", { tokenLimit: 5 })).status, 404);
-    const xena = await make("xena", { role: "owner", tokenLimit: 500 });
+    const limitedOwner = await make("xena", { role: "owner", tokenLimit: 500 });
+    eq("an owner is not made with a limit: there is none to set", [limitedOwner.status, limitedOwner.error], [400, "An owner is not held to a token limit: there is none to set"]);
+    const xena = await make("xena", { role: "owner" });
     const xenaId = xena.data?.user?.id;
     eq("another owner is not held to a limit either", [xena.status, xena.data?.user?.tokenLimit, xena.data?.user?.tokensLeft], [201, null, null]);
     const forOwner = await admin.patch(`/api/admin/users/${xenaId}`, { tokenLimit: 5 });
     eq("  and none can be set for it", [forOwner.status, forOwner.error], [400, "An owner is not held to a token limit: there is none to set"]);
     const demoted = await admin.patch(`/api/admin/users/${xenaId}`, { role: "user" });
-    eq("an owner that becomes a user is held to the limit of its account", [demoted.status, demoted.data?.user?.tokenLimit], [200, 500]);
+    eq("an owner that becomes a user is held to the allowance of its role", [demoted.status, demoted.data?.user?.role, demoted.data?.user?.tokenLimit, demoted.data?.user?.tokenLimitIsOwn], [200, "user", 10_000_000, false]);
     const promoted = await admin.patch(`/api/admin/users/${xenaId}`, { role: "admin", tokenLimit: 700 });
     eq("  a role and a limit are changed in one go", [promoted.status, promoted.data?.user?.role, promoted.data?.user?.tokenLimit], [200, "admin", 700]);
 
@@ -1837,7 +1847,7 @@ export async function automation(ctx) {
     eq("  nothing more was asked of a model: two tasks, no summary, no review", [(await asked()).length, await balance(yan)], [2, [60, 50, 0]]);
     const yanBell = (await yan.get("/api/notifications")).data?.notifications ?? [];
     const look = yanBell.find((n) => n.title === "Run needs a look: Yan counts");
-    check("  the account is told: about the run, and that its tokens are used up", (look?.body ?? "") === `1 of 3 tasks did not succeed. ${ofProject("60", "50")}` && yanBell.filter((n) => n.title === "Your token balance is used up").length === 1, yanBell.map((n) => [n.title, n.body]));
+    check("  the account is told: about the run, and that its tokens are used up", (look?.body ?? "") === `1 of 3 tasks did not succeed. ${ofProject("60", "50")}` && yanBell.filter((n) => n.title === "Your tokens for this month are used up").length === 1, yanBell.map((n) => [n.title, n.body]));
     const parse = (text) => {
       try {
         return JSON.parse(text ?? "").error?.message;
@@ -1946,9 +1956,11 @@ export async function automation(ctx) {
     eq("  the run failed, and the account is told why", [lastStatus(stopped.events), await balance(ziv), ((await ziv.get("/api/notifications")).data?.notifications ?? []).find((n) => n.title === "Run failed: Ziv fails")?.body], ["failed", [afterFail[0] + 60, afterFail[0] + 60, 0], `No task succeeded. ${ofProject(end, end)}`]);
 
     begin("Tokens: what is not counted");
-    const before = (await balance(wim))[0];
-    const tested = await wim.post(`/api/models/${ids.models.chat}/test`, {});
-    eq("a check of a model by an administrator is the installation's: it is counted for nobody", [tested.data?.ok, (await balance(wim))[0]], [true, before]);
+    const before = (await balance(admin))[0];
+    const tested = await admin.post(`/api/models/${ids.models.chat}/test`, {});
+    eq("a check of a model is the installation's: it is counted for nobody", [tested.data?.ok, (await balance(admin))[0]], [true, before]);
+    // A check asks the provider, with the owner's key: an administrator starts none (v2.0).
+    eq("  an administrator starts no check of a model", [(await wim.post(`/api/models/${ids.models.chat}/test`, {})).status, (await balance(wim))[0]], [403, (await balance(wim))[0]]);
     await fetch(`${MOCK}/__force?model=chat-mini&status=500&times=1`);
     const failedChat = await say(yan);
     check("a chat that the provider failed is not counted", failedChat.events.some((e) => e.error) && (await balance(yan))[0] === 330, [failedChat.events, await balance(yan)]);
@@ -1959,13 +1971,13 @@ export async function automation(ctx) {
       return res.status === 200 ? await res.text() : `status ${res.status}`;
     };
     const usersPage = await pageOf(admin, "/dashboard/users");
-    check("Users & Roles shows what each account used and may use", usersPage.includes(">Tokens</th>") && usersPage.includes('data-tokens="vera"') && usersPage.includes("used up") && usersPage.includes("No limit"), usersPage.length);
+    check("Users & Roles shows what each account used and may use", usersPage.includes("Tokens this month") && usersPage.includes('data-tokens="vera"') && usersPage.includes("used up") && usersPage.includes("No limit"), usersPage.length);
     check("  an owner has a way to change a limit there", usersPage.includes('aria-label="Change the token limit of vera"') && !usersPage.includes('aria-label="Change the token limit of admin"'), null);
     const forAdmin = await pageOf(wim, "/dashboard/users");
     check("  an administrator sees the numbers, and no way to change them", forAdmin.includes('data-tokens="vera"') && !forAdmin.includes("Change the token limit of"), null);
     const veraSettings = await pageOf(vera, "/dashboard/settings");
-    check("Settings shows an account its tokens: used, limit, left", veraSettings.includes('id="token-balance"') && />150</.test(veraSettings) && veraSettings.includes("An owner of this installation sets the limit"), null);
-    check("  an account with none left is told on every page", veraSettings.includes('id="tokens-used-up"') && (await pageOf(vera, "/dashboard")).includes("Your token balance is used up"), null);
+    check("Settings shows an account its tokens: used, limit, left", veraSettings.includes('id="token-balance"') && />150</.test(veraSettings) && veraSettings.includes("On the first of the month the count starts again"), null);
+    check("  an account with none left is told on every page", veraSettings.includes('id="tokens-used-up"') && (await pageOf(vera, "/dashboard")).includes("Your tokens for this month are used up"), null);
     const tiaHome = await pageOf(tia, "/dashboard");
     check("  one with tokens sees how many are left, and no warning", tiaHome.includes('id="tokens-left"') && tiaHome.includes("10M tokens left") && !tiaHome.includes('id="tokens-used-up"'), null);
     // What a project page says a run is held to: text that React splits is read as one.
@@ -1986,10 +1998,10 @@ export async function automation(ctx) {
     auditDb.close();
     const meta = (row) => JSON.parse(row.metadata ?? "{}");
     const changes = rows.filter((row) => row.action === "admin.user.update" && row.target === veraId && meta(row).changed?.includes("tokenLimit")).map((row) => [meta(row).tokenLimitBefore, meta(row).tokenLimit, meta(row).tokensUsed]);
-    eq("every change of a limit is in the audit log: from what, to what, and what was used by then", changes, [[100, 1_000, 120], [1_000, 150, 150], [150, 0, 150]]);
+    eq("every change of a limit is in the audit log: from what, to what, and what was used by then", changes, [[100, 1_000, 120], [1_000, 150, 150], [150, 0, 150], [0, null, 150], [null, 0, 150]]);
     check("  with who changed it", rows.filter((row) => row.action === "admin.user.update" && row.target === veraId).every((row) => row.actor === owner?.id), null);
     eq("  the limit an account was made with is there too", meta(rows.find((row) => row.action === "admin.user.create" && row.target === veraId) ?? {}).tokenLimit, 100);
-    const usedUp = (id) => rows.filter((row) => row.action === "account.tokens.used_up" && row.target === id).map((row) => [meta(row).tokensUsed, meta(row).tokenLimit]);
+    const usedUp = (id) => rows.filter((row) => row.action === "account.tokens.used_up" && row.target === id).map((row) => [meta(row).used, meta(row).allowance]);
     eq("  and so is each time an account used its last tokens", [usedUp(veraId), usedUp(yanId)], [[[120, 100]], [[60, 50], [180, 160]]]);
 
     // The accounts of these checks go, so that the lists after them are what they were.
@@ -2113,16 +2125,42 @@ export async function automation(ctx) {
     const lists = JSON.stringify([userAgents, userFlows, userTeams.data]);
     check("  nothing in these lists names a provider or a model, or holds what an agent is told", userTeams.status === 200 && named(lists).length === 0 && !/SECRET-/.test(lists) && (userTeams.data?.teams ?? []).every((team) => team.skillIds.length === 0), named(lists));
 
-    begin("What a user is shown: a chat without a model to choose");
+    begin("What a user is shown: a chat, and the models to choose from");
     await mockReset();
     const hello = await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
     eq("a user chats and names no model: the one marked for users answers", [hello.status, hello.events.some((e) => e.done), (await posted()).map((l) => l.body?.model)], [200, true, ["chat-mini"]]);
     check("  the answer does not say which it was", named(hello.text).length === 0, named(hello.text));
     await mockReset();
+    // A user chooses among the models marked for users (v2.0). One that is not offered is said not to be there:
+    // the answer is the same for a model that is not marked and for a name that is no model.
+    const offered = await zoe.get("/api/chat/models");
+    eq(
+      "a user is offered the models marked for users, under their provider",
+      [offered.status, offered.data?.tier, (offered.data?.groups ?? []).map((g) => [g.name, g.models.map((m) => [m.name, m.locked, m.tools])])],
+      // Not locked; and not marked as working with tools: the page says so.
+      [200, "free", [["Mock OpenAI-style", [["chat-mini", false, false]]]]],
+    );
+    const offeredAdmin = await zak.get("/api/chat/models");
+    const adminNames = (offeredAdmin.data?.groups ?? []).flatMap((g) => g.models.map((m) => m.name));
+    check("  an administrator is offered every chat model that can be used", offeredAdmin.data?.tier === "admin" && adminNames.includes("chat-mini") && adminNames.includes("chat-notools") && adminNames.length > 2, adminNames);
+    const chosen = await sse(zoe, "/api/chat", { method: "POST", body: { modelRowId: ids.models.chat, messages: [{ role: "user", content: "hi" }] } });
+    eq("a user names a model that is offered: it answers", [chosen.status, chosen.events.some((e) => e.done), (await posted()).map((l) => l.body?.model)], [200, true, ["chat-mini"]]);
+    await mockReset();
     const other = await sse(zoe, "/api/chat", { method: "POST", body: { modelRowId: state.models["chat-notools"], messages: [{ role: "user", content: "hi" }] } });
-    eq("a model a user names is not asked: the app's choice is", [other.events.some((e) => e.done), (await posted()).map((l) => l.body?.model)], [true, ["chat-mini"]]);
+    const otherError = (() => {
+      try {
+        return JSON.parse(other.text)?.error?.message ?? other.text;
+      } catch {
+        return other.text;
+      }
+    })();
+    eq(
+      "a model that is not offered to users is not asked, and is said not to be there",
+      [other.status, other.events.some((e) => e.done), (await posted()).map((l) => l.body?.model), otherError],
+      [404, false, [], "That model is not offered. Choose another one, or leave the choice to the app."],
+    );
     const noSuch = await sse(zoe, "/api/chat", { method: "POST", body: { modelRowId: "no-such-model", messages: [{ role: "user", content: "hi" }] } });
-    eq("  nor does a name that is no model tell them so", [noSuch.status, noSuch.events.some((e) => e.done)], [200, true]);
+    eq("  a name that is no model gets the same answer", [noSuch.status, noSuch.events.some((e) => e.done), noSuch.text === other.text], [404, false, true]);
     await force("chat-mini", 500, 1);
     const failed = await sse(zoe, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
     const failure = failed.events.find((e) => e.error)?.error ?? failed.text;
@@ -2347,20 +2385,30 @@ export async function automation(ctx) {
     const leaks = [];
     const statuses = [];
     let all = "";
+    const choosable = new Set(((await zoe.get("/api/chat/models")).data?.groups ?? []).flatMap((g) => [g.name, ...g.models.map((m) => m.name)]));
     for (const path of pages) {
       const res = await pageOf(zoe, path);
       statuses.push(res.status);
       all += res.html;
-      const found = [...named(res.html), ...(/SECRET-/.test(res.html) ? ["what an agent or a step is told"] : [])];
+      // A conversation names the models the user may choose from (v2.0), and nothing else of the setup.
+      const mayName = path === "/dashboard" || path === "/dashboard/chat" ? choosable : new Set();
+      const found = [...named(res.html).filter((name) => !mayName.has(name)), ...(/SECRET-/.test(res.html) ? ["what an agent or a step is told"] : [])];
       if (found.length > 0) leaks.push([path, found]);
     }
     eq("a user's pages open", statuses, pages.map(() => 200));
-    eq("  none of them names a provider or a model, or holds what an agent or a step is told", leaks, []);
+    eq("  none of them names a provider or a model but the ones a conversation offers, or holds what an agent or a step is told", leaks, []);
     check("  the menu has no Providers, Models and Skills", !all.includes('href="/dashboard/providers"') && !all.includes('href="/dashboard/models"') && !all.includes('href="/dashboard/skills"') && all.includes('href="/dashboard/studio"'), null);
     check("  the pages hold what is the user's own: the project, the agents, the workflow", all.includes("Zoe&#x27;s first") && all.includes("Vis Writer") && all.includes("Seen by users"), null);
     const adminChat = await pageOf(zak, "/dashboard/chat");
     const adminModels = await pageOf(zak, "/dashboard/models");
-    check("an administrator's pages name them, and have the menu", adminChat.html.includes("chat-mini") && adminChat.html.includes('href="/dashboard/providers"') && adminModels.status === 200 && adminModels.html.includes('id="users-models"') && adminModels.html.includes("for users"), [adminChat.status, adminModels.status]);
+    // The admin area is behind the profile (v2.0): its console leads to the pages an administrator is shown.
+    const adminConsole = await pageOf(zak, "/dashboard/admin");
+    check(
+      "an administrator's pages name them, and the admin console leads to Providers and Models",
+      adminChat.html.includes("chat-notools") && adminConsole.status === 200 && adminConsole.html.includes('href="/dashboard/providers"') && adminConsole.html.includes('href="/dashboard/models"') && adminModels.status === 200 && adminModels.html.includes('id="users-models"') && adminModels.html.includes("for users"),
+      [adminChat.status, adminConsole.status, adminModels.status],
+    );
+    eq("  a user is sent back from the admin console", [(await pageOf(zoe, "/dashboard/admin")).status, /\/dashboard$/.test((await pageOf(zoe, "/dashboard/admin")).location ?? "")], [307, true]);
 
     begin("What a user is shown: who changes roles and token limits");
     eq(
@@ -5026,7 +5074,312 @@ export async function automation(ctx) {
     state.result = { siteId, pluginId };
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, standins, visibility, servers, browser, handover, result };
+  // ─── Roles, plans and tokens for a month (v2.0) ───────────────────────────
+
+  /**
+   * An account has one of six roles. The first four are the plans of a user:
+   * tokens for a calendar month, and features. What a plan lacks is refused
+   * and says which plan has it. What is sent to a model counts a quarter of
+   * what it writes. A conversation offers its models in categories, the
+   * newest of each class first, and a model has a lowest role. An
+   * administrator looks at providers and models, and changes none.
+   */
+  async function plans() {
+    const PASS = "plans-first-password-1";
+    const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const now = new Date();
+    const thereAgain = `1 ${MONTHS[(now.getUTCMonth() + 1) % 12]}`;
+    const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+    const make = (username, extra = {}) => admin.post("/api/admin/users", { username, email: `${username}@example.com`, password: PASS, ...extra });
+    const signIn = async (name) => {
+      const who = client();
+      await who.post("/api/auth/login", { identifier: name, password: PASS });
+      return who;
+    };
+    const me = async (who) => (await who.get("/api/account/me")).data?.user;
+    const tokensOf = async (who) => {
+      const u = await me(who);
+      return [u?.tokensUsed, u?.tokenLimit, u?.tokensLeft, u?.tokensUsedInAll];
+    };
+    const chatWith = (who, extra = {}) => sse(who, "/api/chat", { method: "POST", body: { messages: [{ role: "user", content: "hi" }], ...extra } });
+    const asked = async () => (await mockLog()).filter((l) => l.method === "POST" && l.path.endsWith("/chat/completions")).map((l) => l.body?.model);
+    const errorOf = (res) => {
+      try {
+        return JSON.parse(res.text)?.error ?? null;
+      } catch {
+        return null;
+      }
+    };
+    const sql = (query, ...args) => {
+      const db = database();
+      const out = /^\s*select/i.test(query) ? db.prepare(query).all(...args) : db.prepare(query).run(...args);
+      db.close();
+      return out;
+    };
+    const ALL = ["projects", "studio_image", "studio_voice", "studio_video", "knowledge", "automation", "api_keys"];
+
+    begin("Plans: what the app ships with");
+    const reset = await admin.del("/api/admin/plans");
+    eq("an owner sets the plans back to what the app ships with", [reset.status, reset.data?.changed, reset.data?.inputWeight], [200, false, 0.25]);
+    const shipped = await admin.get("/api/admin/plans");
+    eq(
+      "six roles, the lowest first, each with its tokens for a month",
+      (shipped.data?.plans ?? []).map((p) => [p.tier, p.monthlyTokens]),
+      [["free", 10_000_000], ["pro", 25_000_000], ["plus", 50_000_000], ["ultra", 100_000_000], ["admin", 250_000_000], ["owner", null]],
+    );
+    eq(
+      "  and its features: a plan has what the plan below it has, and something more",
+      (shipped.data?.plans ?? []).map((p) => p.features),
+      [
+        ["projects", "studio_image"],
+        ["projects", "studio_image", "studio_voice", "knowledge"],
+        ["projects", "studio_image", "studio_voice", "studio_video", "knowledge", "automation"],
+        ALL,
+        ALL,
+        ALL,
+      ],
+    );
+
+    begin("Plans: six roles");
+    const made = {};
+    for (const [name, role] of [["fay", "free"], ["pia", "pro"], ["lux", "plus"], ["uma", "ultra"], ["pam", "admin"]]) made[name] = await make(name, { role });
+    eq(
+      "an owner makes an account with any of the six: a plan is kept as a user with that plan",
+      ["fay", "pia", "lux", "uma", "pam"].map((name) => [made[name].status, made[name].data?.user?.role, made[name].data?.user?.tier, made[name].data?.user?.tokenLimit, made[name].data?.user?.tokenLimitIsOwn]),
+      [[201, "user", "free", 10_000_000, false], [201, "user", "pro", 25_000_000, false], [201, "user", "plus", 50_000_000, false], [201, "user", "ultra", 100_000_000, false], [201, "admin", "admin", 250_000_000, false]],
+    );
+    const id = Object.fromEntries(Object.entries(made).map(([name, res]) => [name, res.data?.user?.id]));
+    const [fay, pia, lux, uma, pam] = await Promise.all(["fay", "pia", "lux", "uma", "pam"].map(signIn));
+    eq("  each is told its role when it signs in", await Promise.all([fay, pia, lux, uma, pam, admin].map(async (who) => (await me(who))?.tier)), ["free", "pro", "plus", "ultra", "admin", "owner"]);
+    const asBefore = await make("ivo", { role: "user", plan: "plus" });
+    const plain = await make("jan", { role: "user" });
+    const noRole = await make("kim");
+    eq("as before 2.0, \"user\" is taken: with a plan, or with the plan new accounts have", [[asBefore.status, asBefore.data?.user?.tier], [plain.status, plain.data?.user?.tier], [noRole.status, noRole.data?.user?.tier]], [[201, "plus"], [201, "free"], [201, "free"]]);
+    eq("  a role that is none is refused", [(await make("leo", { role: "gold" })).status, (await make("leo", { role: "user", plan: "admin" })).status], [400, 400]);
+    const up = await admin.patch(`/api/admin/users/${id.fay}`, { role: "pro" });
+    eq("an owner changes the plan of an account: its tokens are the new plan's", [up.status, up.data?.user?.tier, up.data?.user?.tokenLimit], [200, "pro", 25_000_000]);
+    const toAdmin = await admin.patch(`/api/admin/users/${id.fay}`, { role: "admin" });
+    const back = await admin.patch(`/api/admin/users/${id.fay}`, { role: "free" });
+    eq("  a user becomes an admin, and a user again", [[toAdmin.status, toAdmin.data?.user?.role, toAdmin.data?.user?.tier, toAdmin.data?.user?.tokenLimit], [back.status, back.data?.user?.role, back.data?.user?.tier, back.data?.user?.tokenLimit]], [[200, "admin", "admin", 250_000_000], [200, "user", "free", 10_000_000]]);
+    eq("  only an owner does: not an admin, not the account itself", [(await pam.patch(`/api/admin/users/${id.fay}`, { role: "ultra" })).status, (await fay.patch(`/api/admin/users/${id.fay}`, { role: "ultra" })).status, (await me(fay))?.tier], [403, 403, "free"]);
+
+    begin("Plans: who reads them, and who sets them");
+    const forFay = await fay.get("/api/plans");
+    eq("everyone who is signed in reads the plans of a user, and which one is theirs", [forFay.status, forFay.data?.tier, (forFay.data?.plans ?? []).map((p) => p.tier), forFay.data?.tokens?.limit], [200, "free", ["free", "pro", "plus", "ultra"], 10_000_000]);
+    eq("  an admin reads what every role has", [(await pam.get("/api/admin/plans")).status, (await pam.get("/api/admin/plans")).data?.plans?.length], [200, 6]);
+    eq("  a user is not shown the settings of the admin area", [(await fay.get("/api/admin/plans")).status], [403]);
+    eq("  an admin changes none of it", [(await pam.put("/api/admin/plans", { inputWeight: 1 })).status, (await pam.del("/api/admin/plans")).status, (await admin.get("/api/admin/plans")).data?.inputWeight], [403, 403, 0.25]);
+    const tooMany = await admin.put("/api/admin/plans", { plans: { free: { monthlyTokens: 30_000_000 } } });
+    eq("a plan cannot have more tokens than the plan above it", [tooMany.status, tooMany.error], [400, "Pro is above Free: it cannot have fewer tokens a month"]);
+    eq(
+      "  the owner's role is not changed, an admin keeps every feature, and a feature has to be one",
+      [(await admin.put("/api/admin/plans", { plans: { owner: { monthlyTokens: 5 } } })).status, (await admin.put("/api/admin/plans", { plans: { admin: { features: ["projects"] } } })).status, (await admin.put("/api/admin/plans", { plans: { pro: { features: ["projects", "flying"] } } })).status, (await admin.put("/api/admin/plans", {})).status],
+      [400, 400, 400, 400],
+    );
+    eq("  nothing of that was kept", [(await admin.get("/api/admin/plans")).data?.changed], [false]);
+
+    begin("Plans: what a plan lacks is refused, and says which plan has it");
+    const lacks = (what, has, mine) => `${what}: part of the ${has} plan${has === "Ultra" ? "" : " and the plans above it"}. Your plan is ${mine}. The owner of this installation can change it.`;
+    await mockReset();
+    const freeKnowledge = await fay.post("/api/knowledge", { name: "Fay's notes" });
+    const freeKey = await fay.post("/api/account/api-keys", { name: "Fay's key", scopes: ["chat"] });
+    const freeSpeech = await fay.post("/api/media/speech", { text: "Hello." });
+    const freeVideo = await fay.post("/api/media/videos", { prompt: "A lamp." });
+    eq(
+      "Free has no knowledge base, no API keys, no voice-overs and no videos",
+      [[freeKnowledge.status, freeKnowledge.code, freeKnowledge.error], [freeKey.status, freeKey.error], [freeSpeech.status, freeSpeech.error], [freeVideo.status, freeVideo.error]],
+      [[403, "not_in_plan", lacks("Knowledge base", "Pro", "Free")], [403, lacks("API keys", "Ultra", "Free")], [403, lacks("Voice-overs", "Pro", "Free")], [403, lacks("Videos", "Plus", "Free")]],
+    );
+    const freeImage = await fay.post("/api/media/images", { prompt: "A lamp." });
+    const freeProject = await fay.post("/api/projects", { title: "Fay's project", goal: "Check the app." });
+    eq("  it has images and projects", [freeImage.status, freeProject.status], [201, 201]);
+    const freeSchedule = await fay.post(`/api/projects/${freeProject.data?.project?.id}/schedules`, { cron: "0 8 * * 1-5", timezone: "Asia/Jakarta" });
+    eq("  and no schedules", [freeSchedule.status, freeSchedule.code, freeSchedule.error], [403, "not_in_plan", lacks("Schedules", "Plus", "Free")]);
+    const proKnowledge = await pia.post("/api/knowledge", { name: "Pia's notes" });
+    eq(
+      "Pro adds the knowledge base and voice-overs, and stops before videos, schedules and keys",
+      [proKnowledge.status, (await pia.post("/api/media/speech", { text: "Hello." })).status, (await pia.post("/api/media/videos", { prompt: "A lamp." })).error, (await pia.post("/api/account/api-keys", { name: "k", scopes: ["chat"] })).error],
+      [201, 201, lacks("Videos", "Plus", "Pro"), lacks("API keys", "Ultra", "Pro")],
+    );
+    const plusProject = await lux.post("/api/projects", { title: "Lux's project", goal: "Check the app." });
+    const plusSchedule = await lux.post(`/api/projects/${plusProject.data?.project?.id}/schedules`, { cron: "0 8 * * 1-5", timezone: "Asia/Jakarta" });
+    eq(
+      "Plus adds videos and schedules, and has no keys",
+      [(await lux.post("/api/media/videos", { prompt: "A lamp." })).status, plusSchedule.status, (await lux.post("/api/account/api-keys", { name: "k", scopes: ["chat"] })).error],
+      [201, 201, lacks("API keys", "Ultra", "Plus")],
+    );
+    const ultraKey = await uma.post("/api/account/api-keys", { name: "Uma's key", scopes: ["chat"] });
+    const adminKey = await pam.post("/api/account/api-keys", { name: "Pam's key", scopes: ["chat"] });
+    eq("Ultra has API keys, and so has an admin", [ultraKey.status, adminKey.status], [201, 201]);
+    const given = await admin.put("/api/admin/plans", { plans: { free: { features: ["projects", "studio_image", "knowledge"] } } });
+    eq("an owner gives Free the knowledge base: the plans above it keep it", [given.status, given.data?.changed, (given.data?.plans ?? []).map((p) => p.features.includes("knowledge"))], [200, true, [true, true, true, true, true, true]]);
+    eq("  a Free account has it at once", [(await fay.post("/api/knowledge", { name: "Fay's notes" })).status], [201]);
+    const taken = await admin.put("/api/admin/plans", { plans: { ultra: { features: ALL.filter((f) => f !== "knowledge") } } });
+    eq("an owner takes it from Ultra: the plans below lose it, an admin does not", [taken.status, (taken.data?.plans ?? []).map((p) => p.features.includes("knowledge"))], [200, [false, false, false, false, true, true]]);
+    const noPlanHas = await uma.post("/api/knowledge", { name: "Uma's notes" });
+    eq("  an account is told that no plan has it", [noPlanHas.status, noPlanHas.error], [403, "Knowledge base: not part of a plan. Your plan is Ultra. The owner of this installation can change it."]);
+    eq("  (the plans are set back)", [(await admin.del("/api/admin/plans")).status, (await admin.get("/api/admin/plans")).data?.changed], [200, false]);
+
+    begin("Plans: tokens are for a month, and what is sent counts a quarter");
+    // The mock provider counts 20 tokens in and 10 out for a chat: a quarter of 20, and 10.
+    // An account of its own for this: what the others made above was counted on them.
+    const tokMade = await make("tok", { role: "free" });
+    id.tok = tokMade.data?.user?.id;
+    const tok = await signIn("tok");
+    const own = await admin.patch(`/api/admin/users/${id.tok}`, { tokenLimit: 1_000 });
+    eq("an owner gives an account an allowance of its own", [own.status, own.data?.user?.tokenLimit, own.data?.user?.tokenLimitIsOwn], [200, 1_000, true]);
+    const usedBefore = (await me(tok))?.tokensUsedInAll ?? 0;
+    const first = await chatWith(tok);
+    const afterFirst = await me(tok);
+    eq(
+      "a chat of 20 tokens in and 10 out counts 15; every token is kept as well, uncounted",
+      [first.events.some((e) => e.done), afterFirst?.tokensUsed, afterFirst?.tokenLimit, afterFirst?.tokensLeft, afterFirst?.tokensUsedInAll - usedBefore],
+      [true, 15, 1_000, 985, 30],
+    );
+    eq("  the account is told when the count starts again: the first of next month", afterFirst?.tokensRenewAt, nextMonth);
+    await admin.put("/api/admin/plans", { inputWeight: 1 });
+    await chatWith(tok);
+    const full = (await me(tok))?.tokensUsed;
+    await admin.put("/api/admin/plans", { inputWeight: 0 });
+    await chatWith(tok);
+    eq("an owner sets what a token that is sent counts: in full, or nothing", [full, (await me(tok))?.tokensUsed], [45, 55]);
+    await admin.del("/api/admin/plans");
+    // A month ago: what was used then counts for that month.
+    sql("UPDATE users SET tokens_period = '2000-01' WHERE id = ?", id.tok);
+    eq("in a new month nothing is used yet", (await tokensOf(tok)).slice(0, 3), [0, 1_000, 1_000]);
+    await chatWith(tok);
+    const period = sql("SELECT tokens_period AS period, period_tokens AS used FROM users WHERE id = ?", id.tok)[0];
+    eq("  the first work of the month starts the count again", [(await tokensOf(tok)).slice(0, 3), period?.period, period?.used], [[15, 1_000, 985], now.toISOString().slice(0, 7), 15]);
+    await admin.patch(`/api/admin/users/${id.tok}`, { tokenLimit: 20 });
+    const lastOne = await chatWith(tok);
+    await mockReset();
+    const refused = await tok.post("/api/chat", { messages: [{ role: "user", content: "hi" }] });
+    eq(
+      "the tokens of the month are used up: new work is refused, and says when they are there again",
+      [lastOne.events.some((e) => e.done), refused.status, refused.code, refused.error, await asked()],
+      [true, 402, "token_limit_reached", `Your tokens for this month are used up: 30 of 20 tokens used. They are there again on ${thereAgain}; an owner of this installation can give you more.`, []],
+    );
+    const asRole = await admin.patch(`/api/admin/users/${id.tok}`, { tokenLimit: null });
+    eq("  with the allowance of its role again, the account works on", [asRole.data?.user?.tokenLimit, asRole.data?.user?.tokenLimitIsOwn, asRole.data?.user?.tokensLeft, (await chatWith(tok)).events.some((e) => e.done)], [10_000_000, false, 10_000_000 - 30, true]);
+    const ownerNow = await me(admin);
+    check("an owner is not held to an allowance, and what it uses is counted", ownerNow?.tokenLimit === null && ownerNow?.tokensLeft === null && Number.isInteger(ownerNow?.tokensUsed), [ownerNow?.tokenLimit, ownerNow?.tokensLeft, ownerNow?.tokensUsed]);
+
+    begin("Plans: the models of a conversation, in categories and by role");
+    const marked = ((await admin.get("/api/models")).data?.models ?? []).filter((m) => m.forUsers).map((m) => m.id);
+    const house = await admin.post("/api/providers", { name: "Plans provider", adapter: "openai-compatible", baseUrl: `${MOCK}/openai/v1`, authType: "bearer", apiKey: KEY, priority: 1 });
+    const houseId = house.data?.provider?.id;
+    const line = {};
+    for (const [modelId, minTier] of [["pl-sonnet-5-5", "pro"], ["pl-opus-5", "plus"], ["pl-haiku-5-5", "free"], ["pl-fable-5-2", "ultra"], ["pl-opus-5-5", "plus"]]) {
+      const res = await admin.post("/api/models", { providerId: houseId, modelId, capabilities: ["text", "tool_calling"], forUsers: true, minTier, inputPricePerMTok: 0, outputPricePerMTok: 0 });
+      line[modelId] = res.data?.model?.id;
+    }
+    const plain5 = await admin.post("/api/models", { providerId: houseId, modelId: "pl-plain-1", capabilities: ["text"], minTier: "free", inputPricePerMTok: 0, outputPricePerMTok: 0 });
+    eq("an owner makes a provider and its models, each with its lowest role", [house.status, Object.values(line).every(Boolean), plain5.status, plain5.data?.model?.minTier], [201, true, 201, "free"]);
+    const offeredTo = async (who) => (await who.get("/api/chat/models")).data;
+    const houseOf = (offered) => (offered?.groups ?? []).find((g) => g.name === "Plans provider")?.models.map((m) => [m.name, m.minTier, m.locked]);
+    const forFree = await offeredTo(fay);
+    eq("the categories are the providers, in their order", [forFree?.tier, (forFree?.groups ?? []).map((g) => g.name)], ["free", ["Plans provider", "Mock OpenAI-style"]]);
+    eq(
+      "in a category: the newest of each class, the highest class first; then the older ones. A model above one's role is locked",
+      houseOf(forFree),
+      [["pl-fable-5-2", "ultra", true], ["pl-opus-5-5", "plus", true], ["pl-sonnet-5-5", "pro", true], ["pl-haiku-5-5", "free", false], ["pl-opus-5", "plus", true]],
+    );
+    eq(
+      "  each plan opens what is its own and what is below it",
+      [houseOf(await offeredTo(pia)).map((m) => m[2]), houseOf(await offeredTo(lux)).map((m) => m[2]), houseOf(await offeredTo(uma)).map((m) => m[2])],
+      [[true, true, false, false, true], [true, false, false, false, false], [false, false, false, false, false]],
+    );
+    const forAdmin = houseOf(await offeredTo(pam));
+    check("  an admin and an owner are offered every model, also one that is not marked for users, and none is locked", forAdmin?.length === 6 && forAdmin.every((m) => m[2] === false) && forAdmin.some((m) => m[0] === "pl-plain-1") && houseOf(await offeredTo(admin))?.length === 6, forAdmin);
+    eq("  a model says whether it works with tools", (await offeredTo(pam))?.groups?.find((g) => g.name === "Plans provider")?.models.filter((m) => !m.tools).map((m) => m.name), ["pl-plain-1"]);
+    await mockReset();
+    const above = await chatWith(fay, { modelRowId: line["pl-sonnet-5-5"] });
+    eq(
+      "a model above one's role is not asked, and the answer says which plan has it",
+      [above.status, errorOf(above)?.code, errorOf(above)?.message, await asked()],
+      [403, "not_in_plan", '"pl-sonnet-5-5" is part of the Pro plan and the plans above it. Your plan is Free. Choose another model, or leave the choice to the app.', []],
+    );
+    const within = await chatWith(fay, { modelRowId: line["pl-haiku-5-5"] });
+    const higher = await chatWith(pia, { modelRowId: line["pl-sonnet-5-5"] });
+    eq("  one within it answers", [within.events.some((e) => e.done), higher.events.some((e) => e.done), await asked()], [true, true, ["pl-haiku-5-5", "pl-sonnet-5-5"]]);
+    const opened = await admin.patch(`/api/models/${line["pl-sonnet-5-5"]}`, { minTier: "free" });
+    eq("an owner sets the lowest role of a model: Free may choose it then", [opened.status, opened.data?.model?.minTier, houseOf(await offeredTo(fay))?.find((m) => m[0] === "pl-sonnet-5-5")], [200, "free", ["pl-sonnet-5-5", "free", false]]);
+    const placed = await admin.patch(`/api/models/${line["pl-opus-5"]}`, { position: 0 });
+    eq("  and gives a model a place of its own: it stands first", [placed.status, placed.data?.model?.position, houseOf(await offeredTo(fay))?.[0]?.[0]], [200, 0, "pl-opus-5"]);
+    eq("  a role that is none is refused", [(await admin.patch(`/api/models/${line["pl-opus-5"]}`, { minTier: "gold" })).status], [400]);
+
+    begin("Plans: an admin looks at providers and models, and an owner changes them");
+    eq("an admin reads the providers and the models", [(await pam.get("/api/providers")).status, (await pam.get("/api/models")).status], [200, 200]);
+    eq(
+      "  and makes, changes, checks and deletes none",
+      [
+        (await pam.post("/api/providers", { name: "Pam's", adapter: "openai-compatible", baseUrl: `${MOCK}/openai/v1`, authType: "none" })).status,
+        (await pam.patch(`/api/providers/${houseId}`, { name: "Renamed" })).status,
+        (await pam.post(`/api/providers/${houseId}/test`, {})).status,
+        (await pam.del(`/api/providers/${houseId}`)).status,
+        (await pam.post("/api/models", { providerId: houseId, modelId: "pams-model", capabilities: ["text"] })).status,
+        (await pam.patch(`/api/models/${line["pl-opus-5"]}`, { minTier: "free" })).status,
+        (await pam.post(`/api/models/${line["pl-opus-5"]}/test`, {})).status,
+        (await pam.del(`/api/models/${line["pl-opus-5"]}`)).status,
+      ],
+      [403, 403, 403, 403, 403, 403, 403, 403],
+    );
+    const pamAgent = await pam.post("/api/agents", { name: "Pam's agent", role: "Pam's agent", instructions: "You help.", primaryModelRowId: ids.models.chat });
+    eq("  agents are an admin's to manage", [pamAgent.status, (await pam.del(`/api/agents/${pamAgent.data?.agent?.id}`)).status], [201, 200]);
+    eq("  a user reads neither list", [(await fay.get("/api/providers")).status], [403]);
+
+    begin("Plans: a conversation is pinned");
+    const chatIds = [];
+    for (const message of ["yang pertama", "yang kedua"]) {
+      const res = await sse(fay, "/api/chat", { method: "POST", body: { message } });
+      chatIds.push(res.events.filter((e) => e.chat).at(-1)?.chat?.id);
+    }
+    const pin = await fay.patch(`/api/chats/${chatIds[0]}`, { pinned: true });
+    const listed = ((await fay.get("/api/chats")).data?.chats ?? []).filter((c) => chatIds.includes(c.id)).map((c) => [c.title, c.pinned]);
+    eq("an account pins a conversation: its list says so, and keeps its order", [pin.status, pin.data?.chat?.pinned, listed, (await fay.get(`/api/chats/${chatIds[0]}`)).data?.chat?.pinned], [200, true, [["yang kedua", false], ["yang pertama", true]], true]);
+    const both = await fay.patch(`/api/chats/${chatIds[1]}`, { title: "Kedua", pinned: true });
+    eq("  a name and a pin are changed in one go, and a pin is taken away again", [both.status, both.data?.chat, (await fay.patch(`/api/chats/${chatIds[1]}`, { pinned: false })).data?.chat?.pinned], [200, { id: chatIds[1], title: "Kedua", pinned: true }, false]);
+    eq("  a change has to name something, and someone else's conversation is not there", [(await fay.patch(`/api/chats/${chatIds[0]}`, {})).status, (await pia.patch(`/api/chats/${chatIds[0]}`, { pinned: false })).status], [400, 404]);
+
+    begin("Plans: the pages");
+    const pageOf = async (who, path) => {
+      const res = await who.raw(path);
+      return { status: res.status, html: res.status === 200 ? (await res.text()).replaceAll("<!-- -->", "") : "", location: res.headers.get("location") };
+    };
+    const home = await pageOf(fay, "/dashboard");
+    check("the home page is a conversation: the field to write in, the model, and the role at the foot of the sidebar", home.status === 200 && home.html.includes('data-testid="composer"') && home.html.includes('data-testid="model-picker"') && /data-testid="profile-role"[^>]*>Free plan</.test(home.html), home.status);
+    const plansPage = await pageOf(fay, "/dashboard/plans");
+    check("a user reads the plans, and changes none", plansPage.status === 200 && plansPage.html.includes('id="plans"') && plansPage.html.includes("tokens a month") && !plansPage.html.includes('id="edit-plans"'), plansPage.status);
+    const forOwner = await pageOf(admin, "/dashboard/plans");
+    const forPam = await pageOf(pam, "/dashboard/plans");
+    check("  an owner has the editor, an admin has not", forOwner.html.includes('id="edit-plans"') && forPam.status === 200 && !forPam.html.includes('id="edit-plans"'), [forOwner.status, forPam.status]);
+    const kb = await pageOf(fay, "/dashboard/knowledge");
+    check("a page whose feature the plan lacks says so, and leads to the plans", kb.status === 200 && kb.html.includes('data-testid="not-in-plan"') && kb.html.includes('href="/dashboard/plans"'), kb.status);
+    const console_ = await pageOf(pam, "/dashboard/admin");
+    check("an admin's console says that it is limited", console_.status === 200 && console_.html.includes('data-testid="admin-limited"'), console_.status);
+    const modelsPage = await pageOf(pam, "/dashboard/models");
+    const providersPage = await pageOf(pam, "/dashboard/providers");
+    check("  its Models and Providers pages are to look at", modelsPage.html.includes('data-testid="models-view-only"') && providersPage.html.includes('data-testid="providers-view-only"') && !(await pageOf(admin, "/dashboard/models")).html.includes('data-testid="models-view-only"'), [modelsPage.status, providersPage.status]);
+    eq("  a user is sent back from the admin area", [(await pageOf(fay, "/dashboard/admin")).status, (await pageOf(fay, "/dashboard/models")).status], [307, 307]);
+    const manifest = await (await fetch(`${APP}/manifest.webmanifest`)).json().catch(() => null);
+    eq("a phone can put the app on its home screen: it has a name, a start and icons", [manifest?.short_name, manifest?.display, manifest?.start_url, manifest?.icons?.length, (await fetch(`${APP}/icon-192.png`)).status], ["Nexus", "standalone", "/dashboard", 3, 200]);
+
+    // What these checks made goes, and the plans are what the checks around them were written for.
+    begin("Plans: (what these checks made is removed)");
+    const gone = [];
+    for (const modelRow of [...Object.values(line), plain5.data?.model?.id]) gone.push((await admin.del(`/api/models/${modelRow}`)).status);
+    gone.push((await admin.del(`/api/providers/${houseId}`)).status);
+    for (const name of ["fay", "pia", "lux", "uma", "pam", "ivo", "jan", "kim", "tok"]) {
+      const account = ((await admin.get("/api/admin/users")).data?.users ?? []).find((u) => u.username === name)?.id;
+      gone.push((await admin.del(`/api/admin/users/${account}`)).status);
+    }
+    eq("the models, the provider and the accounts are deleted", gone, gone.map(() => 200));
+    eq("the marks of the models are as they were", ((await admin.get("/api/models")).data?.models ?? []).filter((m) => m.forUsers).map((m) => m.id).sort(), [...marked].sort());
+    const again = await admin.put("/api/admin/plans", everythingForEveryone);
+    eq("the plans are the ones of the other checks again", [again.status, again.data?.inputWeight, again.data?.plans?.find((p) => p.tier === "free")?.features?.length], [200, 1, ALL.length]);
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, standins, visibility, servers, browser, handover, result, plans };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

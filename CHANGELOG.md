@@ -7,6 +7,92 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-24
+
+The app has another face, and another way to share it. The page one lands on
+is a conversation, set as an assistant on a phone is: the mark and a greeting,
+the field to write in under the thumb, sheets that come up to choose from. Who
+may do what is one of six roles, and what a role has is a plan an owner sets,
+with tokens for a month.
+
+### Added
+
+- **A new look**, in the dark and in the light: a near-black page with cards
+  a step lighter and a sidebar a step darker, or warm paper with white cards;
+  what is pressed is the page's own black or white, what is on or chosen is
+  blue, and the mark, the field in use and the button that sends are clay.
+  Titles and answers are set in a serif, the controls in a sans; both
+  typefaces are bundled (Figtree, Source Serif 4; SIL OFL), so nothing is
+  asked of a font service. Light, dark, or as the device is set: Settings →
+  Appearance, and the account menu.
+- **The home page is a new conversation.** The field has a **+** (documents
+  to answer from, instructions of one's own, what is remembered) and the
+  **model**; on a phone it is at the bottom edge.
+- **The model of a conversation is chosen from a list in categories**, the
+  providers. In a category the newest model of each class comes first, the
+  highest class first, then the older ones, the oldest last. "Auto" leaves
+  the choice to the app. A model above one's role is shown with the role it
+  takes. Each says whether it works with tools. `GET /api/chat/models`.
+- **Six roles**: Free, Pro, Plus, Ultra, Admin, Owner. The first four are the
+  plans of a user. **A plan** has tokens for a month and features (projects,
+  images, voice-overs, videos, the knowledge base, schedules, API keys); what
+  a plan lacks is said on its page and refused with `403 not_in_plan`. An
+  owner sets the plans on the **Plans** page (`/api/admin/plans`), and
+  everyone reads them there (`/api/plans`).
+- **A lowest role for each model** and a place of its own in the list, on the
+  Models page (`minTier`, `position`).
+- **The sidebar**: the pages one works on, then the conversations, **pinned**
+  ones first; the account with its role at its foot. On a phone it is a
+  drawer, with the button that starts a conversation under the thumb.
+- **A conversation's menu**: pin, rename (in a dialog), an **outline** of
+  what was said with a search, delete. `PATCH /api/chats/{id}` takes `pinned`.
+- **Chats**: all conversations on a page, with a search, and pin, rename and
+  delete for each.
+- **The admin console**, behind the profile: for an owner, and for an admin
+  with what an admin may look at.
+- **Settings** as a list of what there is to set, and **Usage** with this
+  month as a bar: how much is used, and when the count starts again.
+
+### Changed
+
+- **Tokens are for a calendar month** (UTC), and come with the role: Free
+  10M, Pro 25M, Plus 50M, Ultra 100M, Admin 250M, Owner without a limit. An
+  owner may give an account an allowance of its own.
+- **What is sent to a model counts a quarter** of what it writes
+  (`TOKEN_INPUT_WEIGHT`, the Plans page). Work with tools sends the same
+  conversation again with every step: counted in full, an allowance was gone
+  half way through one long document.
+- **An administrator manages agents, teams, workflows and skills, and looks
+  at the rest.** Providers, models, plans and accounts are changed by an
+  owner only.
+- **A user chooses the model of a conversation** among the models marked for
+  users and within their role. Everywhere else the app still chooses, and a
+  user is still shown no provider's answer and no price.
+- A list of a provider's models is in the order above on the Models page too.
+- `DEFAULT_TOKEN_LIMIT` is what the Free plan has a month. `DEFAULT_PLAN`
+  names the plan of a new account (Free, when it is not set).
+
+### Upgrading from 1.x
+
+- Migration `0019`: a user becomes Free, an administrator Admin, an owner
+  Owner. An account whose limit an owner had changed keeps that number as its
+  own allowance for a month; an account with the 10,000,000 of before follows
+  its role. Every account starts the month with its whole allowance.
+- An administrator who set up providers and models needs the role Owner to go
+  on doing so.
+- The API still takes `role: "user"` (Free, or the `plan` named with it), and
+  `tokenLimit` as a number; `null` gives an account the allowance of its role.
+
+### Notes
+
+- The order of models is read from their names. Where a provider names a
+  model in a way the reading gets wrong, an owner gives the model a place of
+  its own.
+- The look follows screenshots of an assistant app the owner of this
+  installation works with; its marks and its typefaces are not used.
+- Tested against the providers of the tests, on a phone-sized and a desktop
+  screen, in a headless browser. Not tested on a real phone.
+
 ## [1.12.1] - 2026-11-24
 
 Work stopped half way and looked finished. A model writes up to the length

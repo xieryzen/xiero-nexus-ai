@@ -53,9 +53,98 @@ type IconName =
   | "folder"
   | "package"
   | "open"
-  | "result";
+  | "result"
+  | "sidebar"
+  | "chevron"
+  | "chevrons"
+  | "sun"
+  | "moon"
+  | "device"
+  | "spark"
+  | "dots"
+  | "pencil"
+  | "sliders"
+  | "plan"
+  | "admin"
+  | "edit"
+  | "back"
+  | "right"
+  | "pin"
+  | "list"
+  | "bubble"
+  | "info"
+  | "help";
 
 const paths: Record<IconName, React.ReactNode> = {
+  // v2.0: the shell and the conversation.
+  sidebar: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="3" />
+      <path d="M9.5 4.5v15" />
+    </>
+  ),
+  chevron: <path d="m6 9 6 6 6-6" />,
+  back: <path d="M19 12H5m6-6-6 6 6 6" />,
+  right: <path d="m9 6 6 6-6 6" />,
+  pin: <path d="M9 4h6l-1 5.5 3.5 4h-11l3.5-4L9 4ZM12 13.5V20" />,
+  list: <path d="M9 6.5h11M9 12h11M9 17.5h11M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01" />,
+  bubble: <path d="M12 4.5c4.4 0 8 3 8 6.8s-3.6 6.8-8 6.8c-.9 0-1.8-.1-2.6-.4L5 19.5l1.1-3.4C4.8 14.9 4 13.2 4 11.3c0-3.8 3.6-6.8 8-6.8Z" />,
+  info: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 11v5M12 8h.01" />
+    </>
+  ),
+  chevrons: <path d="m8 9 4-4 4 4M8 15l4 4 4-4" />,
+  sun: (
+    <>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" />
+    </>
+  ),
+  moon: <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />,
+  device: (
+    <>
+      <rect x="3" y="4.5" width="18" height="12" rx="2" />
+      <path d="M8.5 20h7M12 16.5V20" />
+    </>
+  ),
+  spark: <path d="M12 3v6m0 6v6M3 12h6m6 0h6M5.6 5.6l4.2 4.2m4.4 4.4 4.2 4.2M18.4 5.6l-4.2 4.2m-4.4 4.4-4.2 4.2" />,
+  dots: (
+    <>
+      <circle cx="5.5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="18.5" cy="12" r="1" />
+    </>
+  ),
+  pencil: <path d="M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4" />,
+  sliders: (
+    <>
+      <path d="M4 7h9m4 0h3M4 17h3m4 0h9" />
+      <circle cx="15" cy="7" r="2" />
+      <circle cx="9" cy="17" r="2" />
+    </>
+  ),
+  plan: <path d="m12 3 2.6 5.6 6 .7-4.4 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.4 9.3l6-.7L12 3Z" />,
+  admin: (
+    <>
+      <path d="M12 3 5 6v5c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3Z" />
+      <circle cx="12" cy="10.5" r="2" />
+      <path d="M8.8 15.5a3.4 3.4 0 0 1 6.4 0" />
+    </>
+  ),
+  edit: (
+    <>
+      <path d="M12 5H7a3 3 0 0 0-3 3v9a3 3 0 0 0 3 3h9a3 3 0 0 0 3-3v-5" />
+      <path d="M17.5 3.5a2 2 0 0 1 3 3L12 15l-4 1 1-4 8.5-8.5Z" />
+    </>
+  ),
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.4M12 17h.01" />
+    </>
+  ),
   overview: <path d="M4 13h7V4H4v9Zm0 7h7v-5H4v5Zm9 0h7v-9h-7v9Zm0-16v5h7V4h-7Z" />,
   providers: (
     <>
@@ -114,7 +203,7 @@ const paths: Record<IconName, React.ReactNode> = {
   shield: <path d="M12 3 5 6v5c0 4 3 7 7 9 4-2 7-5 7-9V6l-7-3Z" />,
   send: <path d="M4 12 20 4l-6 16-3-7-7-1Z" />,
   warning: <path d="M12 3 2 20h20L12 3Zm0 6v5m0 3v.5" />,
-  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  menu: <path d="M4 8.5h16M4 15.5h10" />,
   copy: (
     <>
       <rect x="9" y="9" width="11" height="11" rx="2" />

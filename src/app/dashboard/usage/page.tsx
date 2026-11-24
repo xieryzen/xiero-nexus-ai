@@ -4,7 +4,11 @@ import { formatCompact, formatCost, formatNumber } from "@/lib/format";
 import { RelativeTime } from "@/components/time";
 import { Badge, Card, EmptyState, PageHeader } from "@/components/ui";
 import { usageFor } from "@/lib/for-viewer";
-import { isAdminRole, seesSetup } from "@/lib/roles";
+import Link from "next/link";
+import { isAdminRole, seesSetup, tierLine, tierOf } from "@/lib/roles";
+import { getPlanSettings } from "@/lib/plans";
+import { tokensOf } from "@/lib/tokens";
+import { TokenMeter } from "@/components/token-meter";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Usage & Costs" };
@@ -32,6 +36,23 @@ export default function UsagePage() {
         title={sees ? "Usage & Costs" : "Usage"}
         description={isAdmin ? "Platform-wide usage across all users." : "What your work used."}
       />
+
+      {/* What an account has for this month: its own, also for an admin who looks at everyone's usage below. */}
+      {user && (
+        <div className="mb-6" id="own-overview">
+          <Card
+            title={isAdmin ? "Your own tokens" : "Your tokens"}
+            description={`${tierLine(tierOf(user))}${isAdmin ? "" : ": what your work may use, and what it has used."}`}
+            actions={
+              <Link href="/dashboard/plans" className="btn-ghost px-3 py-1.5 text-xs">
+                {isAdmin ? "Plans" : "See the plans"}
+              </Link>
+            }
+          >
+            <TokenMeter tokens={tokensOf(user)} inputPercent={Math.round(getPlanSettings().inputWeight * 100)} />
+          </Card>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         {tiles.map((t) => (

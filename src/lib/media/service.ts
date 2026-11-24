@@ -33,6 +33,7 @@ import { notify } from "../notifications";
 import { currentApiKeyId } from "../request-context";
 import { runtime } from "../runtime";
 import { assertTokensLeft } from "../tokens";
+import { assertFeatureFor } from "../plans";
 import { estimateTokens, recordUsage } from "../usage";
 import { computeImageCost, computeSpeechCost, computeVideoCost } from "./cost";
 import { ffmpegStatusNow, probeFile } from "./ffmpeg";
@@ -249,6 +250,7 @@ export interface GenerateImagesInput extends MediaRequestBase {
 
 /** Generate images and store them. Resolves to the new assets, all `ready`. */
 export async function generateImages(input: GenerateImagesInput): Promise<MediaAsset[]> {
+  assertFeatureFor(input.userId, "studio_image");
   assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "image");
   const adapter = getAdapter(resolved.provider.adapter);
@@ -419,6 +421,7 @@ export function pendingVideoCount(userId: string): number {
  * to `ready` or `failed`.
  */
 export async function startVideo(input: StartVideoInput): Promise<MediaAsset> {
+  assertFeatureFor(input.userId, "studio_video");
   assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "video");
   const adapter = getAdapter(resolved.provider.adapter);
@@ -927,6 +930,7 @@ export async function generateSpeech(input: GenerateSpeechInput): Promise<MediaA
   if (text.length > MAX_SPEECH_CHARS) {
     throw Errors.badRequest(`One request can speak at most ${MAX_SPEECH_CHARS} characters`);
   }
+  assertFeatureFor(input.userId, "studio_voice");
   assertTokensLeft(input.userId, input.projectId ? "project" : "yours");
   const resolved = resolveMediaModel(input.modelRowId, "audio");
   const adapter = getAdapter(resolved.provider.adapter);

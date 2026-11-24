@@ -7,7 +7,6 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { and, asc, eq } from "drizzle-orm";
 import { env } from "@/lib/env";
 import { hashPassword } from "@/lib/crypto";
-import { defaultTokenLimit } from "@/lib/token-rules";
 import * as schema from "./schema";
 
 type DB = BetterSQLite3Database<typeof schema>;
@@ -62,7 +61,6 @@ function ensureBootstrapAdmin(db: DB) {
       passwordHash: hashPassword(admin.password),
       role: "owner",
       status: "active",
-      tokenLimit: defaultTokenLimit(),
     })
     .run();
   // eslint-disable-next-line no-console

@@ -139,7 +139,7 @@ function LogRow({ entry }: { entry: ActionDTO }) {
         {entry.accountName && <span className="mono text-ink-2">{entry.accountName}</span>}
         {entry.projectTitle &&
           (entry.projectId ? (
-            <Link href={`/dashboard/projects/${entry.projectId}`} className="text-signal hover:underline">{entry.projectTitle}</Link>
+            <Link href={`/dashboard/projects/${entry.projectId}`} className="text-accent-ink hover:underline">{entry.projectTitle}</Link>
           ) : (
             <span>{entry.projectTitle}</span>
           ))}

@@ -664,7 +664,7 @@ export function WorkflowsManager({ initialWorkflows, isAdmin }: { initialWorkflo
         description={
           isAdmin
             ? "Reusable, deterministic task plans. A project can run a workflow instead of AI-Manager planning."
-            : "Ready-made plans. Choose one for a project on the AI Manager page, and its steps are worked through in order."
+            : "Ready-made plans. Choose one for a project on the Projects page, and its steps are worked through in order."
         }
         actions={isAdmin && !form ? <Button onClick={() => setForm({ mode: "new" })}><Icon name="plus" /> New workflow</Button> : undefined}
       />

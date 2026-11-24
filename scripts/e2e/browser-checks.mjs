@@ -199,6 +199,34 @@ async function api(path, init = {}) {
 
 const sideways = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 
+/** The field a message is written in. */
+const MESSAGE = 'textarea[aria-label="Message"]';
+
+/** Choose the model of a conversation: in the list the pill of the field opens, by its name. */
+async function chooseModel(name = "chat-mini") {
+  await page.click('[data-testid="model-picker"]');
+  await page.waitForSelector('[data-testid="model-list"]', { timeout: 10_000 });
+  // A long list is searched; a short one shows every model at once.
+  const search = await page.$('[data-testid="model-list"] input[aria-label="Search models"]');
+  if (search) await search.type(name);
+  const option = `[data-testid="model-list"] [data-model-name="${name}"]`;
+  await page.waitForSelector(option, { timeout: 10_000 });
+  await page.click(option);
+  await page.waitForFunction(() => !document.querySelector('[data-testid="model-list"]'), { timeout: 10_000 });
+}
+
+/** Start a new conversation with the button of the sidebar. */
+async function newChat() {
+  await page.click('[data-testid="sidebar"] [data-testid="new-chat"]');
+  await page.waitForFunction(() => !/[?&]c=/.test(location.search) && Boolean(document.querySelector('[data-testid="greeting"]')), { timeout: 10_000 }).catch(() => undefined);
+}
+
+/** Close the sheet that is open. */
+async function closeSheet() {
+  await page.click('[role="dialog"] button[aria-label="Close"]');
+  await page.waitForFunction(() => !document.querySelector('[role="dialog"][aria-modal="true"]'), { timeout: 10_000 }).catch(() => undefined);
+}
+
 try {
   // ─── Sign in ───────────────────────────────────────────────────────────────
   begin("Browser: sign in");
@@ -627,7 +655,10 @@ try {
   await clickText(/New collection/);
   await fill("#k-name", "Browser notes");
   await clickText("Create collection", { tag: 'button[type="submit"]' });
-  check("a collection is created and opened", await waitText("No document yet"), null);
+  // The new one is opened: its address is in the bar, and its documents were asked for (another empty one may have been open before).
+  await page.waitForFunction(() => /[?&]collection=[0-9a-f-]{36}/.test(location.search), { timeout: 15_000 }).catch(() => undefined);
+  await page.waitForNetworkIdle({ idleTime: 300, timeout: 15_000 }).catch(() => undefined);
+  check("a collection is created and opened", (await waitText("No document yet")) && (await has("Browser notes")), null);
   await clickText(/Paste text/);
   await fill("#k-doc-title", "Opening hours");
   await fill("#k-doc-text", "The lighthouse museum is open from ten to four, every day except Monday.");
@@ -672,18 +703,103 @@ try {
   begin("Browser: chat with knowledge");
   await open("/dashboard/chat");
   // The first model of the list is one the mock refuses on purpose.
-  await page.select("main select", await page.$$eval("main select option", (options) => options.find((o) => o.textContent.startsWith("chat-mini"))?.value ?? ""));
-  await clickText(/^\s*Knowledge/, { tag: "button" });
-  await page.evaluate(() => {
-    const label = [...document.querySelectorAll("label")].find((l) => l.textContent.includes("Browser notes"));
-    label?.querySelector("input")?.click();
-  });
-  await page.type("textarea[placeholder^='Message']", "What does a ticket cost?");
+  await chooseModel("chat-mini");
+  check("the model is chosen in a list that the field opens, and the field names it", (await page.$eval('[data-testid="model-picker"]', (b) => b.innerText.trim())) === "chat-mini", null);
+  // The + of the field: what the answer may use.
+  await page.click('[data-testid="add-to-chat"]');
+  const notes = '[data-testid="knowledge-panel"] button[role="switch"][aria-label="Answer from Browser notes"]';
+  await page.waitForSelector(notes, { timeout: 10_000 });
+  await page.click(notes);
+  check("the + of the field adds a collection to answer from", (await page.$eval(notes, (b) => b.getAttribute("aria-checked"))) === "true", null);
+  await snap("chat-add");
+  await closeSheet();
+  check("  and the + says that something was added", (await page.$eval('[data-testid="add-to-chat"]', (b) => b.getAttribute("data-added"))) === "1", null);
+  await page.type(MESSAGE, "What does a ticket cost?");
   await clickText(/^\s*Send\s*$/);
   check("the answer is based on the documents", await waitText("From your documents [1]"), null);
   await clickText(/Show the \d+ passages?/);
   check("  and the passages that were looked up can be read", await waitText("A ticket for the museum costs five euros"), null);
   await snap("chat-knowledge");
+
+  // ─── The look of 2.0: the shell, a conversation's menu, the theme ──────────
+  begin("Browser: a conversation's menu, the sidebar and the theme");
+  {
+    await page.waitForFunction(() => /[?&]c=[0-9a-f-]{36}/.test(location.search), { timeout: 15_000 }).catch(() => undefined);
+    const title = () => page.$eval('[data-testid="chat-title"]', (b) => b.innerText.trim()).catch(() => "");
+    const sidebarText = () => page.$eval('[data-testid="sidebar"]', (el) => el.innerText).catch(() => "");
+    check("a conversation has its name in the bar at the top", (await title()) === "What does a ticket cost?", await title());
+    await page.click('[data-testid="chat-title"]');
+    await page.waitForSelector('[data-testid="chat-menu"]');
+    eq("  its menu pins, renames, shows an outline and deletes", await page.$$eval('[data-testid="chat-menu"] [role="menuitem"]', (items) => items.map((i) => i.innerText.trim())), ["Pin", "Rename", "Conversation outline", "Delete"]);
+    await clickText("Pin", { within: '[data-testid="chat-menu"]', tag: "button" });
+    await page.waitForFunction(() => document.querySelector('[data-testid="sidebar"] ul[aria-label="Pinned conversations"]')?.innerText.includes("What does a ticket cost?"), { timeout: 10_000 }).catch(() => undefined);
+    check("a pinned conversation is listed first in the sidebar, under a heading of its own", (await page.$eval('[data-testid="sidebar"] ul[aria-label="Pinned conversations"]', (ul) => ul.innerText).catch(() => "")).includes("What does a ticket cost?") && /Pinned[\s\S]*Recents/.test(await sidebarText()), (await sidebarText()).slice(0, 300));
+    await page.click('[data-testid="chat-title"]');
+    await clickText("Rename", { within: '[data-testid="chat-menu"]', tag: "button" });
+    await page.waitForSelector('[data-testid="rename-dialog"] input');
+    await fill('[data-testid="rename-dialog"] input', "Ticket prices");
+    await snap("chat-rename");
+    await clickText("Save", { within: '[data-testid="rename-dialog"]', tag: "button" });
+    await page.waitForFunction(() => document.querySelector('[data-testid="chat-title"]')?.innerText.trim() === "Ticket prices", { timeout: 10_000 }).catch(() => undefined);
+    check("it is renamed in a dialog: the bar and the sidebar say the new name", (await title()) === "Ticket prices" && (await sidebarText()).includes("Ticket prices"), [await title()]);
+    await page.click('[data-testid="chat-title"]');
+    await clickText("Conversation outline", { within: '[data-testid="chat-menu"]', tag: "button" });
+    await page.waitForSelector('[data-testid="outline"]');
+    const outlineRows = () => page.$$eval('[data-testid="outline"] li', (rows) => rows.map((li) => li.innerText.replace(/\s+/g, " ").trim()));
+    check("the outline lists what was said, by whom", (await outlineRows()).length === 2 && (await outlineRows())[0].includes("You What does a ticket cost?") && (await outlineRows())[1].startsWith("Assistant From your documents"), await outlineRows());
+    await page.type('[data-testid="outline"] input[aria-label="Search this conversation"]', "documents");
+    check("  and is searched by a word", (await outlineRows()).length === 1 && (await outlineRows())[0].startsWith("Assistant"), await outlineRows());
+    await snap("chat-outline");
+    await closeSheet();
+    await page.click('[data-testid="chat-title"]');
+    check("  the menu of a pinned conversation takes the pin away again", await clickText("Unpin", { within: '[data-testid="chat-menu"]', tag: "button" }), null);
+    await page.waitForFunction(() => !document.querySelector('[data-testid="sidebar"] ul[aria-label="Pinned conversations"]'), { timeout: 10_000 }).catch(() => undefined);
+    check("  and the heading goes with the last pin", (await page.$('[data-testid="sidebar"] ul[aria-label="Pinned conversations"]')) === null, null);
+
+    // The sidebar: the account at its foot, and the admin area behind it.
+    eq("the foot of the sidebar says who is signed in, and with which role", await page.$eval('[data-testid="profile"]', (b) => b.innerText.replace(/\s+/g, " ").trim()), "A admin Owner");
+    await page.click('[data-testid="profile"]');
+    await page.waitForSelector('[data-testid="account-menu"]');
+    const menuLinks = await page.$$eval('[data-testid="account-menu"] a', (links) => links.map((a) => a.getAttribute("href")));
+    eq("the account menu leads to Settings, the plans and the admin console", menuLinks, ["/dashboard/settings", "/dashboard/plans", "/dashboard/admin"]);
+    await snap("account-menu");
+    const paint = () => page.evaluate(() => [document.documentElement.dataset.theme, getComputedStyle(document.body).backgroundColor]);
+    await page.click('[data-testid="account-menu"] [data-testid="theme-choice"] button[aria-label="Dark"]');
+    const dark = await paint();
+    await page.click('[data-testid="account-menu"] [data-testid="theme-choice"] button[aria-label="Light"]');
+    const light = await paint();
+    eq("the theme is chosen there: dark, and light", [dark, light], [["dark", "rgb(21, 21, 21)"], ["light", "rgb(250, 249, 245)"]]);
+    await page.reload({ waitUntil: "networkidle2" });
+    eq("  it is kept: the page comes back as it was left", await paint(), ["light", "rgb(250, 249, 245)"]);
+    await page.click('[data-testid="profile"]');
+    await page.click('[data-testid="account-menu"] [data-testid="theme-choice"] button[aria-label="System"]');
+    await page.keyboard.press("Escape");
+    const fonts = await page.evaluate(async () => {
+      await document.fonts.ready;
+      return [document.fonts.check('16px "Nexus Sans"'), document.fonts.check('16px "Nexus Serif"'), getComputedStyle(document.body).fontFamily.split(",")[0].trim()];
+    });
+    eq("the typefaces are the app's own, and loaded from it", fonts, [true, true, '"Nexus Sans"']);
+
+    // The home page is a new conversation.
+    await open("/dashboard");
+    const home = await page.evaluate(() => ({
+      greeting: document.querySelector('[data-testid="greeting"]')?.innerText ?? "",
+      serif: getComputedStyle(document.querySelector('[data-testid="greeting"]')).fontFamily.split(",")[0].trim(),
+      field: Boolean(document.querySelector('[data-testid="composer"] textarea[aria-label="Message"]')),
+      model: document.querySelector('[data-testid="model-picker"]')?.innerText.trim(),
+    }));
+    check("the home page is a new conversation: a greeting, the field to write in, and the model", /^Good (morning|afternoon|evening), admin$/.test(home.greeting) && home.serif === '"Nexus Serif"' && home.field && home.model === "Auto", home);
+    await page.click('[data-testid="model-picker"]');
+    await page.waitForSelector('[data-testid="model-list"]');
+    const categories = await page.$$eval('[data-testid="model-list"] [data-category]', (rows) => rows.map((r) => r.getAttribute("data-category")));
+    check("the list of models starts with Auto, then the providers as categories", (await page.$eval('[data-testid="model-list"] [role="option"]', (o) => o.getAttribute("data-model-name"))) === "Auto" && categories.includes("Mock OpenAI-style") && categories.length > 1, categories);
+    await page.click('[data-testid="model-list"] [data-category="Mock OpenAI-style"]');
+    await page.waitForSelector('[data-testid="model-list"] [data-model-name="chat-mini"]');
+    check("  a category opens its models, with a way back", (await page.$('[role="dialog"] button[aria-label="Back"]')) !== null && (await page.$$('[data-testid="model-list"] [role="option"]')).length > 3, null);
+    await snap("model-list");
+    await page.click('[role="dialog"] button[aria-label="Back"]');
+    await closeSheet();
+  }
 
   // ─── Settings ──────────────────────────────────────────────────────────────
   begin("Browser: API keys and the webhook");
@@ -712,7 +828,7 @@ try {
   // ─── A phone ───────────────────────────────────────────────────────────────
   begin("Browser: on a phone");
   await page.setViewport({ width: 390, height: 780, isMobile: true, hasTouch: true });
-  for (const path of ["/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", "/dashboard/servers", "/dashboard/browser", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
+  for (const path of ["/dashboard", "/dashboard/chats", "/dashboard/plans", "/dashboard/usage", "/dashboard/admin", "/dashboard/users", "/dashboard/models", "/dashboard/providers", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/skills", "/dashboard/agents", "/dashboard/settings", "/dashboard/workflows", "/dashboard/servers", "/dashboard/browser", detachProject ? `/dashboard/projects/${detachProject.id}` : "/dashboard/projects"]) {
     await open(path);
     const overflow = await sideways();
     check(`${path.replace(/[0-9a-f-]{36}/, "<id>")} does not scroll sideways`, overflow <= 1, `${overflow}px`);
@@ -720,6 +836,33 @@ try {
   await snap("phone-project");
   await open("/dashboard/studio");
   await snap("phone-studio");
+  // On a phone the field of a new conversation is at the bottom edge, and the sidebar is a drawer.
+  await open("/dashboard");
+  const phoneHome = await page.evaluate(() => {
+    const field = document.querySelector('[data-testid="composer"]').getBoundingClientRect();
+    const greeting = document.querySelector('[data-testid="greeting"]').getBoundingClientRect();
+    return { fromBottom: Math.round(window.innerHeight - field.bottom), greetingAbove: greeting.bottom < field.top, sidebar: getComputedStyle(document.querySelector('[data-testid="sidebar"]')).display };
+  });
+  check("on a phone the field to write in is at the bottom edge, under the greeting, and the sidebar is put away", phoneHome.fromBottom >= 0 && phoneHome.fromBottom <= 40 && phoneHome.greetingAbove && phoneHome.sidebar === "none", phoneHome);
+  await snap("phone-home");
+  await page.click('button[aria-label="Open navigation"]');
+  await page.waitForSelector('[data-testid="drawer"]');
+  await sleep(350); // it slides in
+  const drawer = await page.$eval('[data-testid="drawer"]', (el) => ({ text: el.innerText, newChat: Boolean(el.querySelector('[data-testid="new-chat"]')), role: el.querySelector('[data-testid="profile-role"]')?.innerText }));
+  check("  the drawer has the pages, the conversations, the account with its role, and the button that starts a conversation", ["Chats", "Projects", "Creative Studio", "Knowledge", "Memory", "Recents"].every((word) => drawer.text.includes(word)) && drawer.newChat && drawer.role === "Owner", drawer);
+  await snap("phone-drawer");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => !document.querySelector('[data-testid="drawer"]'), { timeout: 5_000 }).catch(() => undefined);
+  await page.click('[data-testid="model-picker"]');
+  await page.waitForSelector('[data-testid="model-list"]');
+  await sleep(350); // it comes up
+  const sheet = await page.evaluate(() => {
+    const box = document.querySelector('[role="dialog"][aria-modal="true"]').getBoundingClientRect();
+    return [Math.round(box.left), Math.round(window.innerWidth - box.right), Math.round(window.innerHeight - box.bottom)];
+  });
+  eq("  a list to choose from is a sheet at the bottom edge, as wide as the screen", sheet, [0, 0, 0]);
+  await snap("phone-model-sheet");
+  await closeSheet();
 
   // ─── Every page, as the server renders it ──────────────────────────────────
   begin("Browser: every page");
@@ -730,6 +873,9 @@ try {
     "/dashboard/agents",
     "/dashboard/workflows",
     "/dashboard/chat",
+    "/dashboard/chats",
+    "/dashboard/plans",
+    "/dashboard/admin",
     "/dashboard/memory",
     "/dashboard/studio",
     "/dashboard/knowledge",
@@ -772,7 +918,8 @@ try {
 
   // ─── Accounts ──────────────────────────────────────────────────────────
   begin("Browser: accounts");
-  check("the one who signed in first is shown as the owner", await page.$eval("header", (h) => h.innerText.includes("Owner")), null);
+  check("the one who signed in first is shown as the owner", (await page.$eval('[data-testid="sidebar"] [data-testid="profile-role"]', (el) => el.innerText.trim())) === "Owner", null);
+  eq("an account is given one of six roles, the highest first", await page.$$eval("tbody select[aria-label^='Role of']", (list) => [...list[0].options].map((o) => o.value)), ["owner", "admin", "ultra", "plus", "pro", "free"]);
   check("an owner has a way to make an account", await clickText("New account", { tag: "button" }), null);
   await fill("#new-username", "browser.user");
   await fill("#new-email", "Browser.User@example.com");
@@ -784,8 +931,8 @@ try {
   const accountRow = 'tr[data-user="browser.user"]';
   await page.waitForSelector(accountRow);
   eq("  with the role it was given, and its email in small letters", [await page.$eval(`${accountRow} select`, (s) => s.value), await page.$eval(accountRow, (r) => r.innerText.includes("browser.user@example.com"))], ["admin", true]);
-  await page.select(`${accountRow} select`, "user");
-  check("its role is changed in the list", await waitText('"browser.user" is user now'), null);
+  await page.select(`${accountRow} select`, "pro");
+  check("its role is changed in the list", await waitText('"browser.user" is Pro now.'), null);
   // The tokens of the account (v1.8): shown in the list, and changed there by an owner.
   const tokensCell = `${accountRow} td[data-tokens="browser.user"]`;
   const cellText = async () => (await page.$eval(tokensCell, (c) => c.innerText)).replace(/\s+/gu, " ").trim();
@@ -796,12 +943,16 @@ try {
   check("a limit is typed with any thousands separator, and the page says what is left after it", await waitText("0 used: 2,500,000 left after this."), null);
   await snap("account-tokens");
   await clickText("Save", { within: tokensCell, tag: "button" });
-  check("the limit is changed, and the page says so", await waitText('"browser.user" may use 2,500,000 tokens in all now: 2,500,000 are left.'), null);
-  eq("  the list shows it", await cellText(), "0 of 2,500,000 2,500,000 left · Change");
+  check("the limit is changed, and the page says so", await waitText('"browser.user" may use 2,500,000 tokens a month now: 2,500,000 are left of this one.'), null);
+  eq("  the list shows it, and that it is the account's own", await cellText(), "0 of 2,500,000 own 2,500,000 left · Change");
   await clickText("Change", { within: tokensCell, tag: "button" });
   await fill(`${tokensCell} input`, "a lot");
   check("what is no number of tokens cannot be saved", (await waitText("A whole number of tokens.")) && (await page.$eval(`${tokensCell} button[type=submit]`, (b) => b.disabled)), null);
-  await clickText("Cancel", { within: tokensCell, tag: "button" });
+  // An allowance of its own is given back: the account has what its role has again (v2.0).
+  await clickText("As its role", { within: tokensCell, tag: "button" });
+  check("an account's own limit is taken away: it has the tokens of its role again", await waitText('"browser.user" has the tokens of its role again: 10,000,000 a month.'), null);
+  await page.waitForFunction((cell) => !document.querySelector(cell)?.innerText.includes("own"), { timeout: 10_000 }, tokensCell).catch(() => undefined);
+  eq("  the list shows it", await cellText(), "0 of 10,000,000 10,000,000 left · Change");
   // The list has one column more than it had: at this width it is still all there.
   const widths = await page.$eval(`${accountRow}`, (row) => {
     const box = row.closest("table").parentElement;
@@ -827,7 +978,8 @@ try {
   await clickText("Delete", { within: renamed, tag: "button" });
   check("the account is deleted after being asked once more", (await waitText('The account "browser.renamed" was deleted')) && !(await page.$('tr[data-user="browser.renamed"]')), null);
   await open("/dashboard/settings");
-  check("Settings shows an owner what it used, and that it has no limit", await page.$eval("#token-balance", (d) => /Used\s+[\d,]+\s+Limit\s+No limit/u.test(d.innerText) && !d.innerText.includes("Left")), await page.$eval("#token-balance", (d) => d.innerText).catch(() => null));
+  check("Settings shows an owner what it used, and that it has no limit", await page.$eval("#token-balance", (d) => /Used this month\s+[\d,]+\s+Allowance\s+No limit/u.test(d.innerText) && !d.innerText.includes("Left")), await page.$eval("#token-balance", (d) => d.innerText).catch(() => null));
+  eq("  it starts with who is signed in, and lists what there is to set", [await page.$eval("#account-role", (el) => el.innerText.trim()), await page.$$eval("main a.list-row", (rows) => rows.map((a) => a.getAttribute("href")))], ["Owner", ["#profile", "/dashboard/plans", "/dashboard/usage", "/dashboard/settings/security", "#notifications", "#api-keys", "/dashboard/admin"]]);
   await snap("settings-tokens");
   check("Settings has the forms for one's own username, email and password", Boolean(await page.$("#account-username")) && Boolean(await page.$("#password-new")) && (await page.$eval("#account-save", (b) => b.disabled)), null);
   await fill("#account-email", "admin+changed@example.com");
@@ -856,6 +1008,12 @@ try {
     const words = (shown.match(/\b(?:providers?|models?|gateway|upstream|adapters?)\b/gi) ?? []).map((word) => word.toLowerCase());
     return [...new Set([...SETUP_NAMES.filter((name) => shown.includes(name)), ...words])];
   };
+  /**
+   * The same on the page of a conversation, where a user chooses the model
+   * (v2.0): the word for it is said there, and the names of the models that
+   * are offered. Anything else of the setup is not.
+   */
+  const namedInChat = async (offered = []) => (await namedOnPage()).filter((name) => !["model", "models", ...offered].includes(name));
   const signInAs = async (name, password) => {
     await api("/api/auth/logout", { method: "POST" });
     await open("/login");
@@ -878,15 +1036,25 @@ try {
 
   await signInAs(VIEWER.name, VIEWER.password);
   check("a user signs in", viewerMade.status === 201 && page.url().endsWith("/dashboard"), [viewerMade.status, page.url()]);
-  const menu = await page.$$eval("nav a[href^='/dashboard']", (links) => [...new Set(links.map((a) => a.getAttribute("href")))]);
+  const menu = await page.$$eval("nav a[href^='/dashboard']", (links) => [...new Set(links.map((a) => a.getAttribute("href").split("?")[0]))]);
   check(
-    "the menu of a user has no Providers, Models, Servers, Browser, Skills, Users, Audit and Observability",
-    ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/browser", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability"].every((href) => !menu.includes(href)) &&
-      ["/dashboard/projects", "/dashboard/chat", "/dashboard/memory", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/usage", "/dashboard/settings"].every((href) => menu.includes(href)),
+    "the sidebar of a user has no Providers, Models, Servers, Browser, Skills, Users, Audit and Observability",
+    ["/dashboard/providers", "/dashboard/models", "/dashboard/servers", "/dashboard/browser", "/dashboard/skills", "/dashboard/users", "/dashboard/audit", "/dashboard/observability", "/dashboard/admin"].every((href) => !menu.includes(href)) &&
+      ["/dashboard/chats", "/dashboard/projects", "/dashboard/studio", "/dashboard/knowledge", "/dashboard/memory", "/dashboard/agents", "/dashboard/workflows"].every((href) => menu.includes(href)),
     menu,
   );
-  check("the overview of a user is about their own work", (await page.$("#own-overview")) !== null && (await namedOnPage()).length === 0, await namedOnPage());
+  eq("  its foot says the account's plan", await page.$eval('[data-testid="sidebar"] [data-testid="profile-role"]', (el) => el.innerText.trim()), "Free plan");
+  await page.click('[data-testid="profile"]');
+  await page.waitForSelector('[data-testid="account-menu"]');
+  eq("  the account menu of a user leads to Settings, Usage and the plans, and to no admin console", [await page.$$eval('[data-testid="account-menu"] a', (links) => links.map((a) => a.getAttribute("href"))), (await page.$('[data-testid="admin-entry"]')) === null], [["/dashboard/settings", "/dashboard/usage", "/dashboard/plans"], true]);
+  await page.keyboard.press("Escape");
+  check("the home page of a user is a new conversation, and names nothing of the setup but the model to choose", (await page.$('[data-testid="greeting"]')) !== null && (await page.$('[data-testid="model-picker"]')) !== null && (await namedInChat()).length === 0, await namedInChat());
   await snap("user-overview");
+  await open("/dashboard/admin");
+  check("the admin console sends a user back to the home page", page.url().endsWith("/dashboard"), page.url());
+  await open("/dashboard/plans");
+  check("a user reads the plans, with their own marked, and has no editor", (await page.$("#plans")) !== null && (await page.$("#edit-plans")) === null && (await page.$$('[data-testid="plan-cards"] li[data-plan]')).length === 4 && (await namedOnPage()).length === 0, await namedOnPage());
+  await snap("user-plans");
   await open("/dashboard/models");
   check("the Models page sends a user back to the overview", page.url().endsWith("/dashboard"), page.url());
   await open("/dashboard/servers");
@@ -904,11 +1072,20 @@ try {
   );
 
   await open("/dashboard/chat");
-  check("Chat has no model to choose", (await page.$("main select")) === null && (await page.$("textarea[placeholder^='Message']")) !== null, null);
-  await page.type("textarea[placeholder^='Message']", "Hello there");
+  // A user chooses among the models marked for users (v2.0): here, one.
+  await page.click('[data-testid="model-picker"]');
+  await page.waitForSelector('[data-testid="model-list"]');
+  eq(
+    "Chat offers a user the models marked for users under their provider, and Auto",
+    [await page.$$eval('[data-testid="model-list"] [role="option"]', (options) => options.map((o) => o.getAttribute("data-model-name"))), await page.$$eval('[data-testid="model-list"] [data-category]', (rows) => rows.map((r) => r.getAttribute("data-category")))],
+    [["Auto", "chat-mini"], ["Mock OpenAI-style"]],
+  );
+  await snap("user-models");
+  await closeSheet();
+  await page.type(MESSAGE, "Hello there");
   await clickText(/^\s*Send\s*$/);
-  check("  and answers all the same", await waitText('OUTPUT of "?"'), (await text()).slice(0, 300));
-  eq("  the page names no model and no provider", await namedOnPage(), []);
+  check("  left to the app, it answers", await waitText('OUTPUT of "?"'), (await text()).slice(0, 300));
+  eq("  the page names no provider, and no model", await namedInChat(), []);
   await snap("user-chat");
 
   await open("/dashboard/studio");
@@ -991,7 +1168,7 @@ try {
   check("no page of a user holds something wider than the screen", (await sideways()) <= 0, await sideways());
 
   await signInAs("admin", "correct-horse-battery");
-  check("the owner signs in again", page.url().endsWith("/dashboard") && (await page.$('a[href="/dashboard/models"]')) !== null, page.url());
+  check("the owner signs in again", page.url().endsWith("/dashboard") && (await page.$eval('[data-testid="sidebar"] [data-testid="profile-role"]', (el) => el.innerText.trim())) === "Owner", page.url());
   const viewerId = ((await api("/api/admin/users")).data?.users ?? []).find((u) => u.username === VIEWER.name)?.id;
   eq("the account of these checks is deleted", (await api(`/api/admin/users/${viewerId}`, { method: "DELETE" })).status, 200);
 
@@ -1019,7 +1196,9 @@ try {
     );
   const logRows = () => page.$$eval('[data-testid="server-log"] li', (rows) => rows.map((li) => li.innerText.replace(/\s+/g, " ")));
 
-  check("the owner's menu has Servers", (await page.$('a[href="/dashboard/servers"]')) !== null, null);
+  // The admin area is behind the profile (v2.0): its console leads to the Servers page.
+  await open("/dashboard/admin");
+  check("the owner's admin console leads to Servers", (await page.$('main a[href="/dashboard/servers"]')) !== null, null);
   await machine("/__reset");
   await open("/dashboard/servers");
   const before = await machine();
@@ -1319,16 +1498,18 @@ try {
     /** Put a text of several lines into the message field, as pasting does. */
     const write = (value) =>
       page.evaluate((v) => {
-        const field = document.querySelector("textarea[placeholder^='Message']");
+        const field = document.querySelector('textarea[aria-label="Message"]');
         Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(field, v);
         field.dispatchEvent(new Event("input", { bubbles: true }));
       }, value);
-    const chooseModel = async () => page.select("main select", await page.$$eval("main select option", (options) => options.find((o) => o.textContent.startsWith("chat-mini"))?.value ?? ""));
     const mine = async () => (await api("/api/memory")).data;
     for (const item of (await mine())?.access ?? []) await api(`/api/access/${item.kind}/${item.id}`, { method: "DELETE" });
 
     await open("/dashboard/chat");
-    check("Chat says that the assistant can be handed a server, a site or a key", (await has("Write how to sign in to a server, a web site or an API")) && (await has("What you tell it is remembered")), (await text()).slice(0, 300));
+    await page.click('[data-testid="add-to-chat"]');
+    await page.waitForSelector('[data-testid="add-sheet"]');
+    check("the + of the field says that the assistant can be handed a server, a site or a key", (await has("Write how to sign in to a server, a web site or an API")) && (await has("What you tell it is remembered")), (await text()).slice(0, 300));
+    await closeSheet();
     await chooseModel();
     await write(`ini vps ku, tolong cek\nIP: 127.0.0.1\nPort: ${SSH_PORT}\nUser: root\nPass: ${now.password}\nDO: {"tool":"run_on_server","args":{"server":"vps-127-0-0-1","command":"echo from-the-chat-page-$((6*7)); id -un"}}`);
     await clickText(/^\s*Send\s*$/);
@@ -1361,14 +1542,14 @@ try {
     check("  opened again, it is as it was left", (await transcript()).includes("DONE after 1 tool results.") && (await transcript()).includes("kept by the app as") && !(await text()).includes(now.password), (await transcript()).slice(0, 300));
     check("  it is in the list of conversations under its first line", (await page.$$eval('ul[aria-label="Conversations"] li', (rows) => rows.map((li) => li.innerText))).some((row) => row.includes("ini vps ku, tolong cek")), null);
 
-    await clickText(/New conversation/);
+    await newChat();
     await chooseModel();
-    await page.type("textarea[placeholder^='Message']", "Server mana saja yang kamu punya?");
+    await page.type(MESSAGE, "Server mana saja yang kamu punya?");
     await clickText(/^\s*Send\s*$/);
     check("a new conversation has the server without being told again", await waitText("servers=vps-127-0-0-1", 30_000), (await transcript()).slice(0, 400));
 
     // An answer that works for a while: the page is left, and finds the answer when it comes back.
-    await clickText(/New conversation/);
+    await newChat();
     await chooseModel();
     await write('tolong tunggu sebentar\nDO: {"tool":"run_on_server","args":{"server":"vps-127-0-0-1","command":"sleep 5; echo finished-while-away-$((6*7))"}}');
     await clickText(/^\s*Send\s*$/);
@@ -1383,7 +1564,7 @@ try {
     await page.goto(awayUrl, { waitUntil: "networkidle2" });
     check("an answer that was left to itself is there when the page comes back", await waitText("finished-while-away-42", 40_000), (await transcript()).slice(0, 400));
     await page.waitForFunction(() => ![...document.querySelectorAll("main button")].some((b) => b.innerText.trim() === "Stop"), { timeout: 15_000 }).catch(() => undefined);
-    check("  and the conversation takes the next message: nothing is being worked on any more", (await clickableText(/^\s*Stop\s*$/)) === false && (await page.$("textarea[placeholder^='Message']")) !== null, null);
+    check("  and the conversation takes the next message: nothing is being worked on any more", (await clickableText(/^\s*Stop\s*$/)) === false && (await page.$(MESSAGE)) !== null, null);
 
     // A project whose goal says how to sign in.
     await open("/dashboard/projects");

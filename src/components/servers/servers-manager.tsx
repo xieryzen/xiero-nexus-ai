@@ -200,7 +200,7 @@ function ServerForm({
           {key && (
             <div className="mt-3 space-y-1.5" data-testid="host-key">
               <p className="mono break-all text-xs text-ink">
-                {key.type} <span className="text-signal">{key.fingerprint}</span>
+                {key.type} <span className="text-accent-ink">{key.fingerprint}</span>
               </p>
               <p className="text-xs text-ink-3">
                 Compare it on the machine itself: <code className="mono">ssh-keygen -lf {key.file}</code> prints the same line when it is the right machine. Registering accepts this key: from then on the app signs in only to a machine that shows it.
@@ -267,7 +267,7 @@ function LogRow({ entry }: { entry: CommandDTO }) {
         {entry.durationMs !== null && <span>{took(entry.durationMs)}</span>}
         {entry.projectTitle &&
           (entry.projectId ? (
-            <Link href={`/dashboard/projects/${entry.projectId}`} className="text-signal hover:underline">{entry.projectTitle}</Link>
+            <Link href={`/dashboard/projects/${entry.projectId}`} className="text-accent-ink hover:underline">{entry.projectTitle}</Link>
           ) : (
             <span>{entry.projectTitle}</span>
           ))}
@@ -281,7 +281,7 @@ function LogRow({ entry }: { entry: CommandDTO }) {
           {!command && entry.output ? <span className="text-ink-3"> · {entry.output}</span> : null}
         </p>
         {command && (entry.output || entry.command.length > 240) && (
-          <button type="button" onClick={() => setOpen((v) => !v)} className="shrink-0 text-xs font-medium text-signal hover:underline">
+          <button type="button" onClick={() => setOpen((v) => !v)} className="shrink-0 text-xs font-medium text-accent-ink hover:underline">
             {open ? "Hide" : "Output"}
           </button>
         )}

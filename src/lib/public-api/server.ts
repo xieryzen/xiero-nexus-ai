@@ -19,7 +19,7 @@ import { AppError, PlainError } from "../errors";
 import { NOT_SET_UP } from "../public-text";
 import { appChoices, kindsAvailable } from "../model-choice";
 import type { ChoiceKind } from "../model-choice-rules";
-import { seesSetup } from "../roles";
+import { seesSetup, tierOf } from "../roles";
 import { errorFor, textFor } from "../shown";
 import { readBodyCapped } from "../media/http";
 import { isFailing } from "../model-health-rules";
@@ -208,7 +208,7 @@ function onlyAuto(): AppError {
 /** What the app would do this kind of work with, among what the key may use. */
 function appChoiceFor(caller: ApiCaller, use: ModelUse, restricted: boolean): string {
   const allowed = restricted ? keyModelIds(caller.key) : null;
-  const id = appChoices(use as ChoiceKind).find((choice) => !allowed || allowed.includes(choice));
+  const id = appChoices(use as ChoiceKind, tierOf(caller.user)).find((choice) => !allowed || allowed.includes(choice));
   if (!id) throw new PlainError(503, "not_set_up", NOT_SET_UP);
   return id;
 }

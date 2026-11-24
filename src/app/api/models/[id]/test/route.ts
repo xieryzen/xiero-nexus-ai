@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { models, providers } from "@/db/schema";
 import { handle, json } from "@/lib/api";
-import { requireAdmin } from "@/lib/auth";
+import { requireSetupOwner } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
  * of the model lists until it passes again.
  */
 export const POST = handle(async (req, { params }) => {
-  const user = requireAdmin();
+  const user = requireSetupOwner();
   const { ip, userAgent } = getClientMeta(req);
   const model = db.select().from(models).where(eq(models.id, params.id!)).get();
   if (!model) throw Errors.notFound("Model not found");

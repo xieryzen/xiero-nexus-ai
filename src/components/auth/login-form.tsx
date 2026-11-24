@@ -66,7 +66,7 @@ export function LoginForm({ blocked = false }: { blocked?: boolean }) {
       </form>
       <p className="mt-4 text-center text-sm text-ink-2">
         No account?{" "}
-        <Link href="/register" className="font-medium text-signal hover:underline">
+        <Link href="/register" className="font-medium text-accent-ink hover:underline">
           Create one
         </Link>
       </p>

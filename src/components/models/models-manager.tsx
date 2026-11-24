@@ -9,8 +9,10 @@ import { CHOICE_LABEL } from "@/lib/model-choice-rules";
 import { CAPABILITY_LABELS, isMediaOnly } from "@/lib/capabilities";
 import { apiFetch, ApiError } from "@/lib/client";
 import { formatNumber } from "@/lib/format";
+import { sortModels } from "@/lib/model-rank";
+import { TIERS, tierLabel, type Tier } from "@/lib/roles";
 import { RelativeTime, TimeText } from "@/components/time";
-import { Badge, Button, Card, EmptyState, PageHeader, StatusDot, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, Card, EmptyState, PageHeader, Select, StatusDot, Toggle } from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ModelForm } from "./model-form";
 
@@ -23,6 +25,8 @@ interface ProviderLite {
   /** What its adapter can do besides chat. */
   abilities: { image: boolean; video: boolean; audio: boolean; embed: boolean; tools: boolean };
   status: "enabled" | "disabled";
+  /** Where it stands among the providers: the lowest first. */
+  priority: number;
 }
 
 /** How often the models are checked, in words. */
@@ -76,6 +80,9 @@ export function ModelsManager({
     [providers],
   );
 
+  // The providers are the categories, in their order (priority, then name);
+  // in each, the highest and newest model first (model-rank.ts), as a
+  // conversation lists them.
   const grouped = useMemo(() => {
     const map = new Map<string, SerializedModel[]>();
     for (const m of models) {
@@ -83,8 +90,23 @@ export function ModelsManager({
       list.push(m);
       map.set(m.providerId, list);
     }
-    return [...map.entries()];
-  }, [models]);
+    const order = new Map(providers.map((p, index) => [p.id, { priority: p.priority, name: p.name, index }] as const));
+    return [...map.entries()]
+      .sort(([a], [b]) => {
+        const pa = order.get(a);
+        const pb = order.get(b);
+        if (!pa || !pb) return pa ? -1 : pb ? 1 : 0;
+        return pa.priority - pb.priority || pa.name.localeCompare(pb.name, "en") || pa.index - pb.index;
+      })
+      .map(
+        ([pid, list]) =>
+          [
+            pid,
+            // As the list of a conversation has them: the newest of each class first, then the older ones.
+            sortModels(list.map((m) => ({ modelId: m.modelId, name: m.displayName || m.modelId, position: m.position, outputPrice: m.outputPricePerMTok, model: m }))).map((ranked) => ranked.model),
+          ] as const,
+      );
+  }, [models, providers]);
 
   function patch(m: SerializedModel) {
     setModels((list) => {
@@ -126,6 +148,40 @@ export function ModelsManager({
       /* ignore */
     } finally {
       setBusy((b) => ({ ...b, [m.id]: undefined }));
+    }
+  }
+
+  /** The lowest role that may choose a model in a conversation. */
+  async function setMinTier(m: SerializedModel, minTier: Tier) {
+    setBusy((b) => ({ ...b, [m.id]: "tier" }));
+    try {
+      const res = await apiFetch<{ model: SerializedModel; users?: UsersModel[] }>(`/api/models/${m.id}`, { method: "PATCH", body: JSON.stringify({ minTier }) });
+      patch(res.model);
+    } catch {
+      /* the row stays as it was */
+    } finally {
+      setBusy((b) => ({ ...b, [m.id]: undefined }));
+    }
+  }
+
+  /** The same lowest role for every model of a provider. */
+  const [bulk, setBulk] = useState<string | null>(null);
+  async function setMinTierOfAll(pid: string, list: readonly SerializedModel[], minTier: Tier) {
+    const changing = list.filter((m) => m.minTier !== minTier);
+    if (changing.length === 0) return;
+    if (!confirm(`Set the lowest role of ${changing.length} ${changing.length === 1 ? "model" : "models"} of ${providerName.get(pid) ?? "this provider"} to ${tierLabel(minTier)}?`)) return;
+    setBulk(pid);
+    try {
+      for (const m of changing) {
+        try {
+          const res = await apiFetch<{ model: SerializedModel }>(`/api/models/${m.id}`, { method: "PATCH", body: JSON.stringify({ minTier }) });
+          patch(res.model);
+        } catch {
+          /* that one stays as it was */
+        }
+      }
+    } finally {
+      setBulk(null);
     }
   }
 
@@ -239,8 +295,14 @@ export function ModelsManager({
         }
       />
 
-      {isAdmin && models.length > 0 && (
-        <div className="mb-5 rounded-md border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" data-testid="model-health">
+      {!isAdmin && (
+        <div className="mb-5" data-testid="models-view-only">
+          <Alert tone="neutral">Models are changed by the owner of this installation. You can look at them here.</Alert>
+        </div>
+      )}
+
+      {models.length > 0 && (
+        <div className="mb-5 rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" data-testid="model-health">
           <p>
             {health.automatic
               ? `Every chat model that is switched on is asked for one word ${every(health.intervalMinutes)}, and soon after it is added.`
@@ -270,12 +332,14 @@ export function ModelsManager({
         </div>
       )}
 
-      {isAdmin && models.length > 0 && (
-        <div className="mb-5 rounded-md border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" id="users-models">
+      {models.length > 0 && (
+        <div className="mb-5 rounded-lg border border-line bg-surface-2/40 px-4 py-3 text-sm text-ink-2" id="users-models">
           <p>
-            A user chooses no model and is not shown these: the app chooses where they would have. It works with a
-            model that is marked <span className="font-medium text-ink">for users</span>; while no model of a kind
-            is marked, with the cheapest of that kind that is switched on.
+            In a conversation a user chooses among the models marked <span className="font-medium text-ink">for users</span> (among all of
+            them while none is marked), in these categories and in this order, from the <span className="font-medium text-ink">lowest role</span>{" "}
+            each model is set to: a model above an account&apos;s role is shown to it, and cannot be chosen. Everywhere else, and where the choice is
+            left to it, the app chooses: a model that is marked, of the account&apos;s role; while no model of a kind is marked, the cheapest of
+            that kind that is switched on.
           </p>
           <ul className="mt-2 grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
             {users.map((u) => (
@@ -296,7 +360,8 @@ export function ModelsManager({
             ))}
           </ul>
           <p className="mt-2 text-xs text-ink-3">
-            Agents work with the models they are set to, for everyone. An administrator still chooses among all models.
+            Agents work with the models they are set to, for everyone. An admin and an owner choose among all models. The order within a provider is
+            read from the names, the highest version first; where that is wrong, give a model a place of its own under Edit.
           </p>
         </div>
       )}
@@ -337,10 +402,33 @@ export function ModelsManager({
       ) : (
         <div className="space-y-6">
           {grouped.map(([pid, list]) => (
-            <div key={pid}>
-              <h2 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wider text-ink-3">
-                {providerName.get(pid) ?? "Unknown provider"}
-              </h2>
+            <div key={pid} data-provider-group={providerName.get(pid) ?? ""}>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+                <h2 className="text-sm font-semibold text-ink">
+                  {providerName.get(pid) ?? "Unknown provider"} <span className="font-normal text-ink-3">· {list.length}</span>
+                </h2>
+                {isAdmin && list.length > 1 && (
+                  <label className="flex items-center gap-2 text-xs text-ink-3">
+                    Lowest role for all of these
+                    <Select
+                      className="w-28 py-1 text-xs"
+                      aria-label={`Lowest role for all models of ${providerName.get(pid) ?? "this provider"}`}
+                      value=""
+                      disabled={bulk === pid}
+                      onChange={(e) => {
+                        if (e.target.value) void setMinTierOfAll(pid, list, e.target.value as Tier);
+                      }}
+                    >
+                      <option value="">{bulk === pid ? "Setting…" : "Choose…"}</option>
+                      {TIERS.map((tier) => (
+                        <option key={tier} value={tier}>
+                          {tierLabel(tier)}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
+                )}
+              </div>
               <Card className="overflow-hidden">
                 <ul className="-m-5 divide-y divide-line">
                   {list.map((m) => (
@@ -377,6 +465,16 @@ export function ModelsManager({
                             {m.forUsers && (
                               <span title="The app works with this model where a user would have chosen one.">
                                 <Badge tone="signal">for users</Badge>
+                              </span>
+                            )}
+                            {m.minTier !== "free" && (
+                              <span title={`In a conversation, ${tierLabel(m.minTier)} and above choose it.`} data-min-tier={m.minTier}>
+                                <Badge tone="info">from {tierLabel(m.minTier)}</Badge>
+                              </span>
+                            )}
+                            {m.position !== null && (
+                              <span className="text-xs text-ink-3" title="The place an owner gave it among the models of its provider.">
+                                place {m.position}
                               </span>
                             )}
                           </div>
@@ -422,7 +520,23 @@ export function ModelsManager({
                         </div>
 
                         {isAdmin && (
-                          <div className="flex shrink-0 items-center gap-2">
+                          <div className="flex shrink-0 flex-wrap items-center gap-2">
+                            <label className="flex items-center gap-1.5 pr-1 text-xs text-ink-3" title="The lowest role that may choose this model in a conversation.">
+                              from
+                              <Select
+                                className="w-24 py-1 text-xs"
+                                aria-label={`Lowest role: ${m.displayName || m.modelId}`}
+                                value={m.minTier}
+                                disabled={busy[m.id] === "tier" || bulk === pid}
+                                onChange={(e) => void setMinTier(m, e.target.value as Tier)}
+                              >
+                                {TIERS.map((tier) => (
+                                  <option key={tier} value={tier}>
+                                    {tierLabel(tier)}
+                                  </option>
+                                ))}
+                              </Select>
+                            </label>
                             <div className="flex items-center gap-2 pr-1">
                               <span className="text-xs text-ink-3">{m.enabled ? "on" : "off"}</span>
                               <Toggle

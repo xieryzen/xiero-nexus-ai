@@ -14,7 +14,7 @@
 // is started again on the same database.
 //
 //   ONLY=images,videos,library,limits,projects   run some parts only
-//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover,result
+//   ONLY=speech,render,knowledge,tools,skills,runs,notifications,api,adapters,reel,accounts,health,tokens,quota,standins,visibility,servers,browser,handover,result,plans
 //   E2E_APP_PORT, E2E_MOCK_PORT, E2E_CDN_PORT     ports (3100, 4010, 4011)
 //   E2E_SSH_PORT, E2E_SSHCONTROL_PORT             ports of the machine to sign in
 //                                                 to over SSH (4012, 4013)
@@ -30,6 +30,11 @@
 //                                                 already, in place of one
 //                                                 started here (as BROWSER_URL)
 //   KEEP=1                                        keep the temporary folder
+//   E2E_FROM=<a kept folder>                      do not run the checks of the
+//                                                 API again: start on a copy of
+//                                                 what an earlier run kept, and
+//                                                 go on with the browser checks.
+//                                                 For working on those.
 //   FFMPEG_PATH=<program>                         the ffmpeg to join clips with
 //   E2E_REQUIRE_FFMPEG=1                          stop when there is no usable
 //                                                 ffmpeg (CI sets it)
@@ -42,8 +47,8 @@
 // the app says what is missing.
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cp, mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -137,6 +142,13 @@ for (const [name, port] of Object.entries(ports)) {
 }
 
 const folder = await mkdtemp(join(tmpdir(), "xiero-nexus-e2e-"));
+// What an earlier run kept, to go on from: its database, its files, and the key its secrets are encrypted with.
+const from = process.env.E2E_FROM?.trim() || "";
+if (from) await cp(from, folder, { recursive: true });
+const KEY_FILE = join(folder, "e2e-key.txt");
+const secretKey = from && existsSync(KEY_FILE) ? readFileSync(KEY_FILE, "utf8").trim() : randomBytes(32).toString("base64");
+// Kept with the folder, so that a later run can read what this one encrypted.
+if (process.env.KEEP === "1") writeFileSync(KEY_FILE, secretKey, { mode: 0o600 });
 const running = [];
 let stopping = false;
 
@@ -269,12 +281,16 @@ const appEnv = {
   NEXT_TELEMETRY_DISABLED: "1",
   DATABASE_PATH: join(folder, "nexus.db"),
   MEDIA_PATH: "",
-  SECRET_ENCRYPTION_KEY: randomBytes(32).toString("base64"),
+  SECRET_ENCRYPTION_KEY: secretKey,
   COOKIE_SECURE: "false",
   APP_URL: `http://${HOST}:${ports.app}`,
   // The mock is on this machine: allow it as a provider address.
   ALLOW_PRIVATE_PROVIDER_HOSTS: HOST,
   // The first account the checks register has to become the administrator.
+  // What a developer's .env says about plans has no say either: the checks set the plans themselves.
+  DEFAULT_PLAN: "",
+  TOKEN_INPUT_WEIGHT: "",
+  DEFAULT_TOKEN_LIMIT: "",
   BOOTSTRAP_ADMIN_USERNAME: "",
   BOOTSTRAP_ADMIN_EMAIL: "",
   BOOTSTRAP_ADMIN_PASSWORD: "",
@@ -379,7 +395,7 @@ function runChecks(args, env = checkEnv) {
   });
 }
 
-let code = await runChecks(["--import", "tsx", join(here, "checks.mjs")]);
+let code = from ? 0 : await runChecks(["--import", "tsx", join(here, "checks.mjs")]);
 
 // The browser pass uses what the checks left in the database, so it only
 // makes sense after all of them ran.

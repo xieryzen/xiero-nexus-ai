@@ -10,11 +10,14 @@
  * - When models of a kind are marked, only they are used for it: an
  *   administrator who marked the free ones is not billed for another.
  * - When none is marked, every model of the kind can be used.
+ * - A model has a lowest role (v2.0): work for an account below it is done
+ *   with another one.
  * - Among those: one whose last check passed before one whose check failed
  *   (it is tried all the same, when it is all there is), then the cheapest,
  *   one without a price last, then by name.
  */
 import { MEDIA_CAPABILITY, isMediaOnly } from "./capabilities";
+import { tierRank } from "./roles";
 
 export const CHOICE_KINDS = ["chat", "image", "video", "audio", "embeddings"] as const;
 export type ChoiceKind = (typeof CHOICE_KINDS)[number];
@@ -39,6 +42,8 @@ export interface ChoiceModel {
   failing: boolean;
   /** What it costs for this kind of work, where that is known. */
   price: number | null;
+  /** The lowest role it is for (roles.ts). Without one: for every role. */
+  minTier?: string | null;
 }
 
 /** Whether a model with these capabilities does this kind of work. */
@@ -52,10 +57,12 @@ export function fitsKind(capabilities: readonly string[], kind: ChoiceKind): boo
  * The models the app works with for this kind, the first choice first. The
  * list holds only models that are switched on and can be asked.
  */
-export function choicesFor(models: readonly ChoiceModel[], kind: ChoiceKind): string[] {
+export function choicesFor(models: readonly ChoiceModel[], kind: ChoiceKind, tier?: string | null): string[] {
   const fitting = models.filter((m) => fitsKind(m.capabilities, kind));
   const marked = fitting.filter((m) => m.forUsers);
-  const pool = marked.length > 0 ? marked : fitting;
+  // The role of the account the work is for comes last: an account whose
+  // role is below every marked model is not handed an unmarked one instead.
+  const pool = (marked.length > 0 ? marked : fitting).filter((m) => tier == null || tierRank(tier) >= tierRank(m.minTier ?? "free"));
   const price = (m: ChoiceModel) => m.price ?? Number.POSITIVE_INFINITY;
   return pool
     .slice()
