@@ -169,6 +169,30 @@ export function siteContentType(path: string): string {
   }
 }
 
+/**
+ * A page or a style sheet of a project, with the addresses in it that start
+ * at the root of a site ("/css/style.css") put under the address the project
+ * is shown at. A site is written to stand at the root of its host; shown
+ * under a path of this server, "/css/style.css" would be the server's own.
+ * Addresses that are relative, name a host ("//cdn…", "https://…") or are
+ * made by a script are left as they are.
+ */
+export function underSiteBase(path: string, text: string, base: string): string {
+  const kind = fileKind(path);
+  const root = base.endsWith("/") ? base : `${base}/`;
+  if (kind === "page") {
+    return text
+      .replace(/(\s(?:href|src|action|poster|data-src)\s*=\s*)(["'])\/(?!\/)/gi, (_all, attribute: string, quote: string) => `${attribute}${quote}${root}`)
+      .replace(/(url\(\s*["']?)\/(?!\/)/gi, (_all, before: string) => `${before}${root}`);
+  }
+  if (kind === "style" && extensionOf(path) === "css") {
+    return text
+      .replace(/(url\(\s*["']?)\/(?!\/)/gi, (_all, before: string) => `${before}${root}`)
+      .replace(/(@import\s+["'])\/(?!\/)/gi, (_all, before: string) => `${before}${root}`);
+  }
+  return text;
+}
+
 // ─── Something that is built ─────────────────────────────────────────────────
 
 export type BuildTool = "gradle" | "maven";

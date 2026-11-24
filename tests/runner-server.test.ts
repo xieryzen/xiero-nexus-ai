@@ -35,22 +35,20 @@ before(async () => {
   work = mkdtempSync(join(tmpdir(), "runner-test-"));
   const port = await freePort();
   url = `http://127.0.0.1:${port}`;
-  server = spawn(process.execPath, [join(process.cwd(), "scripts/host/runner/server.mjs")], {
-    env: {
-      PATH: process.env.PATH,
-      PORT: String(port),
-      HOST: "127.0.0.1",
-      RUNNER_TOKEN: TOKEN,
-      WORK_BASE: work,
-      RUNNER_MAX_SECONDS: "10",
-      RUNNER_QUEUE_SECONDS: "2",
-      RUNNER_OUTPUT_CHARS: "2000",
-      RUNNER_MAX_WORK_MB: "16",
-      A_SECRET_OF_THE_SERVER: "must-not-reach-a-program",
-      JAVA_HOME: "/a/jdk",
-    },
-    stdio: "ignore",
-  });
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? "",
+    PORT: String(port),
+    HOST: "127.0.0.1",
+    RUNNER_TOKEN: TOKEN,
+    WORK_BASE: work,
+    RUNNER_MAX_SECONDS: "10",
+    RUNNER_QUEUE_SECONDS: "2",
+    RUNNER_OUTPUT_CHARS: "2000",
+    RUNNER_MAX_WORK_MB: "16",
+    A_SECRET_OF_THE_SERVER: "must-not-reach-a-program",
+    JAVA_HOME: "/a/jdk",
+  };
+  server = spawn(process.execPath, [join(process.cwd(), "scripts/host/runner/server.mjs")], { env: env as NodeJS.ProcessEnv, stdio: "ignore" });
   for (let i = 0; i < 100; i++) {
     try {
       if ((await fetch(`${url}/health`)).ok) return;

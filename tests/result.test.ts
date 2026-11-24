@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildOf, byFolder, downloadSlug, fileKind, isPackage, keepPatterns, matchesPattern, safePattern, siteContentType, siteOf, sizeLabel } from "../src/lib/result/kinds";
+import { buildOf, byFolder, downloadSlug, fileKind, isPackage, keepPatterns, matchesPattern, safePattern, siteContentType, siteOf, sizeLabel, underSiteBase } from "../src/lib/result/kinds";
 import { parseInline, parseMarkdown, plainText, safeHref, looksLikeMarkdown } from "../src/lib/result/markdown";
 import { readSiteToken, signSiteToken, siteKeyFrom } from "../src/lib/result/site-token";
 import { zipBuffer, archivePath } from "../src/lib/result/zip";
@@ -159,4 +159,26 @@ test("markdown: hard cases do not hang or lose text", () => {
   assert.deepEqual(parseMarkdown("1. a\n\n   still a\n\n2. b\n\ntext").map((b) => b.type), ["list", "paragraph"]);
   assert.deepEqual(parseMarkdown("para\n- item\nlazy\n\n```\nunclosed").map((b) => b.type), ["paragraph", "list", "code"]);
   assert.deepEqual(parseMarkdown("2024. was a year\nnext").map((b) => b.type), ["list"]);
+});
+
+test("addresses that start at the root of a site are put under the address it is shown at", () => {
+  const base = "/site/token/";
+  const page =
+    '<link rel="stylesheet" href="/css/style.css">\n<script src=\'/js/app.js\'></script>\n<a href="/">Home</a> <a href="about.html">About</a>\n' +
+    '<img src="//cdn.example.com/x.png"> <img src="https://example.com/y.png"> <img SRC = "/img/logo.svg">\n' +
+    '<form action="/send"></form> <video poster="/poster.jpg"></video>\n<div style="background: url(/img/bg.png)"></div>\n<p>a path in text: /css/style.css, href=/not-quoted</p>';
+  assert.equal(
+    underSiteBase("index.html", page, base),
+    '<link rel="stylesheet" href="/site/token/css/style.css">\n<script src=\'/site/token/js/app.js\'></script>\n<a href="/site/token/">Home</a> <a href="about.html">About</a>\n' +
+      '<img src="//cdn.example.com/x.png"> <img src="https://example.com/y.png"> <img SRC = "/site/token/img/logo.svg">\n' +
+      '<form action="/site/token/send"></form> <video poster="/site/token/poster.jpg"></video>\n<div style="background: url(/site/token/img/bg.png)"></div>\n<p>a path in text: /css/style.css, href=/not-quoted</p>',
+  );
+  assert.equal(
+    underSiteBase("css/style.css", 'body { background: url("/img/bg.png"), url( \'/a.png\'), url(img/rel.png), url(//cdn/x.png); }\n@import "/css/more.css";\n@import url(/css/third.css);', base),
+    'body { background: url("/site/token/img/bg.png"), url( \'/site/token/a.png\'), url(img/rel.png), url(//cdn/x.png); }\n@import "/site/token/css/more.css";\n@import url(/site/token/css/third.css);',
+  );
+  // The address without its slash at the end means the same.
+  assert.equal(underSiteBase("a.html", '<a href="/b.html">', "/site/token"), '<a href="/site/token/b.html">');
+  // A script, a document and data are left as they are.
+  for (const path of ["js/app.js", "README.md", "data.json", "styles/main.scss"]) assert.equal(underSiteBase(path, 'href="/x" url(/y)', base), 'href="/x" url(/y)');
 });

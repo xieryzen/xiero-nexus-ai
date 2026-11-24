@@ -142,7 +142,8 @@ export function ProjectResultCard({
   // ── Building ──
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const [showLog, setShowLog] = useState(false);
+  // What a failed build said is shown without being asked for: it is why there is no package.
+  const [logChoice, setShowLog] = useState<boolean | null>(null);
   const busy = building || Boolean(build?.running) || buildNote !== null;
 
   async function buildNow() {
@@ -188,6 +189,7 @@ export function ProjectResultCard({
   ].filter(Boolean);
 
   const last = build?.last ?? null;
+  const showLog = logChoice ?? (last !== null && !last.ok);
   const groups = byFolder(files);
 
   return (
@@ -365,7 +367,7 @@ export function ProjectResultCard({
                     </p>
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       {last.log && (
-                        <button type="button" onClick={() => setShowLog((v) => !v)} className="text-xs font-medium text-signal hover:underline" aria-expanded={showLog}>
+                        <button type="button" onClick={() => setShowLog(!showLog)} className="text-xs font-medium text-signal hover:underline" aria-expanded={showLog}>
                           {showLog ? "Hide" : "View"} what the build said
                         </button>
                       )}

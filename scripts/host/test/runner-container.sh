@@ -47,6 +47,13 @@ fail() {
   exit 1
 }
 
+# What was found, also on the run's page on GitHub: the log of a run is long.
+FOUND=()
+found() {
+  echo "$*"
+  FOUND+=("$*")
+}
+
 echo "==> runner-service.sh, on a made-up server with this Docker"
 # The script that sets the runner up on a node, for real: only the server
 # next to it is made up, and left alone (--container-only).
@@ -87,6 +94,7 @@ url="$(sed -n 's/^SANDBOX_URL=//p' "${WORK}/state/${uuid}/runner-env")"
 if grep -qF -- "${token}" "${WORK}/said.txt"; then fail "runner-service.sh printed the token."; fi
 [ "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}} {{.HostConfig.NetworkMode}} {{len .HostConfig.PortBindings}} {{.HostConfig.Privileged}}' "${NODE_NAME}")" = "true 3221225472 ${NODE_NET} 0 false" ] \
   || fail "the container was not started with the limits of a node: $(docker inspect -f '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.Memory}} {{.HostConfig.NetworkMode}} {{len .HostConfig.PortBindings}} {{.HostConfig.Privileged}}' "${NODE_NAME}")"
+while IFS= read -r line; do FOUND+=("${line}"); done <<< "$(grep -E '^  (JDKs: |warm: )|^Built |A build works in it|And with Maven|They reach the outside|Its programs do not reach' "${WORK}/said.txt" | sed 's/^  //')"
 echo "runner-service.sh set it up, asked the real runner, and said what it found."
 
 echo "==> The runner itself"
@@ -122,6 +130,15 @@ EOF
 if grep -q "root:" "${WORK}/answer.json"; then fail "a link to a file of the system came back with its content."; fi
 echo "What a program made comes back; a link it made to a file of the system does not."
 
+# One run right after another: what was started to tidy up after the first
+# stops nothing of the second, which runs as the same user.
+for _ in 1 2 3; do
+  printf '%s' '{"timeoutMs": 20000, "files": [{"path": "quick.js", "content": "console.log(1)"}], "command": "node quick.js"}' | ask
+  printf '%s' '{"timeoutMs": 20000, "files": [{"path": "slow.js", "content": "setTimeout(() => console.log(\"through\"), 700)"}], "command": "node slow.js"}' | ask
+  [ "$(field exitCode)" = "0" ] && [ "$(field stdout)" = "through" ] || fail "a program that ran right after another one was stopped: $(cut -c1-400 "${WORK}/answer.json")"
+done
+echo "A run right after another one runs to its end."
+
 # A program whose time is up is stopped, with everything it started.
 cat << 'EOF' | ask
 {"timeoutMs": 3000,
@@ -155,7 +172,7 @@ echo "A program reaches Maven Central, and no private address."
 
 # A project that says it was written for Gradle 9 is built with Gradle 9.
 answer="$(docker exec -e SELFTEST_GRADLE=9 "${NODE_NAME}" node /srv/selftest.mjs gradle 2> /dev/null || echo "no the question could not be asked")"
-case "${answer}" in ok\ *"Gradle 9)") echo "With Gradle 9 too: ${answer#ok }." ;; *) fail "a Paper plugin did not build with Gradle 9 (${answer#no })." ;; esac
+case "${answer}" in ok\ *"Gradle 9)") found "With Gradle 9 too: ${answer#ok }." ;; *) fail "a Paper plugin did not build with Gradle 9 (${answer#no })." ;; esac
 cat << 'EOF' | ask
 {"timeoutMs": 300000,
  "files": [{"path": "settings.gradle.kts", "content": "rootProject.name = \"which\"\n"}, {"path": "gradle/wrapper/gradle-wrapper.properties", "content": "distributionUrl=https\\://services.gradle.org/distributions/gradle-9.1.0-bin.zip\n"}],
@@ -172,19 +189,19 @@ echo "\"gradle\" is Gradle 8, and Gradle 9 for a project that names it."
 cat << 'EOF' | ask
 {"timeoutMs": 60000, "files": [], "command": "java -version"}
 EOF
-echo "Java: $(field stderr | head -n 1)"
+found "Java: $(field stderr | head -n 1)"
 cat << 'EOF' | ask
 {"timeoutMs": 60000, "files": [], "command": "mvn -v"}
 EOF
-echo "Maven: $(field stdout | head -n 1)"
+found "Maven: $(field stdout | head -n 1)"
 cat << 'EOF' | ask
 {"timeoutMs": 60000, "files": [], "command": "node -v"}
 EOF
-echo "Node.js: $(field stdout)"
+found "Node.js: $(field stdout)"
 cat << 'EOF' | ask
 {"timeoutMs": 60000, "files": [], "command": "python3 --version"}
 EOF
-echo "Python: $(field stdout)"
+found "Python: $(field stdout)"
 
 echo "==> Taking it away"
 if ! on_node --remove; then
@@ -195,3 +212,6 @@ if docker inspect "${NODE_NAME}" > /dev/null 2>&1; then fail "runner-service.sh 
 if docker volume inspect "${NODE_NAME}-work" > /dev/null 2>&1; then fail "runner-service.sh --remove left the folder of the runs."; fi
 echo "And took it away again."
 echo "The runner in its container passed."
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  echo "::notice title=The runner in its container::$(printf '%s | ' "${FOUND[@]}" | tr -d '\r\n' | cut -c1-3500)"
+fi

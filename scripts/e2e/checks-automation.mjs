@@ -10,7 +10,7 @@
 // services.
 import { spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +18,7 @@ import { reelWorkflowTemplate, templateNeeds } from "../../src/lib/creative/temp
 import { SKILL_UPLOAD_MAX_BYTES } from "../../src/lib/skills/limits.ts";
 import { readZip, writeZip } from "../../src/lib/skills/zip.ts";
 
-export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "standins", "visibility", "servers", "browser", "handover"];
+export const AUTOMATION_PARTS = ["speech", "render", "knowledge", "tools", "skills", "runs", "notifications", "api", "adapters", "reel", "accounts", "health", "tokens", "quota", "standins", "visibility", "servers", "browser", "handover", "result"];
 
 const CDN = process.env.E2E_CDN_URL ?? "http://127.0.0.1:4011";
 const DB_PATH = process.env.E2E_DB_PATH;
@@ -4656,7 +4656,276 @@ export async function automation(ctx) {
     );
   }
 
-  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, standins, visibility, servers, browser, handover };
+  // ─── What a project made: files, a site, a package ─────────────────────────
+
+  async function result() {
+    const builtDirOf = () => join(DB_PATH, "..", "built");
+    const onDisk = () => {
+      try {
+        return readdirSync(builtDirOf()).filter((name) => name.endsWith(".bin")).length;
+      } catch {
+        return 0;
+      }
+    };
+    const resultOf = async (user, id) => (await user.get(`/api/projects/${id}/result`)).data?.result;
+    const sandboxCalls = async () => (await mockLog()).filter((l) => l.path === "/sandbox/run");
+    const toolsOf = (run) => run.events.filter((e) => e.type === "tool").map((e) => `${e.seq}:${e.call.name}${e.call.isError ? "!" : ""}`);
+    const builds = (run) => run.events.filter((e) => e.type === "build").map((e) => e.state);
+    const SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-pointer-lock; frame-ancestors 'self'";
+    const GRADLE = "gradle build -x test --console=plain -q";
+
+    begin("Result: an agent that writes files, and one that also runs programs");
+    // Writes and corrects files; has no tool to run anything.
+    const writerTools = ["list_files", "read_file", "write_file", "edit_file"];
+    await agent("Builder", "Builder", { tools: writerTools, maxSteps: 10 });
+    await agent("Packer", "Packer", { tools: [...writerTools, "run_command"], maxSteps: 10 });
+    check("the agents are there", Boolean(state.agents.Builder && state.agents.Packer), state.agents);
+
+    // ── A web site ──
+    begin("Result: a project that is a web site is shown as one");
+    const siteWf = await workflow("Result site", [{ title: "Tool: site", objective: "Write the site.", role: "Builder" }]);
+    const siteId = await project(admin, { title: "Lighthouse Tours: the site!", workflowId: siteWf });
+    eq("a project without files has a result that says so", await resultOf(admin, siteId), {
+      workspaceId: null,
+      files: [],
+      bytes: 0,
+      site: null,
+      preview: null,
+      built: [],
+      build: null,
+      download: { url: `/api/projects/${siteId}/download`, name: "Lighthouse-Tours-the-site.zip" },
+    });
+    await mockReset();
+    const siteRun = await runProject(admin, siteId);
+    eq("the run finishes", siteRun.events.at(-1)?.status, "succeeded");
+    eq("  nothing is built: these files are not something that is built", [builds(siteRun), (await sandboxCalls()).length], [[], 0]);
+    const site = await resultOf(admin, siteId);
+    eq(
+      "the result lists the files the agent wrote, each with its kind and the task that wrote it",
+      site?.files?.map((f) => [f.path, f.kind, f.task]),
+      [
+        ["README.md", "document", 1],
+        ["about.html", "page", 1],
+        ["css/style.css", "style", 1],
+        ["index.html", "page", 1],
+        ["js/app.js", "script", 1],
+      ],
+    );
+    eq("  it knows that they are a web site, and where it starts", site?.site, { entry: "index.html", pages: ["index.html", "about.html"] });
+    eq("  nothing to build, nothing built", [site?.build, site?.built], [null, []]);
+    check("  and an address where the site is shown", /^\/site\/[0-9a-f-]{36}\.[0-9a-z]+\.[A-Za-z0-9_-]{20,}\/$/.test(site?.preview?.base ?? ""), site?.preview);
+    check("  that ends within a day", site?.preview?.expiresAt > Date.now() + 22 * 3_600_000 && site.preview.expiresAt <= Date.now() + 24 * 3_600_000 + 1000, site?.preview?.expiresAt);
+    eq("  asked again, the address is the same: an open preview does not load anew", (await resultOf(admin, siteId))?.preview?.base, site?.preview?.base);
+
+    // The preview is asked for without a session: the browser sends none into a sandboxed frame.
+    const visitor = (path, init) => fetch(`${APP}${path}`, { redirect: "manual", ...init });
+    const base = site?.preview?.base ?? "/site/none/";
+    const start = await visitor(base.slice(0, -1));
+    eq("the preview's address leads to the first page, under the page's own name", [start.status, start.headers.get("location")], [307, `${base}index.html`]);
+    const page = await visitor(`${base}index.html`);
+    const pageText = await page.text();
+    eq("  the page is served as a page, to anyone who has the address", [page.status, page.headers.get("content-type"), pageText.includes('<h1 id="title">Lighthouse Tours</h1>')], [200, "text/html; charset=utf-8", true]);
+    eq("  in a sandbox: it has no origin, and cannot be the app", page.headers.get("content-security-policy"), SANDBOX);
+    check("  what it names from the root of its site is found under this address, not at the root of the app", pageText.includes(`<a id="root-link" href="${base}about.html">`) && !pageText.includes('href="/about.html"'), pageText.slice(0, 400));
+    eq("  it may be shown in a frame of the app, and nowhere else", [page.headers.get("x-frame-options"), page.headers.get("x-content-type-options"), page.headers.get("referrer-policy")], [null, "nosniff", "no-referrer"]);
+    check("  it sets no cookie and is not kept by a cache", page.headers.get("set-cookie") === null && /no-store/.test(page.headers.get("cache-control") ?? ""), page.headers.get("cache-control"));
+    const kinds = [];
+    for (const path of ["css/style.css", "js/app.js", "about.html", "README.md"]) {
+      const res = await visitor(`${base}${path}`);
+      kinds.push([res.status, res.headers.get("content-type"), res.headers.get("content-security-policy") === SANDBOX]);
+    }
+    eq(
+      "  what the page names beside itself is found, each as what it is",
+      kinds,
+      [
+        [200, "text/css; charset=utf-8", true],
+        [200, "text/javascript; charset=utf-8", true],
+        [200, "text/html; charset=utf-8", true],
+        [200, "text/plain; charset=utf-8", true],
+      ],
+    );
+    eq("  a page asked for without its ending is found too", [(await visitor(`${base}about`)).status, (await visitor(`${base}about`)).headers.get("location")], [307, `${base}about.html`]);
+    eq("  what is not there is not there, and says so in a sandbox as well", [(await visitor(`${base}nothing.html`)).status, (await visitor(`${base}nothing.html`)).headers.get("content-security-policy")], [404, SANDBOX]);
+    // Written so that the address is not tidied before it is sent: with the slashes encoded.
+    eq("  nothing leads out of the project's files", [(await visitor(`${base}css/..%2f..%2findex.html`)).status, (await visitor(`${base}..%2f..%2fapi%2fhealth`)).status, (await visitor(`${base}css%2f..%2findex.html`)).status], [404, 404, 404]);
+    // An address that was changed, or made up, is not one of this server.
+    const [tokenProject, tokenExpiry, tokenMac] = base.slice(6, -1).split(".");
+    const forged = [
+      `${tokenProject}.${tokenExpiry}.${tokenMac.slice(0, -2)}${tokenMac.endsWith("AA") ? "BB" : "AA"}`,
+      `${tokenProject}.${(parseInt(tokenExpiry, 36) + 3_600_000).toString(36)}.${tokenMac}`,
+      `${ids.project ?? "00000000-0000-4000-8000-000000000000"}.${tokenExpiry}.${tokenMac}`,
+      `${tokenProject}.${tokenExpiry}`,
+      "not-a-token",
+    ];
+    const refused = [];
+    for (const token of forged) refused.push((await visitor(`/site/${token}/index.html`)).status);
+    eq("an address that was changed is refused: its end, its time, its project", refused, [410, 410, 410, 410, 410]);
+    eq("  the result itself is for who may see the project", [(await bob.get(`/api/projects/${siteId}/result`)).status, (await visitor(`/api/projects/${siteId}/result`)).status], [403, 401]);
+
+    // Downloads.
+    const zip = await admin.raw(`/api/projects/${siteId}/download`);
+    const archive = readZip(Buffer.from(await zip.arrayBuffer()), { maxEntries: 100, maxEntryBytes: 4 * 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024 });
+    eq(
+      "everything is downloaded as one archive, named after the project",
+      [zip.status, zip.headers.get("content-type"), zip.headers.get("content-disposition"), archive.entries.map((e) => e.path).sort()],
+      [200, "application/zip", 'attachment; filename="Lighthouse-Tours-the-site.zip"', ["README.md", "about.html", "css/style.css", "index.html", "js/app.js"]],
+    );
+    eq("  with the files as they are", archive.entries.find((e) => e.path === "js/app.js")?.data.toString(), 'document.getElementById("by-script").textContent = "set by the script";\n');
+    const one = await admin.raw(`/api/projects/${siteId}/file?path=${encodeURIComponent("index.html")}`);
+    eq(
+      "one file is downloaded as a file: a page an agent wrote is never a page of the app",
+      [one.status, one.headers.get("content-type"), one.headers.get("content-disposition"), (await one.text()).includes('<a id="root-link" href="/about.html">')],
+      [200, "application/octet-stream", 'attachment; filename="index.html"', true],
+    );
+    eq("  a file that is not there, and somebody else's", [(await admin.raw(`/api/projects/${siteId}/file?path=nope.txt`)).status, (await bob.raw(`/api/projects/${siteId}/file?path=index.html`)).status, (await bob.raw(`/api/projects/${siteId}/download`)).status], [404, 403, 403]);
+    const sitePage = await (await admin.raw(`/dashboard/projects/${siteId}`)).text();
+    check("the project page shows the result above the tasks: the site in a frame, the files, the download", sitePage.includes('data-testid="project-result"') && sitePage.includes('data-testid="result-site-frame"') && sitePage.includes(`${base}index.html`) && sitePage.includes('data-testid="result-files"') && sitePage.indexOf('data-testid="project-result"') < sitePage.indexOf("Tool: site"), [sitePage.includes('data-testid="project-result"'), sitePage.includes('data-testid="result-site-frame"')]);
+    check("  the frame is sandboxed, and without the app's rights", /<iframe[^>]*data-testid="result-site-frame"[^>]*>/.test(sitePage) && /<iframe[^>]*sandbox="[^"]*allow-scripts[^"]*"[^>]*data-testid="result-site-frame"|<iframe[^>]*data-testid="result-site-frame"[^>]*sandbox="[^"]*allow-scripts[^"]*"/.test(sitePage) && !/<iframe[^>]*sandbox="[^"]*allow-same-origin/.test(sitePage), (sitePage.match(/<iframe[^>]*>/) ?? [])[0]);
+
+    // ── A plugin whose build fails, and is made to work ──
+    begin("Result: a project that is built gets its package, and a failing build goes back to the agent");
+    const pluginWf = await workflow("Result plugin", [{ title: "Tool: plugin", objective: "Write the plugin.", role: "Builder" }]);
+    const pluginId = await project(admin, { title: "Shop plugin", workflowId: pluginWf });
+    const before = onDisk();
+    await mockReset();
+    const pluginRun = await runProject(admin, pluginId);
+    eq("the run finishes, and succeeds", [pluginRun.events.at(-1)?.type, pluginRun.events.at(-1)?.status], ["done", "succeeded"]);
+    eq("  the build was started, failed, and then succeeded", builds(pluginRun), ["started", "failed", "ok"]);
+    const plans = pluginRun.events.filter((e) => e.type === "plan");
+    eq("  after the failure the run gave one more task: to make the project build, to the agent that wrote it", plans.at(-1)?.tasks?.map((t) => [t.seq, t.title, t.agent]), [[1, "Tool: plugin", "Builder"], [2, "Make the project build", "Builder"]]);
+    eq("  that agent read the file the build named, corrected it, and built it", toolsOf(pluginRun).filter((c) => c.startsWith("2:")), ["2:read_file", "2:edit_file", "2:run_command"]);
+    const pluginCalls = await sandboxCalls();
+    eq("  the runner was asked twice: by the app, and by the agent, which has no tool to run anything but was handed one for this", pluginCalls.map((l) => [l.body?.command, l.body?.stream, l.authorization]), [[GRADLE, true, "Bearer sandbox-mock-token"], [GRADLE, true, "Bearer sandbox-mock-token"]]);
+    check("  with the project's files, and asked for the packages a build leaves", pluginCalls[0]?.body?.files?.map((f) => f.path).sort().join(" ") === "build.gradle.kts settings.gradle.kts src/main/java/demo/Shop.java src/main/resources/plugin.yml" && pluginCalls[0].body.keep.includes("build/libs/*.jar") && pluginCalls[0].body.keep.includes("*/build/libs/*.jar"), pluginCalls[0]?.body?.keep);
+    eq("  the agent's files were the corrected ones", [/BROKEN-BUILD/.test(JSON.stringify(pluginCalls[0]?.body?.files)), /BROKEN-BUILD/.test(JSON.stringify(pluginCalls[1]?.body?.files))], [true, false]);
+    const fixTask = await mockLog().then((log) => log.find((l) => /^Task: Make the project build$/m.test(String(l.body?.messages?.find((m) => m.role === "user")?.content ?? ""))));
+    const fixAsked = String(fixTask?.body?.messages?.find((m) => m.role === "user")?.content ?? "");
+    check("  the task says what the build said, and what the command is", fixAsked.includes("error: ';' expected") && fixAsked.includes(GRADLE) && fixAsked.includes("Shop.java") && /do not take a feature out/.test(fixAsked), fixAsked.slice(0, 600));
+    check("  and the agent was handed run_command for it", fixTask?.body?.tools?.some((t) => t.function?.name === "run_command") && fixTask.body.tools.some((t) => t.function?.name === "edit_file"), fixTask?.body?.tools?.map((t) => t.function?.name));
+    const told = (await mockLog()).filter((l) => l.method === "POST").map((l) => l.body?.messages ?? []);
+    const managerHeard = told.find((m) => String(m[0]?.content ?? "").includes("You are the AI Manager. Consolidate"));
+    const reviewerHeard = told.find((m) => String(m[0]?.content ?? "").includes("You are a QA/Security reviewer"));
+    check("  the manager is told how the build went, and what was made", /Build of the project:\nThe project was built with Gradle \(gradle build -x test --console=plain -q\), and the build succeeded after one task that corrected what stopped it\. It made build\/libs\/shop-1\.0\.0\.jar/.test(String(managerHeard?.at(-1)?.content ?? "")), String(managerHeard?.at(-1)?.content ?? "").slice(-500));
+    check("  and that a build is not a test", /was not tried: it was compiled and packed, not run/.test(String(managerHeard?.at(-1)?.content ?? "")), null);
+    check("  so is the reviewer", /### Build of the project\nThe project was built with Gradle/.test(String(reviewerHeard?.at(-1)?.content ?? "")), String(reviewerHeard?.at(-1)?.content ?? "").slice(-400));
+
+    const plugin = await resultOf(admin, pluginId);
+    eq("the result has the package: the .jar, and not what a build makes besides it or what was not asked for", plugin?.built?.map((b) => [b.path, b.name, b.current, b.url === `/api/projects/${pluginId}/built/${b.id}`]), [["build/libs/shop-1.0.0.jar", "shop-1.0.0.jar", true, true]]);
+    eq("  it says how the project is built, and that the last build succeeded on the files as they are", [plugin?.build?.plan?.tool, plugin?.build?.plan?.command, plugin?.build?.runner, plugin?.build?.last?.ok, plugin?.build?.last?.current, plugin?.build?.running], ["gradle", GRADLE, true, true, true, false]);
+    eq("  one file was kept on the server", onDisk() - before, 1);
+    const jar = await admin.raw(plugin?.built?.[0]?.url ?? "/none");
+    const jarBytes = Buffer.from(await jar.arrayBuffer());
+    eq(
+      "the package is downloaded as it was built",
+      [jar.status, jar.headers.get("content-type"), jar.headers.get("content-disposition"), jarBytes.subarray(0, 4).toString("latin1"), jarBytes.toString("latin1").includes("a jar of 4 files"), Number(jar.headers.get("content-length")) === jarBytes.length],
+      [200, "application/java-archive", 'attachment; filename="shop-1.0.0.jar"', "PK\u0003\u0004", true, true],
+    );
+    eq("  by who may see the project", [(await bob.raw(plugin?.built?.[0]?.url ?? "/none")).status, (await visitor(plugin?.built?.[0]?.url ?? "/none")).status], [403, 401]);
+    const pluginZip = readZip(Buffer.from(await (await admin.raw(`/api/projects/${pluginId}/download`)).arrayBuffer()), { maxEntries: 100, maxEntryBytes: 4 * 1024 * 1024, maxTotalBytes: 16 * 1024 * 1024 });
+    eq("  and it is in the archive of everything, next to the sources", pluginZip.entries.map((e) => e.path).sort(), ["build.gradle.kts", "build/libs/shop-1.0.0.jar", "settings.gradle.kts", "src/main/java/demo/Shop.java", "src/main/resources/plugin.yml"]);
+    const tasksNow = (await admin.get(`/api/projects/${pluginId}`)).data?.project?.tasks ?? [];
+    eq("the task that made it build is a task of the project like any other", tasksNow.map((t) => [t.seq, t.title, t.status]), [[1, "Tool: plugin", "succeeded"], [2, "Make the project build", "succeeded"]]);
+    const goOnDone = await admin.raw(`/api/projects/${pluginId}/run`, { method: "POST", body: JSON.stringify({ continue: true }) });
+    eq("a project whose tasks are done and whose package is built has nothing to go on with", [goOnDone.status, (await goOnDone.json().catch(() => null))?.error?.code], [409, "nothing_to_continue"]);
+
+    // A file changes: the package is of the files as they were.
+    const wsId = plugin?.workspaceId;
+    eq("a file is changed by hand", (await admin.post(`/api/workspaces/${wsId}/files`, { path: "src/main/resources/plugin.yml", content: "name: Shop\nversion: 1.0.1\nmain: demo.Shop\n" })).status, 201);
+    const stale = await resultOf(admin, pluginId);
+    eq("  the package says that it is of the files as they were", [stale?.built?.[0]?.current, stale?.build?.last?.current], [false, false]);
+    await mockReset();
+    const again = await admin.post(`/api/projects/${pluginId}/build`);
+    eq("built again from the project page", [again.status, again.data?.build?.ok, again.data?.build?.exitCode, again.data?.build?.kept?.map((k) => k.path)], [200, true, 0, ["build/libs/shop-1.0.0.jar"]]);
+    eq("  what was not kept is said, with the reason", again.data?.build?.notKept, [{ path: "build/libs/shop-1.0.0-all.jar", reason: "larger than 48 MB" }]);
+    eq("  the package is of the files as they are now, and there is still one", [again.data?.result?.built?.map((b) => [b.path, b.current]), onDisk() - before], [[["build/libs/shop-1.0.0.jar", true]], 1]);
+    check("  it is a new file: the old address is gone", again.data?.result?.built?.[0]?.id !== plugin?.built?.[0]?.id && (await admin.raw(plugin?.built?.[0]?.url ?? "/none")).status === 404, null);
+    eq("  a user without the project builds nothing", [(await bob.post(`/api/projects/${pluginId}/build`)).status, (await sandboxCalls()).length], [403, 1]);
+    const pluginPage = await (await admin.raw(`/dashboard/projects/${pluginId}`)).text();
+    check("the project page shows the package with its download, and that it can be built again", pluginPage.includes('data-testid="result-built"') && pluginPage.includes("shop-1.0.0.jar") && pluginPage.includes(again.data?.result?.built?.[0]?.url ?? "no-url") && pluginPage.includes('data-testid="build-now"'), [pluginPage.includes('data-testid="result-built"'), pluginPage.includes('data-testid="build-now"')]);
+
+    // ── A build nobody gets to work ──
+    begin("Result: a build that still fails is said, and the project asks for a look");
+    const stuckWf = await workflow("Result stuck", [{ title: "Tool: plugin stuck", objective: "Write the plugin.", role: "Builder" }]);
+    const stuckId = await project(admin, { title: "Stuck plugin", workflowId: stuckWf });
+    await mockReset();
+    const stuckRun = await runProject(admin, stuckId);
+    eq("the run ends as one that needs a look", [stuckRun.events.at(-1)?.type, stuckRun.events.at(-1)?.status], ["done", "review"]);
+    eq("  the build was tried three times: as written, and after each of two tasks", builds(stuckRun), ["started", "failed", "started", "failed", "started", "failed"]);
+    const stuckTasks = (await admin.get(`/api/projects/${stuckId}`)).data?.project?.tasks ?? [];
+    eq("  two tasks were given to make it build, and no more", stuckTasks.map((t) => t.title), ["Tool: plugin stuck", "Make the project build", "Make the project build (attempt 2)"]);
+    const stuck = await resultOf(admin, stuckId);
+    eq("  there is no package, and the result says that the build fails", [stuck?.built, stuck?.build?.last?.ok, stuck?.build?.last?.exitCode, stuck?.build?.last?.current], [[], false, 1, true]);
+    check("  with what the build said", /error: ';' expected/.test(stuck?.build?.last?.log ?? "") && /FAILURE: Build failed/.test(stuck.build.last.log), stuck?.build?.last?.log);
+    const stuckTold = (await mockLog()).filter((l) => l.method === "POST").map((l) => l.body?.messages ?? []);
+    check("  the manager is told that there is no package", /the build FAILED \(exit code 1\), also after 2 tasks that tried to correct it\. There is no package/.test(String(stuckTold.find((m) => String(m[0]?.content ?? "").includes("You are the AI Manager. Consolidate"))?.at(-1)?.content ?? "")), null);
+    const notes = ((await admin.get("/api/notifications")).data?.notifications ?? []).find((n) => n.title === "Run needs a look: Stuck plugin");
+    eq("  and the person, in a notification", notes?.body, "What it made does not build: there is no package yet.");
+    const stuckPage = await (await admin.raw(`/dashboard/projects/${stuckId}`)).text();
+    check("the project page says that the build failed, shows what it said, and offers to have it fixed", stuckPage.includes("The last build failed (exit code 1)") && stuckPage.includes('data-testid="build-log"') && stuckPage.includes("error: &#x27;;&#x27; expected") && stuckPage.includes('data-testid="build-fix"'), [stuckPage.includes("The last build failed"), stuckPage.includes('data-testid="build-log"'), stuckPage.includes('data-testid="build-fix"')]);
+
+    await mockReset();
+    const goOn = await runProject(admin, stuckId, { goOn: true });
+    eq("going on with it is allowed, though every first task is done: the build is what is left", [goOn.status, goOn.events.at(-1)?.status], [200, "review"]);
+    eq("  the task that is done is not done again; two more tasks try the build", [toolsOf(goOn).some((c) => c.startsWith("1:")), ((await admin.get(`/api/projects/${stuckId}`)).data?.project?.tasks ?? []).map((t) => t.title).slice(3)], [false, ["Make the project build (attempt 3)", "Make the project build (attempt 4)"]]);
+    // The person corrects the file; the next run builds it and has nothing to correct.
+    const stuckWs = stuck?.workspaceId;
+    await admin.post(`/api/workspaces/${stuckWs}/files`, { path: "src/main/java/demo/Shop.java", content: 'package demo;\n\npublic final class Shop {\n    public String name() {\n        return "shop";\n    }\n}\n' });
+    await mockReset();
+    const mended = await runProject(admin, stuckId, { goOn: true });
+    eq("with the file corrected by hand, going on builds it and is done", [mended.events.at(-1)?.status, builds(mended), (await sandboxCalls()).length], ["succeeded", ["started", "ok"], 1]);
+    eq("  no further task was needed, and the package is there", [((await admin.get(`/api/projects/${stuckId}`)).data?.project?.tasks ?? []).length, (await resultOf(admin, stuckId))?.built?.map((b) => b.path)], [5, ["build/libs/shop-1.0.0.jar"]]);
+
+    // ── A build that works at once; a Maven project in a folder ──
+    begin("Result: a project that builds as written, and one that is a Maven project in a folder");
+    const goodWf = await workflow("Result good", [{ title: "Tool: plugin good", objective: "Write the plugin.", role: "Builder" }]);
+    const goodId = await project(admin, { title: "Good plugin", workflowId: goodWf });
+    await mockReset();
+    const goodRun = await runProject(admin, goodId);
+    eq("built once, no task added", [goodRun.events.at(-1)?.status, builds(goodRun), (await sandboxCalls()).length, ((await admin.get(`/api/projects/${goodId}`)).data?.project?.tasks ?? []).length], ["succeeded", ["started", "ok"], 1, 1]);
+    const goodWs = (await resultOf(admin, goodId))?.workspaceId;
+    // The build file is taken away, and a Maven project is put into a folder.
+    const goodFiles = (await admin.get(`/api/workspaces/${goodWs}/files`)).data?.files ?? [];
+    for (const file of goodFiles.filter((f) => /gradle/.test(f.path))) await admin.del(`/api/workspaces/${goodWs}/files/${file.id}`);
+    await admin.post(`/api/workspaces/${goodWs}/files`, { path: "plugin/pom.xml", content: "<project><modelVersion>4.0.0</modelVersion></project>\n" });
+    await mockReset();
+    const mavenBuild = await admin.post(`/api/projects/${goodId}/build`);
+    eq("a Maven project in a folder is built there, and its package found there", [mavenBuild.status, mavenBuild.data?.build?.ok, (await sandboxCalls())[0]?.body?.command, mavenBuild.data?.result?.build?.plan?.tool], [200, true, "mvn -B -ntp -q -DskipTests -f plugin/pom.xml package", "maven"]);
+    check("  asked for with the folder in front", (await sandboxCalls())[0]?.body?.keep?.includes("plugin/target/*.jar"), (await sandboxCalls())[0]?.body?.keep);
+    eq("  and kept", mavenBuild.data?.build?.kept?.map((k) => k.path), ["plugin/target/shop-1.0.0.jar"]);
+    eq("a project with nothing to build says so", [(await admin.post(`/api/projects/${siteId}/build`)).status, (await admin.post(`/api/projects/${siteId}/build`)).code], [400, "nothing_to_build"]);
+
+    // ── What an agent's own program leaves behind ──
+    begin("Result: a package an agent makes with run_command is kept");
+    const packWf = await workflow("Result pack", [{ title: "Tool: pack", objective: "Pack the site.", role: "Packer" }]);
+    const packId = await project(admin, { title: "Packed", workflowId: packWf });
+    await mockReset();
+    const packRun = await runProject(admin, packId);
+    eq("the run finishes", [packRun.events.at(-1)?.status, toolsOf(packRun)], ["succeeded", ["1:write_file", "1:run_command"]]);
+    const packCall = (await sandboxCalls())[0];
+    check("  the runner is asked for what the agent named, as far as it may be named, and for what is always kept", packCall?.body?.keep?.[0] === "out/*.zip" && packCall.body.keep.includes("out/**") && packCall.body.keep.includes("build/libs/*.jar") && !packCall.body.keep.some((k) => k.includes("..")), packCall?.body?.keep);
+    const packed = await resultOf(admin, packId);
+    eq("  what came back is kept as the project's built files", packed?.built?.map((b) => b.path), ["dist/site.zip", "out/notes.txt", "out/site.zip"]);
+    const packArtifact = packRun.events.find((e) => e.type === "task" && e.status === "succeeded")?.artifact ?? "";
+    check("  and the agent is told so", /Kept as built files of the project: out\/site\.zip \(\d+ bytes\), out\/notes\.txt \(\d+ bytes\), dist\/site\.zip \(\d+ bytes\)\./.test(packArtifact), packArtifact);
+    const removed = await admin.del(packed?.built?.find((b) => b.path === "out/notes.txt")?.url ?? "/none");
+    eq("a built file is removed by who may work on the project", [removed.status, (await bob.del(packed?.built?.[1]?.url ?? "/none")).status, (await resultOf(admin, packId))?.built?.map((b) => b.path)], [200, 403, ["dist/site.zip", "out/site.zip"]]);
+
+    // The Execute box of a workspace goes the same way.
+    await mockReset();
+    const boxed = await admin.post(`/api/workspaces/${packed?.workspaceId}/exec`, { command: "node pack.js" });
+    eq("the Execute box of the workspace keeps the packages a build leaves, and says which", [boxed.status, boxed.data?.exitCode, (boxed.data?.kept ?? []).map((k) => k.path)], [200, 0, ["dist/site.zip"]]);
+    eq("  the package in that folder is replaced, the others stay", (await resultOf(admin, packId))?.built?.map((b) => [b.path, b.id === packed?.built?.find((x) => x.path === b.path)?.id]), [["dist/site.zip", false], ["out/site.zip", true]]);
+
+    // ── Deleting ──
+    begin("Result: with a project goes what was built for it");
+    const kept = onDisk();
+    const gone = [(await admin.del(`/api/projects/${packId}`)).status, (await admin.del(`/api/projects/${goodId}`)).status, (await admin.del(`/api/projects/${stuckId}`)).status];
+    check("the projects are deleted, and their packages with them", gone.every((s) => s === 200) && onDisk() < kept, [gone, kept, onDisk()]);
+    eq("  the address of a deleted project's preview says that there is nothing", (await visitor(`${(packed?.preview?.base ?? "/site/none/")}pack.js`)).status, 404);
+    state.result = { siteId, pluginId };
+  }
+
+  const parts = { speech, render, knowledge, tools, skills, runs, notifications: notificationChecks, api: publicApi, adapters, reel, accounts, health, tokens, quota, standins, visibility, servers, browser, handover, result };
   for (const [name, part] of Object.entries(parts)) {
     if (wants(name)) await part();
   }

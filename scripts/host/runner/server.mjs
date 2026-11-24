@@ -281,9 +281,18 @@ function processesOf(uid) {
   return found;
 }
 
-/** Stop everything a run started: its process group, and, when it ran as a user of its own, everything of that user. */
-async function stopAll(child, user) {
-  if (child?.pid) {
+/**
+ * Stop everything a run started: its process group, and, when it ran as a
+ * user of its own, everything of that user. `run.done` says that the run is
+ * over and its user may be another run's by now: nothing is stopped for a
+ * run that is over.
+ */
+async function stopAll(child, user, run) {
+  if (run?.done) return;
+  // The group is known by the number of its first process, which is the
+  // group's for as long as the process has not been buried. After that the
+  // number may be somebody else's.
+  if (child?.pid && child.exitCode === null && child.signalCode === null) {
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch {
@@ -296,6 +305,7 @@ async function stopAll(child, user) {
   }
   if (!user) return;
   for (let round = 0; round < 40; round++) {
+    if (run?.done) return;
     const pids = processesOf(user.uid);
     if (pids.length === 0) return;
     for (const pid of pids) {
@@ -497,6 +507,7 @@ async function runOnce(request, slot, signal) {
   const home = join(run, "home");
   const temp = join(run, "tmp");
   let child = null;
+  const state = { done: false };
   try {
     // The folder of the run belongs to the user the program runs as, and
     // nobody else gets into it.
@@ -547,6 +558,7 @@ async function runOnce(request, slot, signal) {
     let stoppedWhy = "";
     let spawnError = "";
     let endedBy = "";
+    let exitCode = null;
 
     child = spawn(argv[0], argv.slice(1), {
       cwd: source,
@@ -560,35 +572,33 @@ async function runOnce(request, slot, signal) {
     child.stdout.on("data", (chunk) => stdout.add(chunk));
     child.stderr.on("data", (chunk) => stderr.add(chunk));
 
-    const ended = new Promise((resolveExit) => {
-      let settled = false;
-      const settle = (code) => {
-        if (settled) return;
-        settled = true;
-        resolveExit(code);
-      };
+    // The program itself has ended, or could not be started.
+    const exited = new Promise((resolveExit) => {
       child.once("error", (err) => {
         spawnError = err?.code === "ENOENT" ? `${argv[0]}: there is no such program here` : String(err?.message || err);
-        settle(null);
+        resolveExit();
       });
-      // The program itself has ended. What it started may still hold its
-      // output open: that is stopped, and its last words are waited for
-      // briefly, not for as long as something keeps them open.
       child.once("exit", (code, signal) => {
+        exitCode = code;
         if (signal) endedBy = signal;
-        setTimeout(() => void stopAll(child, user), 250);
-        setTimeout(() => {
-          child.stdout.destroy();
-          child.stderr.destroy();
-          settle(code);
-        }, 3000);
+        // What it started in its group goes with it, now: while the number
+        // of the group is still its own.
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+          } catch {
+            // Nothing of it is left.
+          }
+        }
+        resolveExit();
       });
-      child.once("close", (code) => settle(code));
     });
+    // Everything it wrote has been read.
+    const closed = new Promise((resolveClose) => child.once("close", resolveClose));
     const stop = (why) => {
       if (stoppedWhy) return;
       stoppedWhy = why;
-      void stopAll(child, user);
+      void stopAll(child, user, state);
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -611,12 +621,21 @@ async function runOnce(request, slot, signal) {
     const onAbort = () => stop("the request was given up");
     signal.addEventListener("abort", onAbort, { once: true });
 
-    const exitCode = await ended;
+    await exited;
     clearTimeout(timer);
     clearInterval(watch);
     signal.removeEventListener("abort", onAbort);
-    // Whatever it left running goes before its files are looked at: nothing changes them under the reader.
-    await stopAll(child, user);
+    // Whatever it left running goes before its files are looked at: nothing
+    // changes them under the reader, and nothing holds its output open.
+    await stopAll(child, user, state);
+    if (!spawnError) {
+      // Its last words are waited for, but not for as long as something keeps them open.
+      let giveUp = null;
+      await Promise.race([closed, new Promise((resolveWait) => (giveUp = setTimeout(resolveWait, 3000)))]);
+      clearTimeout(giveUp);
+    }
+    child.stdout.destroy();
+    child.stderr.destroy();
 
     let errText = stderr.text();
     if (spawnError) errText += `${errText ? "\n" : ""}[runner] ${spawnError}`;
@@ -628,7 +647,7 @@ async function runOnce(request, slot, signal) {
     }
     const handed = stoppedWhy || exitCode === null ? { kept: [], notKept: [] } : await collectKept(source, input);
     return {
-      exitCode: stoppedWhy ? null : exitCode,
+      exitCode: stoppedWhy || spawnError ? null : exitCode,
       stdout: stdout.text(),
       stderr: errText,
       durationMs: Date.now() - started,
@@ -638,7 +657,10 @@ async function runOnce(request, slot, signal) {
     };
   } finally {
     if (child) active.delete(child);
-    await stopAll(child, user).catch(() => undefined);
+    await stopAll(child, user, state).catch(() => undefined);
+    // From here on the run is over: its user may be the next run's, and
+    // nothing that was started for this run stops anything any more.
+    state.done = true;
     await rm(run, { recursive: true, force: true }).catch(() => undefined);
     await sweepShared(user).catch(() => undefined);
   }

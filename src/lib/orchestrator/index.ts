@@ -1757,6 +1757,7 @@ export async function executeRun(runId: string): Promise<void> {
         const state = buildStateOf(projectId, workspace.id, allFiles(workspace.id));
         if (state?.last?.ok && state.last.current) {
           const made = listBuilt(projectId).filter((b) => b.command === plan.command && b.createdAt.getTime() >= state.last!.at - 60_000);
+          emit({ type: "build", state: "ok", message: `Built with ${plan.label}.` });
           return { plan, ok: true, exitCode: 0, timedOut: false, log: state.last.log, kept: made, fixRounds };
         }
         emit({ type: "build", state: "started", message: `Building the project with ${plan.label}. The first build fetches what it is built with, which can take some minutes.` });

@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { mediaAssets, projects, workspaceFiles, workspaces } from "@/db/schema";
 import { isMediaFileName } from "@/lib/media/files";
 import { mediaFileResponse } from "@/lib/media/serve";
-import { siteContentType, siteOf } from "@/lib/result/kinds";
+import { siteContentType, siteOf, underSiteBase } from "@/lib/result/kinds";
 import { projectOfSiteToken } from "@/lib/result/site";
 
 export const dynamic = "force-dynamic";
@@ -58,8 +58,11 @@ export async function GET(req: Request, { params }: { params: { token: string; p
 
   const base = `/site/${params.token}/`;
   const segments = params.path ?? [];
-  // Nothing may lead out of the folder, however it is written.
-  if (segments.some((part) => part === ".." || part === "." || part.includes("\\") || part.includes("\u0000"))) return plain(404, "Not found.");
+  // Nothing may lead out of the folder, however it is written: a part that
+  // was written with an encoded slash is looked at piece by piece.
+  if (segments.flatMap((part) => part.split("/")).some((part) => part === ".." || part === "." || part === "" || part.includes("\\") || part.includes("\u0000"))) {
+    return plain(404, "Not found.");
+  }
   const path = segments.join("/");
 
   const fileAt = (at: string) =>
@@ -93,7 +96,8 @@ export async function GET(req: Request, { params }: { params: { token: string; p
   }
 
   const file = fileAt(path);
-  if (file) return new Response(file.content, { status: 200, headers: headers(siteContentType(file.path)) });
+  // What a page names from the root of its site ("/css/style.css") is found under this address.
+  if (file) return new Response(underSiteBase(file.path, file.content, base), { status: 200, headers: headers(siteContentType(file.path)) });
   // A folder, asked for by its name: its first page, under the page's own address.
   for (const index of [`${path}/index.html`, `${path}/index.htm`]) {
     if (fileAt(index)) return redirect(index);
