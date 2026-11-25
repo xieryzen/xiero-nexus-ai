@@ -55,6 +55,12 @@ blocked. The models were fine; the server had no way out.
   was reached and refused the sign-in, it showed another host key, its name
   has no address. In words that hold nothing of the node.
 
+- **`check` says how the machine is**: since when it runs, its memory and
+  swap and how much of them is free, its load, and whether the kernel ended
+  programs for lack of memory in the last seven days, inside a container
+  that reached its limit or because the whole machine had none left. A
+  machine that answered nobody for a while can then be asked why.
+
 ### Notes
 
 - Whether this server is cut off can only be told where it has two providers

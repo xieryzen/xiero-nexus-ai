@@ -1002,7 +1002,13 @@ bash scripts/host/over-ssh.sh workforce -- --as-owner --give-tools
 bash scripts/host/over-ssh.sh workforce -- --as-owner --inventory-only --try-build
 ```
 
-`check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
+`check` runs [`node-check.sh`](node-check.sh). Of the machine it says since
+when it runs, how much memory and swap it has and how much of them is free,
+its load, and (v2.0.1) whether the kernel ended programs for lack of memory
+in the last seven days: inside a container that reached its own limit, which
+harms nothing else, or because the whole machine had none left, after which
+a machine answers nobody for a while, neither over SSH nor as a site. It
+says whether Wings and
 Docker are there, which servers hold the app, what is in the named server's
 files, what that server runs when it starts, and how the site's address is
 answered on the machine: where the name leads, what listens on ports 80 and

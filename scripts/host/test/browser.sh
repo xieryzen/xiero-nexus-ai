@@ -658,6 +658,28 @@ check "an image that is old: how old, and how its Chromium gets its updates" lin
 FAKE_BROWSER_STATE=exited looked
 check "a container that does not run is said" said "container xiero-browser: exited"
 check "  with what starts it" said "It does not run: the action \"browser\" starts it again."
+
+# How the machine is: since when it runs, its memory, and what the kernel
+# ended for lack of it. The numbers are made up, in the place of /proc.
+mkdir -p "${WORK}/proc"
+printf 'MemTotal:        4039000 kB\nMemAvailable:     212000 kB\nSwapTotal:       2097148 kB\nSwapFree:          12000 kB\n' > "${WORK}/proc/meminfo"
+echo "93784.21 300.00" > "${WORK}/proc/uptime"
+echo "7.81 6.02 4.40 3/412 9911" > "${WORK}/proc/loadavg"
+{
+  echo "2026-11-24T14:58:03+0000 node kernel: Memory cgroup out of memory: Killed process 4100 (java) total-vm:9000000kB, anon-rss:3100000kB"
+  echo "2026-11-24T15:02:11+0000 node kernel: Out of memory: Killed process 4321 (java) total-vm:7340032kB, anon-rss:2900000kB"
+  echo "2026-11-24T15:02:40+0000 node kernel: Out of memory: Killed process 811 (sshd) total-vm:15000kB, anon-rss:1200kB"
+} > "${WORK}/kernel.log"
+XIERO_PROC="${WORK}/proc" XIERO_KERNEL_LOG="${WORK}/kernel.log" looked
+check "the machine: since when it runs" line '^  Running +for 1 day and 2 hours \(started [0-9-]+ [0-9:]+ UTC\)$'
+check "  its memory and its swap, and how much of them is free" line '^  Memory +3\.9 GB, 207 MB of it free now; swap 2\.0 GB, 12 MB of it free$'
+check "  its load" line '^  Load +7\.81 6\.02 4\.40 over 1, 5 and 15 minutes, on [0-9?]+ processors$'
+check "  what the kernel ended for lack of memory, and how much of it because the whole machine had none" line '^  No memory +in the last 7 days the kernel ended 3 programs for lack of memory: 2 because the whole machine had none left, 1 inside a container that reached its own limit$'
+check "  the last of them, and when" said 'The last: "sshd", at 2026-11-24 15:02.'
+check "  and what that does to a machine" said "A machine without memory answers nobody for a while."
+echo "2026-11-23T02:10:00+0000 node kernel: Linux version 6.12.0" > "${WORK}/kernel.log"
+XIERO_PROC="${WORK}/proc" XIERO_KERNEL_LOG="${WORK}/kernel.log" looked
+check "a kernel that ended nothing: said so" line '^  No memory +the kernel ended no program for lack of memory in the last 7 days$'
 FAKE_SERVER=stopped looked
 check "a server that is not running is not asked" said "The server is not running: whether it reaches the service is seen when it runs."
 check_not "  " said "takes the token"

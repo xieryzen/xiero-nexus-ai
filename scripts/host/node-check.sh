@@ -103,6 +103,64 @@ row "Signed in" "$(id -un) (user number $(id -u))"
 if [ "$(id -u)" != "0" ]; then more "Not root: some of what follows may be hidden from this user."; fi
 row "Time" "$(date -u '+%Y-%m-%d %H:%M') UTC"
 
+# How the machine is: since when it runs, its memory, its load, and whether
+# the kernel had to end programs for lack of memory. A machine that is short
+# of memory answers nobody for a while: no SSH, no site, and no way out for
+# the app either. PROC is where those numbers are read (for the tests).
+PROC="${XIERO_PROC:-/proc}"
+if [ -r "${PROC}/uptime" ]; then
+  up_seconds="$(awk '{ print int($1) }' "${PROC}/uptime" 2> /dev/null || echo 0)"
+  up_words="$(awk -v s="${up_seconds}" 'BEGIN {
+    d = int(s / 86400); h = int((s % 86400) / 3600); m = int((s % 3600) / 60)
+    if (d > 0) printf "%d day%s and %d hour%s", d, (d == 1 ? "" : "s"), h, (h == 1 ? "" : "s")
+    else if (h > 0) printf "%d hour%s and %d minute%s", h, (h == 1 ? "" : "s"), m, (m == 1 ? "" : "s")
+    else printf "%d minute%s", m, (m == 1 ? "" : "s")
+  }')"
+  since="$(date -u -d "@$(($(date +%s) - up_seconds))" '+%Y-%m-%d %H:%M' 2> /dev/null || true)"
+  row "Running" "for ${up_words}${since:+ (started ${since} UTC)}"
+fi
+if [ -r "${PROC}/meminfo" ]; then
+  mem_total="$(awk '/^MemTotal:/ { print $2 }' "${PROC}/meminfo")"
+  mem_free="$(awk '/^MemAvailable:/ { print $2 }' "${PROC}/meminfo")"
+  swap_total="$(awk '/^SwapTotal:/ { print $2 }' "${PROC}/meminfo")"
+  swap_free="$(awk '/^SwapFree:/ { print $2 }' "${PROC}/meminfo")"
+  if [ "${swap_total:-0}" -gt 0 ] 2> /dev/null; then
+    swap_says="swap $(human "${swap_total}"), $(human "${swap_free:-0}") of it free"
+  else
+    swap_says="no swap"
+  fi
+  [ -z "${mem_total}" ] || row "Memory" "$(human "${mem_total}"), $(human "${mem_free:-0}") of it free now; ${swap_says}"
+fi
+if [ -r "${PROC}/loadavg" ]; then
+  row "Load" "$(cut -d' ' -f1-3 "${PROC}/loadavg" 2> /dev/null) over 1, 5 and 15 minutes, on $(nproc 2> /dev/null || echo "?") processors"
+fi
+# What the kernel wrote when it ended a program for lack of memory, in the
+# last seven days: "Memory cgroup out of memory" when a container reached its
+# own limit (that harms nothing else), "Out of memory" when the whole machine
+# had none left. XIERO_KERNEL_LOG: a file to read instead (for the tests).
+kernel_said=""
+if [ -n "${XIERO_KERNEL_LOG:-}" ]; then
+  kernel_said="$(cat "${XIERO_KERNEL_LOG}" 2> /dev/null || true)"
+elif have journalctl; then
+  kernel_said="$(timeout 60 journalctl _TRANSPORT=kernel --no-pager -o short-iso --since '-7 days' 2> /dev/null || true)"
+elif have dmesg; then
+  kernel_said="$(timeout 30 dmesg -T 2> /dev/null || true)"
+fi
+ended="$(printf '%s\n' "${kernel_said}" | grep -i 'out of memory: killed process' || true)"
+if [ -n "${ended}" ]; then
+  in_container="$(printf '%s\n' "${ended}" | grep -ci 'memory cgroup out of memory' || true)"
+  all="$(printf '%s\n' "${ended}" | grep -c . || true)"
+  whole=$((all - in_container))
+  last="$(printf '%s\n' "${ended}" | tail -n 1)"
+  last_what="$(printf '%s\n' "${last}" | sed -n 's/.*[Kk]illed process [0-9]* (\([^)]*\)).*/\1/p')"
+  last_when="$(printf '%s\n' "${last}" | awk '{ print $1 }' | cut -c1-16 | tr 'T' ' ')"
+  row "No memory" "in the last 7 days the kernel ended ${all} program$([ "${all}" = "1" ] || echo s) for lack of memory: ${whole} because the whole machine had none left, ${in_container} inside a container that reached its own limit"
+  more "The last: \"${last_what:-?}\"${last_when:+, at ${last_when}}."
+  if [ "${whole}" -gt 0 ]; then more "A machine without memory answers nobody for a while. What may use how much: the server's limit in the panel, and --memory of the runner and of the browser service."; fi
+elif [ -n "${kernel_said}" ]; then
+  row "No memory" "the kernel ended no program for lack of memory in the last 7 days"
+fi
+
 # ── Wings and Docker ─────────────────────────────────────────────────────────
 
 head_line "Wings and Docker"
