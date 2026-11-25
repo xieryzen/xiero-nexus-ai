@@ -7,6 +7,70 @@ alpha, dev) are described in [RELEASING.md](RELEASING.md).
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-25
+
+A server that loses its connection. Seen on a real one: two runs failed in the
+same minute, each with "None of the 7 models of this task gave an answer" and
+seven lines of "Could not reach provider", and every task behind them was
+blocked. The models were fine; the server had no way out.
+
+### Fixed
+
+- **A task waits for a connection.** When none of a task's models could be
+  connected to at all (the connection was refused or timed out, the name had
+  no address), the task is not failed, and the tasks behind it are not
+  blocked: it waits and asks again, after one minute, two, five, ten and then
+  every quarter of an hour, for an hour in all, as it does for a limit
+  (`RUN_LIMIT_WAIT_MINUTES`; `0` turns it off). When the connection is back,
+  the run goes on. **Cancel** ends the wait; **Continue** does what is left
+  of a run that failed.
+- **It says what it is.** While it waits, and when it failed after waiting,
+  a task says that no provider could be connected to and what that points
+  at: with several providers out of reach at once, "the cause is most likely
+  [this server's] own connection to the internet or its name lookup (DNS),
+  not the models"; with one, the provider is named and it can be either
+  side. Chat says the same under "Could not reach provider" when no other
+  provider can be reached either, and says it after the first model: it used
+  to ask every model in turn, which with many models took minutes.
+- **A lost connection is not held against the models.** Three requests
+  without an answer put a model away until a check passes, and a check that
+  fails does at once: after an outage of an hour a server had its models left
+  out of the lists, some for hours. Now a request that got no answer is
+  followed by a question to up to three other providers that have answered
+  before (their address, no key, nothing asked for), and to two that never
+  did, which can speak for the way out and not against it. When none of them
+  can be reached, this server is cut off: nothing is written down about the model,
+  the check of the models ends its round and tries again a minute later, and
+  Test says "Nothing was written down about the model". When one answers,
+  everything is as before: the provider is out of reach, and its models rest
+  and are put away.
+- A name that no address was found for ("Could not resolve Base URL host")
+  was taken for a model that may have refused its tools, and the model was
+  asked again without them. It says nothing about tools, like a connection
+  that failed.
+
+- **The Deploy workflow says why it could not get to the node.** A run that
+  was not started said "could not connect to the node or sign in", and the
+  reason was in the log only. Its notice now says which it was: the node did
+  not answer on its SSH port in time, nothing listens on that port, the node
+  was reached and refused the sign-in, it showed another host key, its name
+  has no address. In words that hold nothing of the node.
+
+- **`check` says how the machine is**: since when it runs, its memory and
+  swap and how much of them is free, its load, and whether the kernel ended
+  programs for lack of memory in the last seven days, inside a container
+  that reached its limit or because the whole machine had none left. A
+  machine that answered nobody for a while can then be asked why.
+
+### Notes
+
+- Whether this server is cut off can only be told where it has two providers
+  at different addresses that have both answered before. With one provider a
+  task still waits for the connection, and its models are judged as before.
+- `GET /api/models/health`: a round has `cutOff` (it ended because this
+  server could not connect to any provider). `POST /api/models/{id}/test`
+  answers `unrecorded: true` when nothing was written down for that reason.
+
 ## [2.0.0] - 2026-11-24
 
 The app has another face, and another way to share it. The page one lands on

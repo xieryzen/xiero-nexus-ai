@@ -7,7 +7,7 @@ import { audit } from "@/lib/audit";
 import { Errors } from "@/lib/errors";
 import { getClientMeta } from "@/lib/request";
 import { modelIsMediaOnly } from "@/lib/gateway";
-import { askModel, recordOutcome } from "@/lib/model-health";
+import { NO_CONNECTION_NOTE, askModel, cutOffAt, recordOutcome } from "@/lib/model-health";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +37,11 @@ export const POST = handle(async (req, { params }) => {
   }
 
   const outcome = await askModel(model, provider);
+  // This server is cut off: the model was not asked, and nothing is written
+  // down about it (reach.ts). The answer says so, with what the request said.
+  if (await cutOffAt(provider, outcome)) {
+    return json({ ok: false, error: `${outcome.ok ? "" : outcome.error}. ${NO_CONNECTION_NOTE}`, unrecorded: true });
+  }
   recordOutcome(model, provider, outcome, user.id);
   audit({
     actorUserId: user.id,

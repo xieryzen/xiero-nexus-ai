@@ -691,7 +691,9 @@ not answer goes on with its second, so a project gets done, slowly. From
 v1.9.0 a task whose models are all limited waits for them (an hour unless
 `RUN_LIMIT_WAIT_MINUTES` says otherwise), and a run that stopped at a quota
 for the day is taken up again with **Continue**, which keeps what it
-finished. From v1.10.0 a task whose models do not answer is done by another
+finished. From v2.0.1 a task also waits when none of its models could be
+connected to at all (the node lost its connection for a while), and such a
+time is not held against the models. From v1.10.0 a task whose models do not answer is done by another
 model of the app that works (a stand-in), and a model that does not answer
 is left out until it does: the more providers the app has, the more often
 one of them answers. The
@@ -1000,7 +1002,13 @@ bash scripts/host/over-ssh.sh workforce -- --as-owner --give-tools
 bash scripts/host/over-ssh.sh workforce -- --as-owner --inventory-only --try-build
 ```
 
-`check` runs [`node-check.sh`](node-check.sh). It says whether Wings and
+`check` runs [`node-check.sh`](node-check.sh). Of the machine it says since
+when it runs, how much memory and swap it has and how much of them is free,
+its load, and (v2.0.1) whether the kernel ended programs for lack of memory
+in the last seven days: inside a container that reached its own limit, which
+harms nothing else, or because the whole machine had none left, after which
+a machine answers nobody for a while, neither over SSH nor as a site. It
+says whether Wings and
 Docker are there, which servers hold the app, what is in the named server's
 files, what that server runs when it starts, and how the site's address is
 answered on the machine: where the name leads, what listens on ports 80 and
@@ -1069,7 +1077,11 @@ machine other than the one `VPS_HOST` names: after a move to a new machine,
 or for a second one. The user and the password or key are still the ones of
 the secrets; `VPS_PORT` and `VPS_HOST_KEY`, which belong to the other
 machine, are not used for it. A run that was not started says why in its
-notice on the run's page.
+notice on the run's page, in words that hold nothing of the node (v2.0.1):
+the node did not answer on its SSH port in time (it is off or out of reach,
+or a firewall drops what comes from GitHub); the node is there and nothing
+listens on its SSH port; it was reached and refused the sign-in; it showed
+another host key; its name has no address.
 
 **The log of a workflow in a public repository can be read by anyone**, and
 what a node says about itself is nobody else's business. So:

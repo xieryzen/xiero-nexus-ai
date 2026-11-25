@@ -12,6 +12,8 @@ import { AppError, sanitizeUpstreamError } from "../errors";
 import { gatewayChatStream, type ResolvedModel } from "../gateway";
 import { formatHits, searchKnowledge, type KnowledgeHit } from "../knowledge/service";
 import { mayBeAboutTools } from "../orchestrator/plan";
+import { failedForNoConnection } from "../reach";
+import { CUT_OFF_NOTE } from "../reach-rules";
 import { seesSetup } from "../roles";
 import { runtime } from "../runtime";
 import { textFor } from "../shown";
@@ -153,6 +155,8 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
     return addMessage(chat, "assistant", clean, details, { prompt: promptTokens, completion: completionTokens });
   };
 
+  // The model that failed last, with its provider: for whether it is this server that is cut off (reach.ts).
+  const failedLast: { model: { provider: { baseUrl: string }; err: unknown } | null } = { model: null };
   try {
     // The page learns at once which conversation this is: it can stop it, and find it again.
     emit({ chat: { id: chat.id, title: chat.title } });
@@ -338,8 +342,12 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
             latencyMs: Date.now() - asked,
           });
           lastFailure = err;
+          failedLast.model = { provider: resolved.provider, err };
           // Part of an answer is on the page: another model does not go on from there.
           if (wrote || isCancelled()) throw err;
+          // This server is cut off (reach.ts): the next model would not be reached
+          // either, and with many models that is minutes of asking for nothing.
+          if (await failedForNoConnection(resolved.provider, err).catch(() => false)) throw err;
           if (withTools && !acted && (!(err instanceof AppError) || mayBeAboutTools(err))) aboutTools = true;
           current++;
           const next = candidates[current];
@@ -398,7 +406,13 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
       emit({ done: true, finishReason: stoppedAs(), usage: { promptTokens, completionTokens }, message: stored });
       return;
     }
-    const failure = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
+    let failure = err instanceof AppError ? err.message : sanitizeUpstreamError(err);
+    // No model was reached, and no other provider can be either: it is this
+    // server's connection, and whoever is shown the setup is told so.
+    const last = failedLast.model;
+    if (last && last.err === err && (await failedForNoConnection(last.provider, err).catch(() => false))) {
+      failure = `${failure.replace(/\.$/, "")}. ${CUT_OFF_NOTE}`;
+    }
     // What a provider said is for those who are shown the setup (shown.ts).
     const shown = textFor(user.role, failure) ?? "The answer could not be given.";
     // What was done until then stays in the conversation, so that the next answer knows it.

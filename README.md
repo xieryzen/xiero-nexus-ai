@@ -587,6 +587,21 @@ for days, and so had the manager model.
   credit, a quota that is used up for the day. A request that is refused for
   what it asked (too long, a parameter the model does not take) says nothing
   about the model.
+- **Not when it is this server that is cut off** (v2.0.1). A request that
+  got no answer (no connection, no address for the name, nothing in time)
+  says one of two things: that provider is out of reach, or this server is.
+  Before it is held against the model, up to three **other providers** that
+  have answered before are asked for nothing but an answer, at their own
+  address and without a key. One answer, and the way out works: the failure
+  is that provider's, and counts as above. (Two providers that never
+  answered are asked as well: they can speak for the way out, not against
+  it.) None, and this server is cut off:
+  the request says nothing about the model, **nothing is written down**, the
+  check of the models ends its round there (and tries again a minute later),
+  and Test says so. A server that lost its connection for an hour then has
+  its models as they were when the connection is back, where before they
+  were all put away, some of them for hours. With one provider, or all at
+  one address, there is nobody to ask, and everything is as it was.
 - **Back by itself.** A model that was put away is asked by the check after
   15 minutes, then after twice as long, and not before the time its provider
   named ("retry in 17 hours"); when it answers, a check or a request that
@@ -998,6 +1013,19 @@ only way on was to run the project again from its first task.
   wait a second time: what is left is for Continue. While it waits, a task
   keeps its place among the runs that work at the same time
   (`RUN_CONCURRENCY`).
+- **A task waits for a connection as well** (v2.0.1) — when none of a task's
+  models could be connected to at all (no request got as far as a provider:
+  the connection was refused or timed out, or the name had no address), the
+  task waits the same waits within the same time, and its card says what it
+  waits for. Several providers out of reach at once have one thing in
+  common, this server: "This server could not connect to any of the 3
+  providers it asked: its connection to the internet, or its name lookup
+  (DNS), seems to be down." With one provider it can be either side, and the
+  card names the provider. A task that waited in vain says the same before
+  it lists its models, so that seven lines of "Could not reach provider" are
+  not read as seven broken models. When the connection is back while it
+  waits, the task goes on and the run with it; after that, Continue does
+  what is left.
 - **It does not wait for a limit that does not end in that time**: a quota
   that is counted per day, an allowance of nothing ("limit: 0", a model that
   the tier does not include), an account without credit
@@ -1407,6 +1435,32 @@ what a role has is a plan an owner sets.
 - `DEFAULT_TOKEN_LIMIT` is now what the Free plan has a month, until an
   owner sets the plans.
 
+## A server that loses its connection (v2.0.1)
+
+A server can lose its way out for a while: its provider's network, its name
+lookup, a firewall. Every request to a model then ends with "Could not reach
+provider" or "Could not resolve Base URL host", whichever model is asked.
+Taken as it comes, that fails the task with a list of models that look
+broken, blocks every task behind it, and puts the models away for hours.
+None of it is true of the models, so none of it is done:
+
+- **A task waits** for the connection as it waits for a limit, and goes on
+  when it is back ([Runs that meet a limit](#runs-that-meet-a-limit-v190)).
+- **It says what it is**: no provider could be connected to, and whether
+  that points at this server (several providers at once) or can be either
+  side (one provider). A conversation says so after the first model that
+  was not reached, where it used to ask every model in turn.
+- **The models are not judged by it.** Other providers that have answered
+  before are asked whether anything answers at their address; when none
+  does, nothing is written down about the model that was not reached
+  ([A run goes on with a model that works](#a-run-goes-on-with-a-model-that-works-v1100)).
+
+What this cannot do: tell whose side it is where the server has one provider
+only, or all of them at one address; bring back an answer that was being
+written when the connection broke (a chat answer ends with what was written);
+or reach the server from outside, which is the host's and the network's
+matter. A run that waited its whole hour in vain is taken up with Continue.
+
 ## Provider adapters
 
 A new provider can **start from** a known one: the form's first field fills in
@@ -1740,7 +1794,7 @@ account you register through the UI becomes the owner.
 | `BROWSER_WAIT_MINUTES` | no | How long a page waits for a person who has to pass a CAPTCHA or enter a code: default 15, between 1 and 240. |
 | `BROWSER_MAX_PAGES` | no | How many pages all agents together may have open in the browser: default 8, between 1 and 50. |
 | `PROVIDER_RETRIES` | no | How often a request to a model provider is sent again when the answer is 429 (too many requests): 0 to 8, default 4; `0` = never. It waits as long as the provider asks (up to 90 seconds), else 3, 10, 25 and 45 seconds; two and a half minutes at most for one request. A provider that says it is busy (503, 529) is asked again twice. A model that was waited for in vain is not waited for again for five minutes, then for longer, until it answers. |
-| `RUN_LIMIT_WAIT_MINUTES` | no | How long a task of a project waits for its models when all of them say "not now" (429, 503, 529), asking them again meanwhile: 0 to 1440 minutes, default 60; `0` = it does not wait and fails at once. It never waits for a limit that does not end in that time (a quota per day, an account without credit). |
+| `RUN_LIMIT_WAIT_MINUTES` | no | How long a task of a project waits for its models when all of them say "not now" (429, 503, 529), or when none of them could be connected to at all, asking them again meanwhile: 0 to 1440 minutes, default 60; `0` = it does not wait and fails at once. It never waits for a limit that does not end in that time (a quota per day, an account without credit). |
 | `MODEL_STAND_INS` | no | Whether a run goes on with another model that works when the models a task, or the run itself, is set to do not answer: on unless `0` (also `off`, `false`, `no`). A project can say for itself (**Go on with another model**). A stand-in never costs more than the dearest model the task was set to. |
 | `BOOTSTRAP_ADMIN_USERNAME/EMAIL/PASSWORD` | no | first-run admin (only used when no users exist) |
 | `ALLOW_PRIVATE_PROVIDER_HOSTS` | no | comma list of hosts allowed to bypass the private-range block, for local model endpoints or the sandbox runner (e.g. `127.0.0.1,ollama.local`) |

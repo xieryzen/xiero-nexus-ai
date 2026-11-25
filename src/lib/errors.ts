@@ -27,6 +27,63 @@ export function isPlainError(err: unknown): boolean {
   return err instanceof AppError && (err as { plain?: unknown }).plain === true;
 }
 
+/**
+ * The error of a request that never got to the other side: no connection was
+ * made (it was refused, there is no way there, the name has no address just
+ * now). An AppError like the others, with a mark, so that whoever asks why a
+ * model did not answer can tell "it was never asked" from "it was asked, and
+ * something went wrong then": the first costs nothing to try again, and when
+ * it happens with every provider at once it is this server that is cut off
+ * (reach.ts). By a mark and not a class of its own: its name stays AppError,
+ * which is what a tool's error is told by (agent/loop.ts).
+ */
+export function notReached(message: string): AppError {
+  return Object.assign(new AppError(502, "network_error", message), { notReached: true });
+}
+
+/** True for a request that never got to the other side: notReached above, or a name that no address was found for. */
+export function wasNotReached(err: unknown): boolean {
+  return err instanceof AppError && ((err as { notReached?: unknown }).notReached === true || err.code === "dns_error");
+}
+
+/**
+ * What Node and its fetch call a connection that was not made. A certificate
+ * that is not accepted and a redirect that is not followed are not among
+ * them: there the other side was reached, and asking again changes nothing.
+ */
+const NO_CONNECTION_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "EHOSTDOWN",
+  "ENETUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+/**
+ * Whether what fetch threw says that no connection was made. fetch throws a
+ * TypeError ("fetch failed") whose cause holds the code; where a name has
+ * several addresses the cause holds one error for each.
+ */
+export function connectionNotMade(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  const look = (value: unknown, depth: number): boolean => {
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 4) return false;
+    seen.add(value);
+    const one = value as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (typeof one.code === "string" && NO_CONNECTION_CODES.has(one.code)) return true;
+    if (Array.isArray(one.errors) && one.errors.some((inner) => look(inner, depth + 1))) return true;
+    return look(one.cause, depth + 1);
+  };
+  return look(err, 0);
+}
+
 export const Errors = {
   unauthorized: (m = "Authentication required") =>
     new AppError(401, "unauthorized", m),

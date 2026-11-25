@@ -189,10 +189,15 @@ export function ModelsManager({
     setBusy((b) => ({ ...b, [m.id]: "test" }));
     setTestNote((n) => ({ ...n, [m.id]: undefined }));
     try {
-      const res = await apiFetch<{ ok: boolean; sample?: string; error?: string }>(
+      const res = await apiFetch<{ ok: boolean; sample?: string; error?: string; unrecorded?: boolean }>(
         `/api/models/${m.id}/test`,
         { method: "POST", body: JSON.stringify({}) },
       );
+      // This server is cut off: nothing was written down about the model, and nothing changes here.
+      if (res.unrecorded) {
+        setTestNote((n) => ({ ...n, [m.id]: { ok: false, text: res.error || "Test failed" } }));
+        return;
+      }
       patch({
         ...m,
         lastTestedAt: new Date(),
@@ -324,6 +329,12 @@ export function ModelsManager({
             {!checking && health.last && health.last.endedAt ? (
               <>
                 {" "}Last check <RelativeTime at={new Date(health.last.endedAt)} />: {health.last.checked} asked, {health.last.passed} answered, {health.last.failed} failed.
+                {health.last.cutOff ? (
+                  <span data-testid="check-cut-off">
+                    {" "}It ended early: this server could not connect to any provider, so its own connection to the internet, or its name lookup (DNS), seems to be down. Nothing
+                    was written down about the models that were not reached; they are asked again when the connection is back.
+                  </span>
+                ) : null}
               </>
             ) : null}
             {" "}Image, video, speech and embedding models are not checked: a check would generate one each time.
