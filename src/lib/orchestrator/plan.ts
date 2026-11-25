@@ -171,7 +171,8 @@ export function parseVerdict(text: string): Verdict | null {
  * nothing, so the agent's next model is asked instead.
  */
 export function mayBeAboutTools(error: { code?: string; message: string }): boolean {
-  if (error.code === "timeout" || error.code === "network_error") return false;
+  // A name that no address was found for (dns_error) is out of reach as well: nothing was asked.
+  if (error.code === "timeout" || error.code === "network_error" || error.code === "dns_error") return false;
   const status = Number(/^Provider responded (\d{3})\b/.exec(error.message)?.[1] ?? 0);
   return !(status === 408 || status === 429 || status >= 500);
 }

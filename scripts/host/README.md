@@ -691,7 +691,9 @@ not answer goes on with its second, so a project gets done, slowly. From
 v1.9.0 a task whose models are all limited waits for them (an hour unless
 `RUN_LIMIT_WAIT_MINUTES` says otherwise), and a run that stopped at a quota
 for the day is taken up again with **Continue**, which keeps what it
-finished. From v1.10.0 a task whose models do not answer is done by another
+finished. From v2.0.1 a task also waits when none of its models could be
+connected to at all (the node lost its connection for a while), and such a
+time is not held against the models. From v1.10.0 a task whose models do not answer is done by another
 model of the app that works (a stand-in), and a model that does not answer
 is left out until it does: the more providers the app has, the more often
 one of them answers. The
@@ -1069,7 +1071,11 @@ machine other than the one `VPS_HOST` names: after a move to a new machine,
 or for a second one. The user and the password or key are still the ones of
 the secrets; `VPS_PORT` and `VPS_HOST_KEY`, which belong to the other
 machine, are not used for it. A run that was not started says why in its
-notice on the run's page.
+notice on the run's page, in words that hold nothing of the node (v2.0.1):
+the node did not answer on its SSH port in time (it is off or out of reach,
+or a firewall drops what comes from GitHub); the node is there and nothing
+listens on its SSH port; it was reached and refused the sign-in; it showed
+another host key; its name has no address.
 
 **The log of a workflow in a public repository can be read by anyone**, and
 what a node says about itself is nobody else's business. So:

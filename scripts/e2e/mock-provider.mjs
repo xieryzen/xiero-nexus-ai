@@ -1275,9 +1275,33 @@ const KEYLESS = "/free/v1";
 // more chat model, for a file that switches a model off.
 let busyAsked = 0;
 
+/**
+ * /__offline?ms=<n>: for n milliseconds nothing listens at either port, as
+ * when the server the app runs on loses its connection: every provider
+ * refuses the connection, and so does whatever else the app would ask. The
+ * request itself is answered first; then the two servers close, with every
+ * connection that was open, and come back when the time is over.
+ */
+function offline(ms) {
+  for (const server of [api, cdn]) {
+    server.close();
+    server.closeAllConnections();
+  }
+  setTimeout(() => {
+    api.listen(API_PORT, "127.0.0.1");
+    cdn.listen(CDN_PORT, "127.0.0.1");
+  }, ms);
+}
+
 const api = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${API_PORT}`);
   if (url.pathname === "/__log") return send(res, 200, log);
+  if (url.pathname === "/__offline") {
+    const ms = Math.min(Math.max(Number(url.searchParams.get("ms") ?? 0) || 0, 0), 60_000);
+    send(res, 200, { ok: true, ms });
+    setTimeout(() => offline(ms), 30);
+    return;
+  }
   if (url.pathname === "/__reset") {
     log = [];
     return send(res, 200, { ok: true });
@@ -1394,6 +1418,13 @@ const api = http.createServer(async (req, res) => {
 // ─── "Another origin" ────────────────────────────────────────────────────────
 
 const cdn = http.createServer((req, res) => {
+  // The same providers at a second address, under /twin: for a check that
+  // needs two providers that are not at one address (is this server cut off?).
+  if (req.url.startsWith("/twin/")) {
+    req.url = req.url.slice("/twin".length);
+    api.emit("request", req, res);
+    return;
+  }
   record("cdn", req, null);
   const path = new URL(req.url, CDN).pathname;
   if (path.startsWith("/cdn/redirect/")) {

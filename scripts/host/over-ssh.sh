@@ -591,7 +591,19 @@ if [ -f "${TMP}/started" ]; then
   exit 92
 fi
 
-say "error: could not connect to the node or sign in (ssh ended with code ${ssh_code})."
+# Why, in words that hold nothing of the node: of a run that was not started
+# this line is all that a workflow shows without its log (from-workflow.sh).
+why="could not connect to the node or sign in"
+case "${ssh_said}" in
+  *"Host key verification failed"* | *"REMOTE HOST IDENTIFICATION"*) why="the node showed another host key than the one that is set" ;;
+  *"Permission denied"*) why="the node was reached and refused the sign-in with ${SIGN_IN}" ;;
+  *"Connection timed out"* | *"Operation timed out"*) why="the node did not answer on its SSH port in time: it is off or out of reach, or a firewall drops what comes from here" ;;
+  *"Connection refused"*) why="the node is there and nothing listens on its SSH port: SSH does not run there, or is on another port" ;;
+  *"No route to host"* | *"Network is unreachable"*) why="there is no way to the node from here" ;;
+  *"Could not resolve hostname"*) why="the name of the node has no address" ;;
+  *"Connection closed by"* | *"Connection reset by"* | *"kex_exchange_identification"*) why="the node closed the connection before the sign-in: it lets no more connections in, or none from here" ;;
+esac
+say "error: ${why} (ssh ended with code ${ssh_code})."
 case "${ssh_said}" in
   *"Host key verification failed"* | *"REMOTE HOST IDENTIFICATION"*)
     say "The node showed another host key than DEPLOY_HOST_KEY. If the node was set up again, replace the key; if not, someone else answered in its place."

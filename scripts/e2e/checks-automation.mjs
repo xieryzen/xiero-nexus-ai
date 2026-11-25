@@ -3867,6 +3867,109 @@ export async function automation(ctx) {
     const resumed = await runProject(admin, toStop, { goOn: true });
     eq("a run that was stopped is continued like one that failed", [lastStatus(resumed.events), (await tasksOf(toStop)).map((t) => t.status), (await runsOf(toStop)).map((r) => [r.status, r.continued])], ["succeeded", ["succeeded", "succeeded"], [["succeeded", true], ["cancelled", false]]]);
 
+    // ─── No connection ───────────────────────────────────────────────────────
+
+    begin("Limits: this server loses its connection, and the run waits for it");
+    /**
+     * The mock goes off the air (/__offline): nothing listens at its ports,
+     * as when the app's server has no way out. A second provider is the same
+     * mock at its other port, so that there are two providers that are not at
+     * one address: each is the other's witness (reach-rules.ts).
+     */
+    const offline = async (ms) => {
+      await fetch(`${MOCK}/__offline?ms=${ms}`);
+      await sleep(200);
+    };
+    const backOnAir = () => until(() => fetch(`${MOCK}/__log`).then((r) => r.status).catch(() => 0), (status) => status === 200, { tries: 60, gapMs: 250 });
+    const standing = async (...keys) => {
+      const all = (await admin.get("/api/models")).data?.models ?? [];
+      return keys.map((key) => {
+        const m = all.find((one) => one.id === state.models[key]);
+        return [m?.lastTestStatus ?? null, m?.useFailures ?? null, m?.hidden ?? null, m?.retryAt ?? null];
+      });
+    };
+    const untouched = ["ok", 0, false, null];
+    const NO_WAY_OUT = /^This server could not connect to any of the 2 providers it asked: its connection to the internet, or its name lookup \(DNS\), seems to be down\. Trying again in \d+ seconds?$/;
+
+    const far = await admin.post("/api/providers", { name: "Other address", adapter: "openai-compatible", baseUrl: `${CDN}/twin/openai/v1`, authType: "bearer", apiKey: KEY });
+    const farId = far.data?.provider?.id;
+    eq("a second provider, at another address", far.status, 201);
+    await model("near-a", openai, "near-a", ["text"]);
+    await model("far-a", farId, "far-a", ["text"]);
+    // Both have answered before: only a provider that ever answered is a witness.
+    const tested = [];
+    for (const key of ["near-a", "far-a"]) tested.push((await admin.post(`/api/models/${state.models[key]}/test`, {})).data?.ok);
+    eq("  both answer, each at its address", [tested, await standing("near-a", "far-a")], [[true, true], [untouched, untouched]]);
+    await agent("Islander", "Islandworker", { primaryModelRowId: state.models["near-a"], fallbackModelRowId: state.models["far-a"] });
+    const cutWf = await workflow("Cut off", [
+      { title: "Through the outage", objective: "One.", role: "Islandworker" },
+      { title: "After it", objective: "Two.", role: "Islandworker", dependsOn: [1] },
+    ]);
+    const island = await project(admin, { title: "Cut off", workflowId: cutWf, managerModelRowId: state.models["near-a"] });
+    await offline(2600);
+    const through = await runProject(admin, island);
+    await backOnAir();
+    const islandTasks = await tasksOf(island);
+    eq("the task does not fail, nor the one behind it: it waits for the connection, and is done when it is back", [lastStatus(through.events), islandTasks.map((t) => [t.status, t.error])], ["succeeded", [["succeeded", null], ["succeeded", null]]]);
+    const outage = (await attemptsOf(island)).filter((a) => a[0] === 1);
+    check("  it asked both models each time, in vain, until one answered", outage.length >= 5 && outage.at(-1)[2] === "ok" && outage.slice(0, -1).every((a) => a[2] === "error") && new Set(outage.slice(0, -1).map((a) => a[3])).size === 2, outage);
+    const attemptErrors = [...new Set(((await admin.get(`/api/projects/${island}/attempts`)).data?.attempts ?? []).filter((a) => a.status === "error").map((a) => a.error))];
+    eq("  what each request said: the provider was not reached", attemptErrors, ["Could not reach provider"]);
+    const cutNotes = waits(through.events, 1);
+    check("  while it waits, its card says what for: no provider can be connected to, so it is this server", cutNotes.length >= 2 && cutNotes.every((n) => NO_WAY_OUT.test(n.message)), cutNotes.map((n) => n.message));
+    eq("  nothing is held against the models: they were never asked", await standing("near-a", "far-a"), [untouched, untouched]);
+
+    begin("Limits: a check of the models while this server is cut off");
+    await offline(2500);
+    const testedOffline = await admin.post(`/api/models/${state.models["far-a"]}/test`, {});
+    const roundOffline = await admin.post("/api/models/health", { modelIds: [state.models["near-a"], state.models["far-a"]], wait: true });
+    await backOnAir();
+    eq(
+      "Test says that it is this server, and writes nothing down about the model",
+      [testedOffline.status, testedOffline.data?.ok, testedOffline.data?.unrecorded, testedOffline.data?.error],
+      [200, false, true, "Could not reach provider. This server could not connect to any other provider either: its own connection to the internet, or its name lookup (DNS), seems to be down. Nothing was written down about the model."],
+    );
+    const roundSaid = roundOffline.data?.round;
+    eq("a check of several ends at the first that cannot be reached, and says why", [roundOffline.status, roundSaid?.cutOff, roundSaid?.checked, roundSaid?.failed, roundSaid?.hidden], [200, true, 0, 0, []]);
+    eq("  the models are as they were: none is left out", await standing("near-a", "far-a"), [untouched, untouched]);
+    const roundBack = await admin.post("/api/models/health", { modelIds: [state.models["near-a"], state.models["far-a"]], wait: true });
+    eq("  with the connection back, the same check asks both", [roundBack.data?.round?.cutOff, roundBack.data?.round?.checked, roundBack.data?.round?.passed], [false, 2, 2]);
+
+    begin("Limits: one provider that is out of reach is that provider's matter");
+    // Nothing listens there, while the other providers answer: the way out of this server works.
+    const nowhere = `http://127.0.0.1:${Number(new URL(MOCK).port) + 777}`;
+    const gone = await admin.post("/api/providers", { name: "Gone away", adapter: "openai-compatible", baseUrl: `${nowhere}/openai/v1`, authType: "bearer", apiKey: KEY });
+    const goneId = gone.data?.provider?.id;
+    await model("gone-a", goneId, "gone-a", ["text"]);
+    await agent("Stranded", "Strandedworker", { primaryModelRowId: state.models["gone-a"] });
+    const goneWf = await workflow("Gone away", [{ title: "Nobody home", objective: "One.", role: "Strandedworker" }]);
+    // The project is set to the same model: a task also asks the model of its project.
+    const stranded = await project(admin, { title: "Gone away", workflowId: goneWf, managerModelRowId: state.models["gone-a"] });
+    const nobody = await runProject(admin, stranded);
+    const strandedTask = (await tasksOf(stranded))[0];
+    eq("the task waits its time for the connection, and fails with what it was that could not be reached", [lastStatus(nobody.events), strandedTask?.status, strandedTask?.error], [
+      "failed",
+      "failed",
+      "Could not reach provider\n\nThis server could not connect to Gone away: the provider does not answer at its address, or this server's own connection to the internet or its name lookup (DNS) is down. The task waited 6 seconds for a connection, and there was none.",
+    ]);
+    const goneNotes = waits(nobody.events, 1);
+    check(
+      "  while it waited, its card named the provider",
+      goneNotes.length >= 3 && goneNotes.every((n) => /^This server could not connect to Gone away: the provider does not answer at its address, or this server's connection is down\. Trying again in \d+ seconds?$/.test(n.message)),
+      goneNotes.map((n) => n.message),
+    );
+    check("  it waited the time that is set", spent(nobody.events, 1, "failed") >= WAIT_MS && spent(nobody.events, 1, "failed") < WAIT_MS + 5000, spent(nobody.events, 1, "failed"));
+    const goneNow = (await standing("gone-a"))[0];
+    check("  and its model is put away as before: other providers answer, so it is not this server", goneNow[0] === "error" && goneNow[1] >= 3 && goneNow[2] === true, goneNow);
+    eq("  the models of the others are as they were", await standing("near-a", "far-a"), [untouched, untouched]);
+
+    // Nothing of this stays: a provider where nobody answers would be asked by every later check of the models.
+    const cleared = [];
+    for (const name of ["Islander", "Stranded"]) cleared.push((await admin.del(`/api/agents/${state.agents[name]}`)).status);
+    for (const key of ["gone-a", "far-a", "near-a"]) cleared.push((await admin.del(`/api/models/${state.models[key]}`)).status);
+    for (const id of [goneId, farId]) cleared.push((await admin.del(`/api/providers/${id}`)).status);
+    eq("the agents, models and providers of these checks are deleted", cleared, Array(7).fill(200));
+
     // Left for the checks in the browser: a run that stopped half way, at a
     // limit that is over by the time someone looks at the page.
     await agent("Briefly stuck", "Brieflyworker", { primaryModelRowId: state.models["lim-f"] });

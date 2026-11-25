@@ -240,6 +240,7 @@ code=0
 DEPLOY_HOST_KEY="${OTHER_HOST_KEY}" remote plan || code=$?
 expect_exit "another host key than the node's: stops (91)" 91 "${code}"
 check "  says that the node showed another key" told "another host key"
+check "  in the line a workflow shows as well" told "error: the node showed another host key than the one that is set"
 check_not "  nothing ran on the node" said "ran="
 
 code=0
@@ -250,10 +251,12 @@ code=0
 DEPLOY_SSH_KEY="$(cat "${WORK}/stranger_key")" remote plan || code=$?
 expect_exit "a key the node does not know: stops (91)" 91 "${code}"
 check "  says that the node refused it" told "refused"
+check "  in the line a workflow shows: it was reached, and refused the sign-in" told "error: the node was reached and refused the sign-in with a key"
 
 code=0
 DEPLOY_PORT=1 remote plan || code=$?
 expect_exit "a port nothing listens on: stops (91)" 91 "${code}"
+check "  says that the node is there and nothing listens on that port" told "error: the node is there and nothing listens on its SSH port"
 
 code=0
 DEPLOY_HOST="${LOGIN}@127.0.0.1:${PORT}" DEPLOY_PORT="" DEPLOY_USER="" remote plan || code=$?

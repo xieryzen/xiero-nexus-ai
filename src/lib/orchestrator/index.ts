@@ -42,7 +42,7 @@ import {
   type MediaOptions,
   type TaskKind,
 } from "@/lib/creative/prompt";
-import { AppError, PlainError, sanitizeUpstreamError } from "@/lib/errors";
+import { AppError, PlainError, sanitizeUpstreamError, wasNotReached } from "@/lib/errors";
 import { gatewayChat, resolveChatModel, type ResolvedModel } from "@/lib/gateway";
 import { collectionIdsForAgent } from "@/lib/knowledge/service";
 import { isFailing, isResting } from "@/lib/model-health-rules";
@@ -92,7 +92,18 @@ import {
   reviewMaterial,
 } from "./deliverable";
 import { BUILD_FIX_ROUNDS, FIX_ACCEPTANCE, buildNote, fixObjective, fixTitle, grantedTools, isFixTask, pickFixer, type BuildReport } from "./build-phase";
-import { failureText, limitWaitMs, limitWaitNote, nextLimitWait, type LimitedModel, type ModelFailure } from "./limit-wait";
+import {
+  CONNECTION_WAIT,
+  connectionWaitNote,
+  failureText,
+  limitWaitMs,
+  limitWaitNote,
+  nextLimitWait,
+  noConnection,
+  type AskedModel,
+  type LimitedModel,
+  type ModelFailure,
+} from "./limit-wait";
 import {
   countMediaTasks,
   dependencyContext,
@@ -931,13 +942,14 @@ export async function executeRun(runId: string): Promise<void> {
     };
     /**
      * Wait before a task asks its models again, and say so on its card every
-     * quarter of a minute. The wait ends at once when the run is stopped, and
+     * quarter of a minute: `note` says what it waits for, given the time that
+     * is left in words. The wait ends at once when the run is stopped, and
      * when another task of the run has waited its whole time in vain.
      */
     const waitForLimits = async (
       seq: number,
       ms: number,
-      models: { limited: number; of: number },
+      note: (time: string) => { message: string; full: string },
     ): Promise<{ waitedMs: number; stopped: "cancelled" | "in vain" | null }> => {
       const started = Date.now();
       let told = 0;
@@ -949,7 +961,7 @@ export async function executeRun(runId: string): Promise<void> {
         if (left <= 0) return { waitedMs: ms, stopped: null };
         if (now - told >= 15_000) {
           told = now;
-          emit({ type: "progress", seq, waiting: true, ...limitWaitNote(waitWords(left), models) });
+          emit({ type: "progress", seq, waiting: true, ...note(waitWords(left)) });
         }
         await new Promise((resolve) => setTimeout(resolve, Math.min(left, 1000)));
       }
@@ -1340,13 +1352,17 @@ export async function executeRun(runId: string): Promise<void> {
         // the task's error, and for whether waiting for a limit can help.
         const failed = new Map<string, ModelFailure>();
         const limited = new Map<string, LimitedModel>();
-        // What the task has waited for the limits of its models (limit-wait.ts).
+        // The models a request was sent to, and whether it got to their provider:
+        // for whether it is this server that has no connection (limit-wait.ts).
+        const asked = new Map<string, AskedModel>();
+        // What the task has waited for the limits of its models, or for a connection (limit-wait.ts).
         let waitedMs = 0;
         let waits = 0;
 
         for (;;) {
           failed.clear();
           limited.clear();
+          asked.clear();
           // The models the task is set to that can be used now, then others
           // that work, then the ones it is set to that are failing or resting
           // (model-choice.ts). What is known about the models changes while a
@@ -1509,6 +1525,7 @@ export async function executeRun(runId: string): Promise<void> {
                 const limit = limitOf(e);
                 if (limit) limited.set(mid, limit);
                 else limited.delete(mid);
+                asked.set(mid, { provider: resolved.provider.name, noConnection: wasNotReached(e) });
                 if (!spent) {
                   // The calls that were answered before one failed were used all
                   // the same: they are on the account, and they are the task's.
@@ -1535,12 +1552,16 @@ export async function executeRun(runId: string): Promise<void> {
           }
           if (answered || stoppedByCancel || outOfTokens) break;
           // None of them answered. Where one said "not now", its limit can be
-          // over in a while: the task waits, and asks them all again.
+          // over in a while: the task waits, and asks them all again. The same
+          // where no request got as far as a provider: that is a connection,
+          // most often this server's own, and is back by itself as a rule.
+          const cut = noConnection([...asked.values()]);
           const wait = limitWaits.inVain
             ? null
-            : nextLimitWait({ round: waits, waitedMs, totalMs: limitWaits.totalMs, limited: [...limited.values()] });
+            : nextLimitWait({ round: waits, waitedMs, totalMs: limitWaits.totalMs, limited: cut ? [CONNECTION_WAIT] : [...limited.values()] });
           if (wait === null) break;
-          const went = await waitForLimits(seq, wait, { limited: limited.size, of: order.ids.length });
+          const waitingFor = { limited: limited.size, of: order.ids.length };
+          const went = await waitForLimits(seq, wait, (time) => (cut ? connectionWaitNote(time, cut) : limitWaitNote(time, waitingFor)));
           waitedMs += went.waitedMs;
           waits++;
           if (went.stopped === "cancelled") stoppedByCancel = true;
@@ -1558,7 +1579,7 @@ export async function executeRun(runId: string): Promise<void> {
         // Without tokens for a model: a task that asked none was not started,
         // and one whose model failed is not given its next.
         if (!answered && outOfTokens) return failTask(accountSpentMessage(), undefined, attempt === 0 ? "cancelled" : "failed");
-        if (!answered) return failTask(failureText([...failed.values()], lastError, waitedMs > 0 ? waitWords(waitedMs) : ""));
+        if (!answered) return failTask(failureText([...failed.values()], lastError, waitedMs > 0 ? waitWords(waitedMs) : "", noConnection([...asked.values()])));
       }
 
       if (!generated) {

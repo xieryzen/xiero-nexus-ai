@@ -22,6 +22,7 @@ import type {
   ToolDefinition,
 } from "./adapters/types";
 import { noteAnswer, noteFailure } from "./model-standing";
+import { failedForNoConnection, sawAnswer, sawFailure } from "./reach";
 import { AppError, Errors } from "./errors";
 import { decryptSecret } from "./secrets";
 
@@ -183,6 +184,23 @@ function chatRequest(resolved: ResolvedModel, messages: ChatMessage[], opts: Cha
   };
 }
 
+/**
+ * A request failed: written down for the model (model-standing.ts), unless
+ * it failed because this server is cut off (reach.ts). That says nothing
+ * about the model, and three such requests would put it away.
+ */
+async function noteFailed(resolved: ResolvedModel, err: unknown, opts: ChatOptions): Promise<void> {
+  sawFailure(err);
+  if (opts.unnoted) return;
+  let cutOff = false;
+  try {
+    cutOff = await failedForNoConnection(resolved.provider, err);
+  } catch {
+    cutOff = false;
+  }
+  if (!cutOff) noteFailure(resolved.model, resolved.provider, err);
+}
+
 /** Non-streaming chat completion through the resolved provider/model. */
 export async function gatewayChat(
   resolved: ResolvedModel,
@@ -192,10 +210,11 @@ export async function gatewayChat(
   const adapter = getAdapter(resolved.provider.adapter);
   try {
     const result = await adapter.chat(contextFor(resolved.provider), chatRequest(resolved, messages, opts));
+    sawAnswer();
     if (!opts.unnoted) noteAnswer(resolved.model, resolved.provider);
     return result;
   } catch (err) {
-    if (!opts.unnoted) noteFailure(resolved.model, resolved.provider, err);
+    await noteFailed(resolved, err, opts);
     throw err;
   }
 }
@@ -210,10 +229,11 @@ export async function gatewayChatStream(
   const adapter = getAdapter(resolved.provider.adapter);
   try {
     const result = await adapter.chatStream(contextFor(resolved.provider), chatRequest(resolved, messages, opts), onDelta);
+    sawAnswer();
     if (!opts.unnoted) noteAnswer(resolved.model, resolved.provider);
     return result;
   } catch (err) {
-    if (!opts.unnoted) noteFailure(resolved.model, resolved.provider, err);
+    await noteFailed(resolved, err, opts);
     throw err;
   }
 }

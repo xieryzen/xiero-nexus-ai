@@ -1,5 +1,5 @@
 import "server-only";
-import { AppError } from "./errors";
+import { AppError, connectionNotMade, notReached } from "./errors";
 import { Patience, fetchWithRetries, retryKey, retryLimit } from "./retry";
 import { assertSafeProviderUrl } from "./ssrf";
 
@@ -45,7 +45,9 @@ export async function safeFetch(
         throw new AppError(504, "timeout", "Upstream request timed out");
       }
       if (err instanceof AppError) throw err;
-      throw new AppError(502, "network_error", "Could not reach provider");
+      // Told apart for whoever asks again (errors.ts): no connection was made,
+      // or one was and the answer could not be taken (a certificate, a redirect).
+      throw connectionNotMade(err) ? notReached("Could not reach provider") : new AppError(502, "network_error", "Could not reach provider");
     } finally {
       clearTimeout(timer);
     }

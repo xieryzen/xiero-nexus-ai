@@ -8,6 +8,8 @@ import { isMediaOnly } from "./capabilities";
 import { AppError, sanitizeUpstreamError } from "./errors";
 import { gatewayChat } from "./gateway";
 import { HEALTH_CHECK_TIMEOUT_MS, RETRY_AT_MAX_MS, USE_FAILURES_TO_HIDE, failureKind, healthIntervalMs, isDue, isFailing } from "./model-health-rules";
+import { isCutOff } from "./reach";
+import { CUT_OFF_NOTE, asksWitnesses } from "./reach-rules";
 import { runtime } from "./runtime";
 import { stopping } from "./shutdown";
 import { limitOf } from "./upstream";
@@ -34,6 +36,8 @@ const PAUSE_MS = 1_000;
 const ROUND_MAX = 300;
 /** How often the worker looks for models that are due. */
 const LOOK_EVERY_MS = 15_000;
+/** After a round that ended because this server is cut off, the worker waits this long before it tries the next. */
+const CUT_OFF_PAUSE_MS = 60_000;
 
 /** Before a model that worked is written down as failing for something temporary, it is asked once more after this long. */
 function secondTryAfterMs(): number {
@@ -70,6 +74,23 @@ export async function askModel(model: Model, provider: Provider): Promise<CheckO
     return { ok: false, error, code, kind: failureKind({ code, message: error }), latencyMs: Date.now() - started, waitMs: limitOf(err)?.waitMs ?? null };
   }
 }
+
+/**
+ * Whether a check failed because this server is cut off: it got no answer,
+ * and no other provider can be reached either (reach.ts). Such a check says
+ * nothing about the model, and is not written down.
+ */
+export async function cutOffAt(provider: Provider, outcome: CheckOutcome): Promise<boolean> {
+  if (outcome.ok || !asksWitnesses(outcome.code)) return false;
+  try {
+    return await isCutOff(provider.baseUrl);
+  } catch {
+    return false;
+  }
+}
+
+/** What a check that was not written down for that reason says. */
+export const NO_CONNECTION_NOTE = `${CUT_OFF_NOTE} Nothing was written down about the model.`;
 
 /** Write the result of a check down: on the model, and as usage. `userId` is who asked for it; null for the automatic check. */
 export function recordOutcome(model: Model, provider: Provider, outcome: CheckOutcome, userId: string | null): void {
@@ -159,6 +180,12 @@ export interface HealthRound {
   hidden: string[];
   /** Models that were left out and are offered again, by name. */
   restored: string[];
+  /**
+   * The round ended early: this server could not connect to any provider.
+   * Nothing was written down for the model it was asking, nor for the ones
+   * after it; they are asked when the connection is back.
+   */
+  cutOff: boolean;
 }
 
 interface HealthState {
@@ -167,6 +194,8 @@ interface HealthState {
   lastRoundAt: number | null;
   last: HealthRound | null;
   lastLookAt: number;
+  /** When a round last ended because this server is cut off. Null: the last one did not. */
+  cutOffRoundAt: number | null;
 }
 
 /** One per server process: the worker and the request handlers see the same. */
@@ -174,7 +203,7 @@ function healthState(): HealthState {
   const cache = runtime().cache;
   let entry = cache.get("model-health");
   if (!entry) {
-    entry = { value: { running: false, startedAt: null, lastRoundAt: null, last: null, lastLookAt: 0 } satisfies HealthState, at: Date.now() };
+    entry = { value: { running: false, startedAt: null, lastRoundAt: null, last: null, lastLookAt: 0, cutOffRoundAt: null } satisfies HealthState, at: Date.now() };
     cache.set("model-health", entry);
   }
   return entry.value as HealthState;
@@ -223,7 +252,7 @@ export async function runHealthRound(opts: RoundOptions = {}): Promise<HealthRou
   state.running = true;
   state.startedAt = Date.now();
   const userId = opts.userId ?? null;
-  const round: HealthRound = { startedAt: state.startedAt, endedAt: null, userId, checked: 0, passed: 0, failed: 0, hidden: [], restored: [] };
+  const round: HealthRound = { startedAt: state.startedAt, endedAt: null, userId, checked: 0, passed: 0, failed: 0, hidden: [], restored: [], cutOff: false };
   try {
     const interval = intervalMs();
     const now = Date.now();
@@ -237,11 +266,22 @@ export async function runHealthRound(opts: RoundOptions = {}): Promise<HealthRou
       const { model, provider } = candidate;
       const wasFailing = isFailing(model);
       let outcome = await askModel(model, provider);
+      // This server is cut off: the model was not asked at all, and the ones
+      // after it would not be either. Nothing is written down, the round ends,
+      // and they are all still due when the connection is back.
+      if (await cutOffAt(provider, outcome)) {
+        round.cutOff = true;
+        break;
+      }
       // A limit or a busy moment is often over a little later: a model that worked is asked once more before it is taken away.
       if (!outcome.ok && outcome.kind === "temporary" && !wasFailing) {
         await sleep(secondTryAfterMs());
         if (stopping()) break;
         outcome = await askModel(model, provider);
+        if (await cutOffAt(provider, outcome)) {
+          round.cutOff = true;
+          break;
+        }
       }
       // Deleted while it was asked: there is nothing to write on.
       if (!db.select({ id: models.id }).from(models).where(eq(models.id, model.id)).get()) continue;
@@ -273,6 +313,7 @@ export async function runHealthRound(opts: RoundOptions = {}): Promise<HealthRou
     state.running = false;
     state.lastRoundAt = round.endedAt;
     state.last = round;
+    state.cutOffRoundAt = round.cutOff ? round.endedAt : null;
   }
   return round;
 }
@@ -284,6 +325,8 @@ export function ensureHealthRound(): void {
   const state = healthState();
   const now = Date.now();
   if (state.running || now - state.lastLookAt < LOOK_EVERY_MS) return;
+  // Cut off a moment ago: the models are all still due, and are not asked every quarter of a minute for it.
+  if (state.cutOffRoundAt !== null && now - state.cutOffRoundAt < CUT_OFF_PAUSE_MS) return;
   state.lastLookAt = now;
   if (!checkable().some((c) => isDue(c.model, now, interval))) return;
   void runHealthRound().catch((err) => {
