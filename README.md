@@ -1446,7 +1446,8 @@ None of it is true of the models, so none of it is done:
   when it is back ([Runs that meet a limit](#runs-that-meet-a-limit-v190)).
 - **It says what it is**: no provider could be connected to, and whether
   that points at this server (several providers at once) or can be either
-  side (one provider).
+  side (one provider). A conversation says so after the first model that
+  was not reached, where it used to ask every model in turn.
 - **The models are not judged by it.** Other providers that have answered
   before are asked whether anything answers at their address; when none
   does, nothing is written down about the model that was not reached

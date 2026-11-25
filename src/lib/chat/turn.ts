@@ -345,6 +345,9 @@ export async function runChatTurn(input: TurnInput): Promise<void> {
           failedLast.model = { provider: resolved.provider, err };
           // Part of an answer is on the page: another model does not go on from there.
           if (wrote || isCancelled()) throw err;
+          // This server is cut off (reach.ts): the next model would not be reached
+          // either, and with many models that is minutes of asking for nothing.
+          if (await failedForNoConnection(resolved.provider, err).catch(() => false)) throw err;
           if (withTools && !acted && (!(err instanceof AppError) || mayBeAboutTools(err))) aboutTools = true;
           current++;
           const next = candidates[current];

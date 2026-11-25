@@ -30,7 +30,8 @@ blocked. The models were fine; the server had no way out.
   [this server's] own connection to the internet or its name lookup (DNS),
   not the models"; with one, the provider is named and it can be either
   side. Chat says the same under "Could not reach provider" when no other
-  provider can be reached either.
+  provider can be reached either, and says it after the first model: it used
+  to ask every model in turn, which with many models took minutes.
 - **A lost connection is not held against the models.** Three requests
   without an answer put a model away until a check passes, and a check that
   fails does at once: after an outage of an hour a server had its models left

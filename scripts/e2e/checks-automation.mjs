@@ -3919,10 +3919,13 @@ export async function automation(ctx) {
     check("  while it waits, its card says what for: no provider can be connected to, so it is this server", cutNotes.length >= 2 && cutNotes.every((n) => NO_WAY_OUT.test(n.message)), cutNotes.map((n) => n.message));
     eq("  nothing is held against the models: they were never asked", await standing("near-a", "far-a"), [untouched, untouched]);
 
-    begin("Limits: a check of the models while this server is cut off");
-    await offline(2500);
+    begin("Limits: a check of the models, and a conversation, while this server is cut off");
+    await offline(3500);
     const testedOffline = await admin.post(`/api/models/${state.models["far-a"]}/test`, {});
     const roundOffline = await admin.post("/api/models/health", { modelIds: [state.models["near-a"], state.models["far-a"]], wait: true });
+    const chatStarted = Date.now();
+    const chatOffline = await sse(admin, "/api/chat", { method: "POST", body: { message: "Is anybody there?" } });
+    const chatTook = Date.now() - chatStarted;
     await backOnAir();
     eq(
       "Test says that it is this server, and writes nothing down about the model",
@@ -3934,6 +3937,12 @@ export async function automation(ctx) {
     eq("  the models are as they were: none is left out", await standing("near-a", "far-a"), [untouched, untouched]);
     const roundBack = await admin.post("/api/models/health", { modelIds: [state.models["near-a"], state.models["far-a"]], wait: true });
     eq("  with the connection back, the same check asks both", [roundBack.data?.round?.cutOff, roundBack.data?.round?.checked, roundBack.data?.round?.passed], [false, 2, 2]);
+    eq(
+      "a conversation says that it is this server, to someone who is shown the setup",
+      chatOffline.events.filter((e) => e.error).map((e) => e.error),
+      ["Could not reach provider. This server could not connect to any other provider either: its own connection to the internet, or its name lookup (DNS), seems to be down."],
+    );
+    check("  after the first model: the others would not be reached either, and are not asked", chatOffline.events.filter((e) => e.progress).length === 0 && chatTook < 3000, [chatOffline.events.filter((e) => e.progress).map((e) => e.progress), chatTook]);
 
     begin("Limits: one provider that is out of reach is that provider's matter");
     // Nothing listens there, while the other providers answer: the way out of this server works.
