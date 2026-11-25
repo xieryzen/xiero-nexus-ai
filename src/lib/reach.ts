@@ -79,7 +79,11 @@ export async function isCutOff(failedBaseUrl: string): Promise<boolean> {
     let verdict = false;
     try {
       const witnesses = witnessesFor(failedBaseUrl, known());
-      verdict = cutOff(await Promise.all(witnesses.map(answers)));
+      // Without one that has answered before, nothing is concluded, and nobody is asked.
+      if (witnesses.proven.length > 0) {
+        const [proven, unproven] = await Promise.all([Promise.all(witnesses.proven.map(answers)), Promise.all(witnesses.unproven.map(answers))]);
+        verdict = cutOff(proven, unproven);
+      }
     } catch {
       // Not knowing is not being cut off.
       verdict = false;

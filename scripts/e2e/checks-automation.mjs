@@ -3944,6 +3944,22 @@ export async function automation(ctx) {
     );
     check("  after the first model: the others would not be reached either, and are not asked", chatOffline.events.filter((e) => e.progress).length === 0 && chatTook < 3000, [chatOffline.events.filter((e) => e.progress).map((e) => e.progress), chatTook]);
 
+    begin("Limits: a provider that never answered speaks for the way out, not against it");
+    // Its address is the app's own: something answers there while the mock is off the air.
+    const idle = await admin.post("/api/providers", { name: "Never asked", adapter: "openai-compatible", baseUrl: `${APP}/api/v1`, authType: "bearer", apiKey: KEY });
+    const idleId = idle.data?.provider?.id;
+    await offline(2500);
+    const testedWithWitness = await admin.post(`/api/models/${state.models["far-a"]}/test`, {});
+    await backOnAir();
+    eq(
+      "an address that still answers is proof that the way out works: the model that was not reached is written down as failing",
+      [testedWithWitness.data?.ok, testedWithWitness.data?.unrecorded ?? false, testedWithWitness.data?.error, (await standing("far-a"))[0].slice(0, 3)],
+      [false, false, "Could not reach provider", ["error", 0, true]],
+    );
+    const tookBack = await admin.post(`/api/models/${state.models["far-a"]}/test`, {});
+    eq("  (it answers again, and is as it was)", [tookBack.data?.ok, await standing("far-a")], [true, [untouched]]);
+    eq("  (that provider is deleted: for the checks that follow, the mock is the only address again)", (await admin.del(`/api/providers/${idleId}`)).status, 200);
+
     begin("Limits: one provider that is out of reach is that provider's matter");
     // Nothing listens there, while the other providers answer: the way out of this server works.
     const nowhere = `http://127.0.0.1:${Number(new URL(MOCK).port) + 777}`;

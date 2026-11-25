@@ -18,6 +18,16 @@
  * answered there is no witness, and nothing is concluded: everything is as
  * it was before this was asked.
  *
+ * A provider that never answered can speak for the way out and not against
+ * it: when it is reached, the way out works; when it is not, that says
+ * nothing, since nobody knows that it ever could be. So a few of those are
+ * asked as well, and this server counts as cut off only when one that has
+ * answered before is among those asked and none of them all was reached.
+ * Without them, two providers that are gone for good would look like a lost
+ * connection for ever, and a provider added after them would never be asked
+ * by the check of the models, which ends its round where the server is cut
+ * off.
+ *
  * A witness has to be as far away as the provider that failed. A model that
  * runs next to the app (on the same machine, in its network) answers whether
  * or not the app has a way out: it is no witness for a provider out there,
@@ -27,8 +37,10 @@
 import { isIP } from "node:net";
 import { isPrivateIp } from "./ssrf";
 
-/** How many other providers are asked. */
+/** How many other providers that have answered before are asked. */
 export const WITNESSES = 3;
+/** And how many that never answered: they can only say that the way out works. */
+export const UNPROVEN_WITNESSES = 2;
 /** How long one of them is waited for. */
 export const WITNESS_TIMEOUT_MS = 4_000;
 /** How long what they said is taken to hold: the requests of one moment fail together, and are not each a reason to ask. */
@@ -77,33 +89,52 @@ export interface Witness {
   answeredAt: number | null;
 }
 
+/** The providers that are asked, by their addresses. */
+export interface Witnesses {
+  /** The ones that have answered before, those that answered last first. */
+  proven: string[];
+  /** The ones that never answered. */
+  unproven: string[];
+}
+
 /**
  * The witnesses for a request to `failedBaseUrl` that did not get there:
- * providers at other addresses that have answered before, as near or as far
- * as the one that failed, each address once, the ones that answered last
- * first, WITNESSES at most. A provider that never answered is no witness:
- * that it cannot be reached now says nothing.
+ * providers at other addresses, as near or as far as the one that failed,
+ * each address once. WITNESSES at most of those that have answered before,
+ * the ones that answered last first, and UNPROVEN_WITNESSES at most of those
+ * that never did.
  */
-export function witnessesFor(failedBaseUrl: string, others: readonly Witness[]): string[] {
+export function witnessesFor(failedBaseUrl: string, others: readonly Witness[]): Witnesses {
   const failed = originOf(failedBaseUrl);
   const near = isNear(failedBaseUrl);
   const byOrigin = new Map<string, Witness>();
   for (const one of others) {
-    if (one.answeredAt === null) continue;
     const origin = originOf(one.baseUrl);
     if (!origin || origin === failed || isNear(one.baseUrl) !== near) continue;
     const kept = byOrigin.get(origin);
-    if (!kept || one.answeredAt > (kept.answeredAt ?? 0)) byOrigin.set(origin, one);
+    // Of two providers at one address, the one that answered, and of two that did the one that answered last.
+    if (!kept || (one.answeredAt ?? -1) > (kept.answeredAt ?? -1)) byOrigin.set(origin, one);
   }
-  return [...byOrigin.values()]
-    .sort((a, b) => (b.answeredAt ?? 0) - (a.answeredAt ?? 0))
-    .slice(0, WITNESSES)
-    .map((one) => one.baseUrl);
+  const all = [...byOrigin.values()];
+  return {
+    proven: all
+      .filter((one) => one.answeredAt !== null)
+      .sort((a, b) => (b.answeredAt ?? 0) - (a.answeredAt ?? 0))
+      .slice(0, WITNESSES)
+      .map((one) => one.baseUrl),
+    unproven: all
+      .filter((one) => one.answeredAt === null)
+      .slice(0, UNPROVEN_WITNESSES)
+      .map((one) => one.baseUrl),
+  };
 }
 
-/** What the witnesses say, each by whether it was reached: cut off when there is one at least and none was. */
-export function cutOff(reached: readonly boolean[]): boolean {
-  return reached.length > 0 && reached.every((one) => !one);
+/**
+ * What the witnesses say, each by whether it was reached. Cut off: one that
+ * has answered before was asked, and none of them all was reached.
+ */
+export function cutOff(proven: readonly boolean[], unproven: readonly boolean[] = []): boolean {
+  return proven.length > 0 && !proven.some(Boolean) && !unproven.some(Boolean);
 }
 
 /**

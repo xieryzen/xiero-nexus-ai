@@ -37,8 +37,9 @@ blocked. The models were fine; the server had no way out.
   fails does at once: after an outage of an hour a server had its models left
   out of the lists, some for hours. Now a request that got no answer is
   followed by a question to up to three other providers that have answered
-  before (their address, no key, nothing asked for). When none of them can be
-  reached, this server is cut off: nothing is written down about the model,
+  before (their address, no key, nothing asked for), and to two that never
+  did, which can speak for the way out and not against it. When none of them
+  can be reached, this server is cut off: nothing is written down about the model,
   the check of the models ends its round and tries again a minute later, and
   Test says "Nothing was written down about the model". When one answers,
   everything is as before: the provider is out of reach, and its models rest

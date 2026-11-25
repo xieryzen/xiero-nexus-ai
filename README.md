@@ -593,7 +593,9 @@ for days, and so had the manager model.
   Before it is held against the model, up to three **other providers** that
   have answered before are asked for nothing but an answer, at their own
   address and without a key. One answer, and the way out works: the failure
-  is that provider's, and counts as above. None, and this server is cut off:
+  is that provider's, and counts as above. (Two providers that never
+  answered are asked as well: they can speak for the way out, not against
+  it.) None, and this server is cut off:
   the request says nothing about the model, **nothing is written down**, the
   check of the models ends its round there (and tries again a minute later),
   and Test says so. A server that lost its connection for an hour then has

@@ -13,7 +13,7 @@ import {
 } from "../src/lib/orchestrator/limit-wait";
 import { mayBeAboutTools } from "../src/lib/orchestrator/plan";
 import { NOT_NOW, WORKING, publicText } from "../src/lib/public-text";
-import { CUT_OFF_NOTE, WITNESSES, asksWitnesses, cutOff, isNear, originOf, witnessesFor } from "../src/lib/reach-rules";
+import { CUT_OFF_NOTE, UNPROVEN_WITNESSES, WITNESSES, asksWitnesses, cutOff, isNear, originOf, witnessesFor } from "../src/lib/reach-rules";
 
 /** What fetch throws: a TypeError whose cause holds the code. */
 function fetchFailed(cause: unknown): Error {
@@ -179,18 +179,31 @@ test("the witnesses are other providers that have answered before, each address 
     { baseUrl: "https://text.pollinations.ai/openai", answeredAt: 50 },
     { baseUrl: "not an address", answeredAt: 999 },
   ];
-  assert.equal(WITNESSES, 3);
-  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", others), [
-    "https://blockrun.ai/api/v2",
-    "https://generativelanguage.googleapis.com/v1beta",
-    "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
-  ]);
+  assert.deepEqual([WITNESSES, UNPROVEN_WITNESSES], [3, 2]);
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", others), {
+    proven: ["https://blockrun.ai/api/v2", "https://generativelanguage.googleapis.com/v1beta", "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"],
+    // One that never answered is asked as well: it can say that the way out works.
+    unproven: ["https://api.anthropic.com"],
+  });
   // The one that failed is no witness for itself, at whatever path.
-  assert.deepEqual(witnessesFor("https://blockrun.ai/somewhere/else", others).some((url) => url.startsWith("https://blockrun.ai")), false);
-  // A provider that never answered is none: that it cannot be reached now says nothing.
-  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [{ baseUrl: "https://api.anthropic.com", answeredAt: null }]), []);
+  const forBlockrun = witnessesFor("https://blockrun.ai/somewhere/else", others);
+  assert.equal([...forBlockrun.proven, ...forBlockrun.unproven].some((url) => url.startsWith("https://blockrun.ai")), false);
+  // Only providers that never answered: they are named, and nothing can be concluded from them (cutOff).
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [{ baseUrl: "https://api.anthropic.com", answeredAt: null }]), { proven: [], unproven: ["https://api.anthropic.com"] });
+  // Two at most of those that never answered, each address once.
+  assert.deepEqual(
+    witnessesFor("https://api.kilo.ai/api/gateway", [
+      { baseUrl: "https://a.example/v1", answeredAt: null },
+      { baseUrl: "https://a.example/v2", answeredAt: null },
+      { baseUrl: "https://b.example/v1", answeredAt: null },
+      { baseUrl: "https://c.example/v1", answeredAt: null },
+    ]).unproven,
+    ["https://a.example/v1", "https://b.example/v1"],
+  );
+  // Of two providers at one address, the one that answered speaks for the address.
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [{ baseUrl: "https://a.example/v1", answeredAt: null }, { baseUrl: "https://a.example/v2", answeredAt: 7 }]), { proven: ["https://a.example/v2"], unproven: [] });
   // One provider, or all at one address: no witness.
-  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [{ baseUrl: "https://api.kilo.ai/api/gateway", answeredAt: 5 }, { baseUrl: "https://api.kilo.ai/other", answeredAt: 9 }]), []);
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [{ baseUrl: "https://api.kilo.ai/api/gateway", answeredAt: 5 }, { baseUrl: "https://api.kilo.ai/other", answeredAt: 9 }]), { proven: [], unproven: [] });
 });
 
 test("a witness is as far away as the provider that failed: a model next to the app answers with or without a way out", () => {
@@ -207,18 +220,23 @@ test("a witness is as far away as the provider that failed: a model next to the 
     { baseUrl: "https://generativelanguage.googleapis.com/v1beta", answeredAt: 700 },
   ];
   // A provider out there failed: the model at home is not asked, though it answered last.
-  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", others), ["https://blockrun.ai/api/v1", "https://generativelanguage.googleapis.com/v1beta"]);
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", others).proven, ["https://blockrun.ai/api/v1", "https://generativelanguage.googleapis.com/v1beta"]);
   // The model at home failed: the other one at home is its witness, the ones out there are not.
-  assert.deepEqual(witnessesFor("http://ollama:11434/v1", others), ["http://192.168.1.20:1234/v1"]);
+  assert.deepEqual(witnessesFor("http://ollama:11434/v1", others).proven, ["http://192.168.1.20:1234/v1"]);
   // Only models at home, and a provider out there fails: nobody to ask.
-  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [others[0]!, others[2]!]), []);
+  assert.deepEqual(witnessesFor("https://api.kilo.ai/api/gateway", [others[0]!, others[2]!]), { proven: [], unproven: [] });
 });
 
-test("cut off: there is a witness, and none of them was reached", () => {
+test("cut off: a provider that answered before was asked, and none of them all was reached", () => {
   assert.equal(cutOff([false, false, false]), true);
   assert.equal(cutOff([false]), true);
   assert.equal(cutOff([false, true, false]), false, "one answer, and the way out works");
   assert.equal(cutOff([]), false, "nobody to ask: nothing is concluded");
+  // One that never answered speaks for the way out, and not against it.
+  assert.equal(cutOff([false, false], [true]), false, "it was reached: the two others are gone, the connection is not");
+  assert.equal(cutOff([false], [false, false]), true, "nobody was reached");
+  assert.equal(cutOff([], [false, false]), false, "that it cannot be reached says nothing: nobody knows that it ever could be");
+  assert.equal(cutOff([], [true]), false);
   // The witnesses are asked after a request that got no answer, and after no other.
   assert.equal(asksWitnesses("network_error"), true);
   assert.equal(asksWitnesses("dns_error"), true);
